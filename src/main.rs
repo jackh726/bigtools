@@ -60,24 +60,38 @@ fn write_test() -> std::io::Result<()> {
     outb.write(chrom_map, vals.into_iter())?;
 */
 
+    //println!("Reading line count");
     //let mut infile = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
-    let infile = File::open("/home/hueyj/temp/test.bedGraph")?;
+    //let numlines = {
+    //    let f = BufReader::new(infile);
+    //    let numlines = f.lines().count();
+    //    numlines
+    //};
+    let numlines = 78722367;
+    //let numlines = 1000000;
+
+    println!("Reading file.");
+    let mut infile = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
+    //let infile = File::open("/home/hueyj/temp/test.bedGraph")?;
     let mut vals_iter = BufReader::new(infile)
         .lines()
         .map(|l| {
             let words = l.expect("Split error");
             let split: Vec<String> = words.split_whitespace().map(|w| w.to_owned()).collect();
             ValueWithChrom {
-                chrom: split[0],
-                start: 0,
-                end: 0,
-                value: 0.0,
-                //start: split[1].parse::<u32>().unwrap(),
-                //end: split[2].parse::<u32>().unwrap(),
-                //value: split[3].parse::<f32>().unwrap(),
+                chrom: split[0].clone(),
+                start: split[1].clone().parse::<u32>().unwrap(),
+                end: split[2].clone().parse::<u32>().unwrap(),
+                value: split[3].clone().parse::<f32>().unwrap(),
             }
         });
-    println!("{:?}", vals_iter.next());
+
+    use indicatif::ProgressBar;
+    let pb = ProgressBar::new(numlines as u64);
+    pb.set_draw_delta(50000);
+    let progress_iter = pb.wrap_iter(vals_iter);
+
+    outb.write(chrom_map, progress_iter)?;
     Ok(())
 }
 

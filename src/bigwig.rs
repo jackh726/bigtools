@@ -83,8 +83,8 @@ pub struct Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct ValueWithChrom<'a> {
-    pub chrom: &'a str,
+pub struct ValueWithChrom {
+    pub chrom: String,
     pub start: u32,
     pub end: u32,
     pub value: f32,
@@ -577,7 +577,7 @@ impl BigWig {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write<'a, V>(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom<'a>> {
+    pub fn write<'a, V>(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> {
         self.write_blank_headers()?;
 
         let total_summary_offset = self.current_file_offset()?;
@@ -782,8 +782,8 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_chrom_tree(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, chrom_ids: &std::collections::HashMap<&str, u32>) -> std::io::Result<()> {
-        let mut chroms: Vec<&str> = chrom_ids.keys().map(|&c| c).collect();
+    fn write_chrom_tree(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
+        let mut chroms: Vec<&String> = chrom_ids.keys().collect();
         chroms.sort();
         println!("Used chroms {:?}", chroms);
 
@@ -812,9 +812,9 @@ impl BigWig {
             key_bytes[..chrom_bytes.len()].copy_from_slice(chrom_bytes);
             println!("Key bytes for {:?}: {:x?}", chrom, key_bytes);
             file.write_all(key_bytes)?;
-            let id = *chrom_ids.get(&chrom).unwrap();
+            let id = *chrom_ids.get(chrom).unwrap();
             file.write_u32::<NativeEndian>(id)?;
-            let length = chrom_sizes.get(&chrom);
+            let length = chrom_sizes.get(&chrom[..]);
             match length {
                 None => panic!("Expected length for chrom: {}", chrom),
                 Some(l) => {
@@ -837,7 +837,7 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut std::collections::HashMap<&'a str, u32>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom<'a>> {
+    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut std::collections::HashMap<String, u32>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> {
         let ITEMS_PER_SLOT: u16 = 1024;
 
         struct BedGraphSectionItem {
@@ -847,8 +847,8 @@ impl BigWig {
         }
 
         #[derive(Debug)]
-        struct LiveZoomInfo<'a> {
-            chrom: &'a str,
+        struct LiveZoomInfo {
+            chrom: String,
             start: u32,
             end: u32,
             valid_count: u32,
@@ -858,7 +858,7 @@ impl BigWig {
             sum_squares: f32,
         }
 
-        type ZoomInfo<'a> = (u32, File, Option<LiveZoomInfo<'a>>, u32);
+        type ZoomInfo<'a> = (u32, File, Option<LiveZoomInfo>, u32);
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2560, 10240, 40960, 163840, 655360, 2621440];
         let mut zooms: Vec<ZoomInfo> = vec![];
@@ -870,7 +870,7 @@ impl BigWig {
         let mut next_chrom_id: u32 = 0;
         let mut sections = Vec::new();
         let mut summary: Option<Summary> = None;
-        let mut last_chrom: Option<&str> = None;
+        let mut last_chrom: Option<String> = None;
         let mut last_start: u32 = 0;
         let mut items_in_section: Vec<BedGraphSectionItem> = Vec::with_capacity(ITEMS_PER_SLOT as usize);
 
@@ -936,16 +936,17 @@ impl BigWig {
         };
 
         for current_val in vals_iter {
-            if let Some(lastchrom) = last_chrom {
-                assert!(lastchrom <= current_val.chrom);
-                if lastchrom == current_val.chrom {
+            if let Some(lastchrom) = &last_chrom {
+                assert!(lastchrom <= &current_val.chrom);
+                if lastchrom == &current_val.chrom {
                     assert!(last_start <= current_val.start);
                 }
             }
             assert!(current_val.start <= current_val.end);
 
-            if items_in_section.len() >= ITEMS_PER_SLOT as usize || (last_chrom.is_some() && current_val.chrom != last_chrom.unwrap()) {
-                let chromId: u32 = *chrom_ids.entry(last_chrom.unwrap()).or_insert(next_chrom_id);
+            if items_in_section.len() >= ITEMS_PER_SLOT as usize || (last_chrom.is_some() && &current_val.chrom != last_chrom.as_ref().unwrap()) {
+                let chrom = last_chrom.unwrap();
+                let chromId: u32 = *chrom_ids.entry(chrom.clone()).or_insert(next_chrom_id);
                 if chromId == next_chrom_id {
                     next_chrom_id += 1;
                 }
@@ -954,7 +955,7 @@ impl BigWig {
                 sections.push(section);
                 items_in_section = vec![];
 
-                if last_chrom.is_some() && current_val.chrom != last_chrom.unwrap() {
+                if current_val.chrom != chrom {
                     for mut zoom in &mut zooms {
                         write_zoom(&mut zoom.1, &zoom.2, chromId)?;
                         zoom.3 += 1;
@@ -968,7 +969,7 @@ impl BigWig {
                     match &mut zoom.2 {
                         None => {
                             zoom.2 = Some(LiveZoomInfo {
-                                chrom: current_val.chrom,
+                                chrom: current_val.chrom.clone(),
                                 start: add_start,
                                 end: add_start,
                                 valid_count: 0,
@@ -983,7 +984,19 @@ impl BigWig {
                                 break;
                             }
                             let next_end = zoom2.start + zoom.0;
+                            if next_end < current_val.start {
+                                // The last zoom entry ended before this value begins, need to write
+                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
+                                if chromId == next_chrom_id {
+                                    next_chrom_id += 1;
+                                }
+                                write_zoom(&mut zoom.1, &zoom.2, chromId)?;
+                                zoom.3 += 1;
+                                zoom.2 = None;
+                                continue;
+                            }
                             if next_end >= current_val.end {
+                                // The current value isn't enough to finish this zoom entry
                                 let added_bases = current_val.end - add_start;                                
                                 zoom2.end = current_val.end;
                                 zoom2.valid_count += added_bases;
@@ -992,7 +1005,7 @@ impl BigWig {
                                 zoom2.sum += added_bases as f32 * current_val.value;
                                 zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
                                 if next_end == current_val.end {
-                                    let chromId: u32 = *chrom_ids.entry(zoom2.chrom).or_insert(next_chrom_id);
+                                    let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
                                     if chromId == next_chrom_id {
                                         next_chrom_id += 1;
                                     }
@@ -1002,6 +1015,7 @@ impl BigWig {
                                     break;
                                 }
                             } else {
+                                // The current value will finish the zoom entry
                                 let added_bases = next_end - add_start;
                                 zoom2.end = next_end;
                                 zoom2.valid_count += added_bases;
@@ -1009,7 +1023,7 @@ impl BigWig {
                                 zoom2.max_value = zoom2.max_value.max(current_val.value);
                                 zoom2.sum += added_bases as f32 * current_val.value;
                                 zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
-                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom).or_insert(next_chrom_id);
+                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
                                 if chromId == next_chrom_id {
                                     next_chrom_id += 1;
                                 }
@@ -1052,7 +1066,7 @@ impl BigWig {
             last_chrom = Some(current_val.chrom);
         }
         if let Some(lastchrom) = last_chrom {
-            let chromId: u32 = *chrom_ids.entry(lastchrom).or_insert(next_chrom_id);
+            let chromId: u32 = *chrom_ids.entry(lastchrom.to_string()).or_insert(next_chrom_id);
             //if chromId == next_chrom_id {
             //    next_chrom_id += 1;
             //}
@@ -1242,7 +1256,7 @@ impl BigWig {
             } else {
                 0
             };
-            println!("Writing {}. Isleaf: {} At: {}", trees.nodes.len(), isleaf, file.seek(SeekFrom::Current(0))?);
+            //println!("Writing {}. Isleaf: {} At: {}", trees.nodes.len(), isleaf, file.seek(SeekFrom::Current(0))?);
             file.write_u8(isleaf)?;
             file.write_u8(0)?;
             file.write_u16::<NativeEndian>(trees.nodes.len() as u16)?;
@@ -1264,7 +1278,7 @@ impl BigWig {
                             LEAFNODE_FULL_BLOCK_SIZE
                         };
                         let child_offset: u64 = *offset + idx as u64 * full_size;
-                        println!("Child node offset: {}; Added: {}", child_offset, idx as u64 * full_size);
+                        //println!("Child node offset: {}; Added: {}", child_offset, idx as u64 * full_size);
                         file.write_u64::<NativeEndian>(child_offset)?;
                     },
                 }
@@ -1294,7 +1308,7 @@ impl BigWig {
         println!("Start of index: {}", current_offset);
         for level in (0..levels).rev() {
             write_tree(&mut file, &index_offsets, &nodes, levels - 1, level, &mut current_offset)?;
-            println!("End of index level: {}", file.seek(SeekFrom::Current(0))?);
+            println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
 
         //assert!(file.seek(SeekFrom::Current(0))? == next_offset);
