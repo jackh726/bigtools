@@ -3,6 +3,7 @@
 
 
 extern crate flate2;
+extern crate tempfile;
 
 use std::vec::Vec;
 
@@ -10,7 +11,7 @@ use std::io::{Seek, SeekFrom};
 use std::io::prelude::*;
 use std::fs::File;
 
-use byteorder::{LittleEndian, BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{LittleEndian, BigEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
@@ -123,6 +124,17 @@ struct Section {
     end: u32,
 }
 
+#[derive(Debug)]
+struct Summary {
+    bases_covered: u64,
+    min_val: f64,
+    max_val: f64,
+    sum: f64,
+    sum_squares: f64,
+}
+
+type TempZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, u32 /* Number of zoom records */);
+
 pub struct BigWig {
     pub path: String,
     fp: File,
@@ -142,7 +154,7 @@ impl BigWig {
             }
         };
         {
-            let mut file = &mut self.fp;
+            let file = &mut self.fp;
             let info = self.info.as_ref().unwrap();
             file.seek(SeekFrom::Start(info.zoom_headers[0].index_offset))?;
         }
@@ -151,12 +163,12 @@ impl BigWig {
         for block in blocks {
             let info = self.info.as_ref().unwrap();
             let bigendian = info.header.isBigEndian;
-            let mut file = &mut self.fp;
+            let file = &mut self.fp;
             file.seek(SeekFrom::Start(block.offset))?;
 
             let mut raw_data = vec![0u8; block.size as usize];
             file.read_exact(&mut raw_data)?;
-            let mut data = if info.header.uncompress_buf_size > 0 {
+            let data = if info.header.uncompress_buf_size > 0 {
                 let mut uncompressed_block_data = vec![0u8; info.header.uncompress_buf_size as usize];
                 let mut d = ZlibDecoder::new(&raw_data[..]);
                 d.read(&mut uncompressed_block_data)?;
@@ -167,15 +179,15 @@ impl BigWig {
             let itemcount = data.len() / (4 * 8);
             assert!(data.len() % (4 * 8) == 0);
             let mut data_mut = &data[..];
-            for i in 0..itemcount {
-                //println!("Read: {:?}", read_u32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_u32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_u32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_u32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_f32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_f32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_f32(&mut data_mut, bigendian)?);
-                //println!("Read: {:?}", read_f32(&mut data_mut, bigendian)?);
+            for _ in 0..itemcount {
+                read_u32(&mut data_mut, bigendian)?;
+                read_u32(&mut data_mut, bigendian)?;
+                read_u32(&mut data_mut, bigendian)?;
+                read_u32(&mut data_mut, bigendian)?;
+                read_f32(&mut data_mut, bigendian)?;
+                read_f32(&mut data_mut, bigendian)?;
+                read_f32(&mut data_mut, bigendian)?;
+                read_f32(&mut data_mut, bigendian)?;
             }
         }
 
@@ -296,7 +308,7 @@ impl BigWig {
         let mut file = &mut self.fp;
 
         let mut zoom_headers = vec![];
-        for i in 1..header.zoom_levels {
+        for _ in 1..header.zoom_levels {
             let reduction_level = read_u32(&mut file, header.isBigEndian)?;
             let _reserved = read_u32(&mut file, header.isBigEndian)?;
             let data_offset = read_u64(&mut file, header.isBigEndian)?;
@@ -374,7 +386,7 @@ impl BigWig {
 
     fn search_overlapping_blocks(&mut self, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
         {
-            let mut file = &mut self.fp;
+            let file = &mut self.fp;
             let indexoffset = file.seek(SeekFrom::Current(0))?;
             println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", indexoffset, chrom_ix, start, end)
         }
@@ -386,7 +398,6 @@ impl BigWig {
         let count: u16;
         {
             let mut file = &mut self.fp;
-            let indexoffset = file.seek(SeekFrom::Current(0))?;
             isleaf = read_u8(&mut file, bigendian)?;
             let _reserved = read_u8(&mut file, bigendian)?;
             count = read_u16(&mut file, bigendian)?;
@@ -475,7 +486,7 @@ impl BigWig {
         let blocks = {
             {
                 let info = self.info.as_ref().unwrap();
-                let mut file = &mut self.fp;
+                let file = &mut self.fp;
                 file.seek(SeekFrom::Start((&info.header).full_index_offset))?;
             }
             let chrom_ix = {
@@ -583,12 +594,17 @@ impl BigWig {
             // Even then simply doing "(vals.len() as u32 + ITEMS_PER_SLOT - 1) / ITEMS_PER_SLOT"
             // underestimates because sections are split by chrom too, not just size.
             // Skip for now, and come back when we write real header + summary.
-            (&mut self.fp).write_u32::<BigEndian>(0)?;
+            (&mut self.fp).write_u32::<NativeEndian>(0)?;
         }
 
-        let sections = self.write_vals(&mut vals, &mut chrom_ids)?;
+        let pre_data = self.current_file_offset()?;
+        let (sections, summary, zooms) = self.write_vals(&mut vals, &mut chrom_ids)?;
         let total_sections = sections.len() as u32;
+        let data_size = self.current_file_offset()? - pre_data;
+        println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", sections.len());
+        println!("Summary: {:?}", summary);
+        println!("Zooms: {:?}", zooms);
 
         // Since the chrom tree is read before the index, we put this before the full data index
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
@@ -600,12 +616,97 @@ impl BigWig {
         let index_start = self.current_file_offset()?;
         self.write_rtreeindex(sections)?;
 
-        // TODO: zoom data
+        const DO_COMPRESS: bool = true; // TODO: param
+        const ITEMS_PER_SLOT: u32 = 1024; // TODO: param
 
-        const ITEMS_PER_SLOT: u32 = 1024;
+        let mut zoom_entries: Vec<ZoomHeader> = vec![];
+        //let mut needscheck = true;
+        for mut zoom in zooms {
+            let file = &mut self.fp;
+            let zoom_data_offset = file.seek(SeekFrom::Current(0))?;
+            /*
+            if needscheck {
+                let zoomdatasize = if DO_COMPRESS {
+                    zoom.1.seek(SeekFrom::End(0))? / 2 // Estimate
+                } else {
+                    zoom.1.seek(SeekFrom::End(0))?
+                };
+                if zoomdatasize >= pre_data {
+                    continue
+                } else {
+                    needscheck = false
+                }
+            }
+            */
+            zoom.1.seek(SeekFrom::Start(0))?;
+            let mut sections: Vec<Section> = vec![];
+            let mut buf: Vec<u8> = vec![];
+            let mut state: Option<(u32, u32, u32)> = None;
+            let mut items_in_section: u32 = 0;
+
+            let mut write_section = |buf: Vec<u8>, state: &Option<(u32, u32, u32)>| -> std::io::Result<Section> {
+                let current_offset = file.seek(SeekFrom::Current(0))?;
+                let out_bytes = if DO_COMPRESS {
+                    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                    e.write_all(&buf)?;
+                    e.finish()?
+                } else {
+                    buf
+                };
+                file.write_all(&out_bytes)?;
+                let end_offset = file.seek(SeekFrom::Current(0))?;
+                Ok(Section {
+                    offset: current_offset,
+                    size: end_offset - current_offset,
+                    chrom: state.unwrap().0,
+                    start: state.unwrap().1,
+                    end: state.unwrap().2,
+                })
+            };
+            for _ in 0..zoom.2 {
+                let chrom = read_u32(&mut zoom.1, false)?;
+                let start = read_u32(&mut zoom.1, false)?;
+                let end = read_u32(&mut zoom.1, false)?;
+                let mut rest = vec![0u8; 20];
+                zoom.1.read_exact(&mut rest)?;
+                //println!("Read zoom entry: {:?} {:?} {:?} {:?}", chrom, start, end, rest);
+                if items_in_section >= ITEMS_PER_SLOT || (state.is_some() && state.as_ref().unwrap().0 != chrom) {
+                    let section = write_section(buf, &state)?;
+                    sections.push(section);
+                    buf = vec![];
+                    state = None;
+                    items_in_section = 0;
+                }
+                buf.write_u32::<NativeEndian>(chrom)?;
+                buf.write_u32::<NativeEndian>(start)?;
+                buf.write_u32::<NativeEndian>(end)?;
+                buf.write_all(&rest)?;
+                match state {
+                    None => {
+                        state = Some((chrom, start, end));
+                    },
+                    Some((_chrom, state_start, _end)) => state = Some((chrom, state_start, end)),
+                }
+                items_in_section += 1;
+            }
+            let section = write_section(buf, &state)?;
+            sections.push(section);
+            
+            let zoom_index_offset = file.seek(SeekFrom::Current(0))?;
+            self.write_rtreeindex(sections)?;
+
+            zoom_entries.push(ZoomHeader {
+                reduction_level: zoom.0,
+                data_offset: zoom_data_offset,
+                index_offset: zoom_index_offset,
+            });
+        }
+
+        println!("Zoom entries: {:?}", zoom_entries);
+        let num_zooms = zoom_entries.len() as u16;
+
         // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
         // In most cases, I think this is the true max size (unless there is only one section and its less than ITEMS_PER_SLOT in size)
-        const DO_COMPRESS: bool = true; // TODO: param
         let uncompress_buf_size = if DO_COMPRESS {
             ITEMS_PER_SLOT * (1 + 1 + 2 + 4 + 4 + 4 + 4 + 8 + 8)
         } else {
@@ -614,31 +715,45 @@ impl BigWig {
         {
             let file = &mut self.fp;
             file.seek(SeekFrom::Start(0))?;
-            file.write_u32::<BigEndian>(BIGWIG_MAGIC_LTH)?;
-            file.write_u16::<BigEndian>(4)?;
-            file.write_u16::<BigEndian>(0)?;
-            file.write_u64::<BigEndian>(chrom_index_start)?;
-            file.write_u64::<BigEndian>(full_data_offset)?;
-            file.write_u64::<BigEndian>(index_start)?;
-            file.write_u16::<BigEndian>(0)?;
-            file.write_u16::<BigEndian>(0)?;
-            file.write_u64::<BigEndian>(0)?;
-            file.write_u64::<BigEndian>(total_summary_offset)?;
-            file.write_u32::<BigEndian>(uncompress_buf_size)?;
-            file.write_u64::<BigEndian>(0)?;
+            file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
+            file.write_u16::<NativeEndian>(4)?;
+            file.write_u16::<NativeEndian>(num_zooms)?;
+            file.write_u64::<NativeEndian>(chrom_index_start)?;
+            file.write_u64::<NativeEndian>(full_data_offset)?;
+            file.write_u64::<NativeEndian>(index_start)?;
+            file.write_u16::<NativeEndian>(0)?;
+            file.write_u16::<NativeEndian>(0)?;
+            file.write_u64::<NativeEndian>(0)?;
+            file.write_u64::<NativeEndian>(total_summary_offset)?;
+            file.write_u32::<NativeEndian>(uncompress_buf_size)?;
+            file.write_u64::<NativeEndian>(0)?;
 
             assert!(file.seek(SeekFrom::Current(0))? == 64);
         }
         {
-            // TODO: summary data
-            self.write_blank_summary()?;
+            let file = &mut self.fp;
+            for zoom_entry in zoom_entries {
+                file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
+                file.write_u32::<NativeEndian>(0)?;
+                file.write_u64::<NativeEndian>(zoom_entry.data_offset)?;
+                file.write_u64::<NativeEndian>(zoom_entry.index_offset)?;
+            }
         }
         {
             let file = &mut self.fp;
-            file.write_u32::<BigEndian>(total_sections)?;
+            assert!(file.seek(SeekFrom::Current(0))? == total_summary_offset);
+            file.write_u64::<NativeEndian>(summary.bases_covered)?;
+            file.write_f64::<NativeEndian>(summary.min_val)?;
+            file.write_f64::<NativeEndian>(summary.max_val)?;
+            file.write_f64::<NativeEndian>(summary.sum)?;
+            file.write_f64::<NativeEndian>(summary.sum_squares)?;
+        }
+        {
+            let file = &mut self.fp;
+            file.write_u32::<NativeEndian>(total_sections)?;
 
             file.seek(SeekFrom::End(0))?;
-            file.write_u32::<BigEndian>(BIGWIG_MAGIC_LTH)?;
+            file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
         }
 
         Ok(())
@@ -673,24 +788,24 @@ impl BigWig {
         println!("Used chroms {:?}", chroms);
 
         let file = &mut self.fp;
-        file.write_u32::<BigEndian>(CHROM_TREE_MAGIC)?;
+        file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
         let item_count = chroms.len() as u64;
         // TODO: for now, always just use the length of chroms (if less than 256). This means we don't have to implement writing non-leaf nodes for now...
         // TODO: make this configurable
         let block_size = std::cmp::max(256, item_count) as u32;
-        file.write_u32::<BigEndian>(block_size)?;
+        file.write_u32::<NativeEndian>(block_size)?;
         let max_bytes = chroms.iter().map(|a| a.len() as u32).fold(0, u32::max);
         println!("Max bytes: {:?}", max_bytes);
-        file.write_u32::<BigEndian>(max_bytes)?;
-        file.write_u32::<BigEndian>(8)?; // size of Id (u32) + Size (u32)
-        file.write_u64::<BigEndian>(item_count)?;
-        file.write_u64::<BigEndian>(0)?; // Reserved
+        file.write_u32::<NativeEndian>(max_bytes)?;
+        file.write_u32::<NativeEndian>(8)?; // size of Id (u32) + Size (u32)
+        file.write_u64::<NativeEndian>(item_count)?;
+        file.write_u64::<NativeEndian>(0)?; // Reserved
 
         // Assuming this is all one block right now
         // TODO: add non-leaf nodes and split blocks
         file.write_u8(1)?;
         file.write_u8(0)?;
-        file.write_u16::<BigEndian>(item_count as u16)?;
+        file.write_u16::<NativeEndian>(item_count as u16)?;
         for chrom in chroms {
             let key_bytes = &mut vec![0u8; max_bytes as usize];
             let chrom_bytes = chrom.as_bytes();
@@ -698,12 +813,12 @@ impl BigWig {
             println!("Key bytes for {:?}: {:x?}", chrom, key_bytes);
             file.write_all(key_bytes)?;
             let id = *chrom_ids.get(&chrom).unwrap();
-            file.write_u32::<BigEndian>(id)?;
+            file.write_u32::<NativeEndian>(id)?;
             let length = chrom_sizes.get(&chrom);
             match length {
                 None => panic!("Expected length for chrom: {}", chrom),
                 Some(l) => {
-                    file.write_u32::<BigEndian>(*l)?;
+                    file.write_u32::<NativeEndian>(*l)?;
                 }
             }
         }
@@ -722,8 +837,7 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut std::collections::HashMap<&'a str, u32>) -> std::io::Result<Vec<Section>> where V : std::iter::Iterator<Item=ValueWithChrom<'a>> {
-        // TODO check vals start <= end
+    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut std::collections::HashMap<&'a str, u32>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom<'a>> {
         let ITEMS_PER_SLOT: u16 = 1024;
 
         struct BedGraphSectionItem {
@@ -732,91 +846,245 @@ impl BigWig {
             val: f32,
         }
 
+        #[derive(Debug)]
+        struct LiveZoomInfo<'a> {
+            chrom: &'a str,
+            start: u32,
+            end: u32,
+            valid_count: u32,
+            min_value: f32,
+            max_value: f32,
+            sum: f32,
+            sum_squares: f32,
+        }
+
+        type ZoomInfo<'a> = (u32, File, Option<LiveZoomInfo<'a>>, u32);
+
+        let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2560, 10240, 40960, 163840, 655360, 2621440];
+        let mut zooms: Vec<ZoomInfo> = vec![];
+        for size in zoom_sizes {
+            let temp = tempfile::tempfile()?;
+            zooms.push((size, temp, None, 0));
+        }
+        
         let mut next_chrom_id: u32 = 0;
         let mut sections = Vec::new();
-        let mut current_item_idx: u16 = 0;
+        let mut summary: Option<Summary> = None;
         let mut last_chrom: Option<&str> = None;
-        let mut last_start: Option<u32> = None;
+        let mut last_start: u32 = 0;
         let mut items_in_section: Vec<BedGraphSectionItem> = Vec::with_capacity(ITEMS_PER_SLOT as usize);
-        loop {
-            let next_val = vals_iter.next();
-            // TODO: check sorted better
-            if next_val.as_ref().is_some() {
-                let next = next_val.as_ref().unwrap();
-                if let Some(lastchrom) = last_chrom {
-                    assert!(lastchrom <= next.chrom);
-                    if lastchrom == next.chrom {
-                        if let Some(laststart) = last_start {
-                            assert!(laststart <= next.start);
-                        }
+
+        let mut write_section = |items_in_section: Vec<BedGraphSectionItem>, chromId: u32| -> std::io::Result<Section> {
+            let file = &mut self.fp;
+            let mut bytes: Vec<u8> = vec![];
+            
+            let current_offset = file.seek(SeekFrom::Current(0))?;
+            let start = items_in_section[0].start;
+            let end = items_in_section[items_in_section.len() - 1].end;
+            bytes.write_u32::<NativeEndian>(chromId)?;
+            bytes.write_u32::<NativeEndian>(start)?;
+            bytes.write_u32::<NativeEndian>(end)?;
+            bytes.write_u32::<NativeEndian>(0)?;
+            bytes.write_u32::<NativeEndian>(0)?;
+            bytes.write_u8(1)?;
+            bytes.write_u8(0)?;
+            bytes.write_u16::<NativeEndian>(items_in_section.len() as u16)?;
+
+            for item in items_in_section.iter() {
+                bytes.write_u32::<NativeEndian>(item.start)?;
+                bytes.write_u32::<NativeEndian>(item.end)?;
+                bytes.write_f32::<NativeEndian>(item.val)?;   
+            }
+
+            let COMPRESS = true;
+
+            let out_bytes = if COMPRESS {
+                let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                e.write_all(&bytes)?;
+                e.finish()?
+            } else {
+                bytes
+            };
+            file.write_all(&out_bytes)?;
+            let end_offset = file.seek(SeekFrom::Current(0))?;
+
+
+            Ok(Section {
+                offset: current_offset,
+                size: end_offset - current_offset,
+                chrom: chromId,
+                start,
+                end,
+            })
+        };
+
+        let write_zoom = |file: &mut File, zoom_info: &Option<LiveZoomInfo>, chromId: u32| -> std::io::Result<()> {
+            match &zoom_info {
+                None => (),
+                Some(live) => {
+                    file.write_u32::<NativeEndian>(chromId)?;
+                    file.write_u32::<NativeEndian>(live.start)?;
+                    file.write_u32::<NativeEndian>(live.end)?;
+                    file.write_u32::<NativeEndian>(live.valid_count)?;
+                    file.write_f32::<NativeEndian>(live.min_value)?;
+                    file.write_f32::<NativeEndian>(live.max_value)?;
+                    file.write_f32::<NativeEndian>(live.sum)?;
+                    file.write_f32::<NativeEndian>(live.sum_squares)?;
+                }
+            }
+            Ok(())
+        };
+
+        for current_val in vals_iter {
+            if let Some(lastchrom) = last_chrom {
+                assert!(lastchrom <= current_val.chrom);
+                if lastchrom == current_val.chrom {
+                    assert!(last_start <= current_val.start);
+                }
+            }
+            assert!(current_val.start <= current_val.end);
+
+            if items_in_section.len() >= ITEMS_PER_SLOT as usize || (last_chrom.is_some() && current_val.chrom != last_chrom.unwrap()) {
+                let chromId: u32 = *chrom_ids.entry(last_chrom.unwrap()).or_insert(next_chrom_id);
+                if chromId == next_chrom_id {
+                    next_chrom_id += 1;
+                }
+
+                let section = write_section(items_in_section, chromId)?;
+                sections.push(section);
+                items_in_section = vec![];
+
+                if last_chrom.is_some() && current_val.chrom != last_chrom.unwrap() {
+                    for mut zoom in &mut zooms {
+                        write_zoom(&mut zoom.1, &zoom.2, chromId)?;
+                        zoom.3 += 1;
+                        zoom.2 = None;
                     }
                 }
-                assert!(next.start <= next.end);
             }
-            if current_item_idx >= ITEMS_PER_SLOT || next_val.is_none() || (last_chrom.is_some() && next_val.as_ref().unwrap().chrom != last_chrom.unwrap()) {
-                let file = &mut self.fp;
-                let mut bytes: Vec<u8> = vec![];
-                
-                let items_in_section_ = &items_in_section;
-                let current_offset = file.seek(SeekFrom::Current(0))?;
-                let chromId: u32 = *chrom_ids.entry(last_chrom.unwrap()).or_insert(next_chrom_id);
-                next_chrom_id += 1;
-                let start = items_in_section_[0].start;
-                let end = items_in_section[items_in_section_.len() - 1].end;
-                bytes.write_u32::<BigEndian>(chromId)?;
-                bytes.write_u32::<BigEndian>(start)?;
-                bytes.write_u32::<BigEndian>(end)?;
-                bytes.write_u32::<BigEndian>(0)?;
-                bytes.write_u32::<BigEndian>(0)?;
-                bytes.write_u8(1)?;
-                bytes.write_u8(0)?;
-                bytes.write_u16::<BigEndian>(current_item_idx)?;
+            for mut zoom in &mut zooms {
+                let mut add_start = current_val.start;
+                loop {
+                    match &mut zoom.2 {
+                        None => {
+                            zoom.2 = Some(LiveZoomInfo {
+                                chrom: current_val.chrom,
+                                start: add_start,
+                                end: add_start,
+                                valid_count: 0,
+                                min_value: current_val.value,
+                                max_value: current_val.value,
+                                sum: 0.0,
+                                sum_squares: 0.0,
+                            });
+                        },
+                        Some(zoom2) => {
+                            if zoom2.end >= current_val.end {
+                                break;
+                            }
+                            let next_end = zoom2.start + zoom.0;
+                            if next_end >= current_val.end {
+                                let added_bases = current_val.end - add_start;                                
+                                zoom2.end = current_val.end;
+                                zoom2.valid_count += added_bases;
+                                zoom2.min_value = zoom2.min_value.min(current_val.value);
+                                zoom2.max_value = zoom2.max_value.max(current_val.value);
+                                zoom2.sum += added_bases as f32 * current_val.value;
+                                zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
+                                if next_end == current_val.end {
+                                    let chromId: u32 = *chrom_ids.entry(zoom2.chrom).or_insert(next_chrom_id);
+                                    if chromId == next_chrom_id {
+                                        next_chrom_id += 1;
+                                    }
+                                    write_zoom(&mut zoom.1, &zoom.2, chromId)?;
+                                    zoom.3 += 1;
+                                    zoom.2 = None;
+                                    break;
+                                }
+                            } else {
+                                let added_bases = next_end - add_start;
+                                zoom2.end = next_end;
+                                zoom2.valid_count += added_bases;
+                                zoom2.min_value = zoom2.min_value.min(current_val.value);
+                                zoom2.max_value = zoom2.max_value.max(current_val.value);
+                                zoom2.sum += added_bases as f32 * current_val.value;
+                                zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
+                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom).or_insert(next_chrom_id);
+                                if chromId == next_chrom_id {
+                                    next_chrom_id += 1;
+                                }
+                                write_zoom(&mut zoom.1, &zoom.2, chromId)?;
+                                zoom.3 += 1;
+                                zoom.2 = None;
+                                add_start = next_end;
+                            }
+                        }
+                    }
 
-                for item in items_in_section.iter() {
-                    bytes.write_u32::<BigEndian>(item.start)?;
-                    bytes.write_u32::<BigEndian>(item.end)?;
-                    bytes.write_f32::<BigEndian>(item.val)?;   
-                }
-
-                let COMPRESS = true;
-
-                let out_bytes = if COMPRESS {
-                    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-                    e.write_all(&bytes)?;
-                    e.finish()?
-                } else {
-                    bytes
-                };
-                file.write_all(&out_bytes)?;
-                let end_offset = file.seek(SeekFrom::Current(0))?;
-
-                sections.push(Section {
-                    offset: current_offset,
-                    size: end_offset - current_offset,
-                    chrom: chromId,
-                    start,
-                    end,
-                });
-                last_start = None;
-                items_in_section.clear();
-                current_item_idx = 0;
-                if next_val.as_ref().is_none() {
-                    break
                 }
             }
-
-            current_item_idx += 1;
-            let current_val = next_val.unwrap();
             items_in_section.push(BedGraphSectionItem {
                 start: current_val.start,
                 end: current_val.end,
                 val: current_val.value,
             });
 
+            match &mut summary {
+                None => {
+                    summary = Some(Summary {
+                        bases_covered: (current_val.end - current_val.start) as u64,
+                        min_val: current_val.value as f64,
+                        max_val: current_val.value as f64,
+                        sum: (current_val.end - current_val.start) as f64 * current_val.value as f64,
+                        sum_squares: (current_val.end - current_val.start) as f64 * (current_val.value * current_val.value) as f64,
+                    })
+                },
+                Some(summary) => {
+                    summary.bases_covered += (current_val.end - current_val.start) as u64;
+                    summary.min_val = summary.min_val.min(current_val.value as f64);
+                    summary.max_val = summary.max_val.max(current_val.value as f64);
+                    summary.sum += (current_val.end - current_val.start) as f64 * current_val.value as f64;
+                    summary.sum_squares += (current_val.end - current_val.start) as f64 * (current_val.value * current_val.value) as f64;
+                }
+            }
+
+            last_start = current_val.start;
             last_chrom = Some(current_val.chrom);
         }
+        if let Some(lastchrom) = last_chrom {
+            let chromId: u32 = *chrom_ids.entry(lastchrom).or_insert(next_chrom_id);
+            //if chromId == next_chrom_id {
+            //    next_chrom_id += 1;
+            //}
+            sections.push(write_section(items_in_section, chromId)?);
 
-        Ok(sections)
+            for mut zoom in &mut zooms {
+                match &zoom.2 {
+                    None => (),
+                    Some(zoom2) => {
+                        assert!(lastchrom == zoom2.chrom);
+                        write_zoom(&mut zoom.1, &zoom.2, chromId)?;
+                        zoom.3 += 1;
+                        zoom.2 = None;
+                        println!("File size ({:?}): {:?}", zoom.0, zoom.1.seek(SeekFrom::End(0))?)
+                    }
+                }
+            }
+        }
+
+        println!("Zooms: {:?}", zooms);
+        let zooms_out: Vec<TempZoomInfo> = zooms.into_iter().map(|z| (z.0, z.1, z.3)).collect();
+        let final_summary = match summary {
+            None => Summary {
+                bases_covered: 0,
+                min_val: 0.0,
+                max_val: 0.0,
+                sum: 0.0,
+                sum_squares: 0.0,
+            },
+            Some(summary) => summary,
+        };
+        Ok((sections, final_summary, zooms_out))
     }
 
     fn write_rtreeindex(&mut self, sections: Vec<Section>) -> std::io::Result<()> {
@@ -977,17 +1245,17 @@ impl BigWig {
             println!("Writing {}. Isleaf: {} At: {}", trees.nodes.len(), isleaf, file.seek(SeekFrom::Current(0))?);
             file.write_u8(isleaf)?;
             file.write_u8(0)?;
-            file.write_u16::<BigEndian>(trees.nodes.len() as u16)?;
+            file.write_u16::<NativeEndian>(trees.nodes.len() as u16)?;
             *offset += index_offsets[curr_level];
             for (idx, node) in trees.nodes.iter().enumerate() {
-                file.write_u32::<BigEndian>(node.start_chrom_idx)?;
-                file.write_u32::<BigEndian>(node.start_base)?;
-                file.write_u32::<BigEndian>(node.end_chrom_idx)?;
-                file.write_u32::<BigEndian>(node.end_base)?;
+                file.write_u32::<NativeEndian>(node.start_chrom_idx)?;
+                file.write_u32::<NativeEndian>(node.start_base)?;
+                file.write_u32::<NativeEndian>(node.end_chrom_idx)?;
+                file.write_u32::<NativeEndian>(node.end_base)?;
                 match &node.kind {
                     RTreeNodeType::Leaf { offset, size } => {
-                        file.write_u64::<BigEndian>(*offset)?;
-                        file.write_u64::<BigEndian>(*size)?;
+                        file.write_u64::<NativeEndian>(*offset)?;
+                        file.write_u64::<NativeEndian>(*size)?;
                     },
                     RTreeNodeType::NonLeaf { .. } => {
                         let full_size = if curr_level >= 2 {
@@ -997,7 +1265,7 @@ impl BigWig {
                         };
                         let child_offset: u64 = *offset + idx as u64 * full_size;
                         println!("Child node offset: {}; Added: {}", child_offset, idx as u64 * full_size);
-                        file.write_u64::<BigEndian>(child_offset)?;
+                        file.write_u64::<NativeEndian>(child_offset)?;
                     },
                 }
             }
@@ -1010,16 +1278,16 @@ impl BigWig {
         let end_of_data = file.seek(SeekFrom::Current(0))?;
         // TODO: handle case with no data
         {
-            file.write_u32::<BigEndian>(CIR_TREE_MAGIC)?;
-            file.write_u32::<BigEndian>(BLOCK_SIZE)?;
-            file.write_u64::<BigEndian>(section_count)?;
-            file.write_u32::<BigEndian>(nodes.nodes[0].start_chrom_idx)?;
-            file.write_u32::<BigEndian>(nodes.nodes[0].start_base)?;
-            file.write_u32::<BigEndian>(nodes.nodes[nodes.nodes.len() - 1].end_chrom_idx)?;
-            file.write_u32::<BigEndian>(nodes.nodes[nodes.nodes.len() - 1].end_base)?;
-            file.write_u64::<BigEndian>(end_of_data)?;
-            file.write_u32::<BigEndian>(ITEMS_PER_SLOT)?;
-            file.write_u32::<BigEndian>(0)?;
+            file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
+            file.write_u32::<NativeEndian>(BLOCK_SIZE)?;
+            file.write_u64::<NativeEndian>(section_count)?;
+            file.write_u32::<NativeEndian>(nodes.nodes[0].start_chrom_idx)?;
+            file.write_u32::<NativeEndian>(nodes.nodes[0].start_base)?;
+            file.write_u32::<NativeEndian>(nodes.nodes[nodes.nodes.len() - 1].end_chrom_idx)?;
+            file.write_u32::<NativeEndian>(nodes.nodes[nodes.nodes.len() - 1].end_base)?;
+            file.write_u64::<NativeEndian>(end_of_data)?;
+            file.write_u32::<NativeEndian>(ITEMS_PER_SLOT)?;
+            file.write_u32::<NativeEndian>(0)?;
         }
 
         let mut current_offset = file.seek(SeekFrom::Current(0))?;
