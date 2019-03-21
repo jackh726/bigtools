@@ -119,6 +119,14 @@ enum RTreeNodeType {
 }
 
 #[derive(Debug)]
+struct SectionData {
+    chrom: u32,
+    start: u32,
+    end: u32,
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
 struct Section {
     offset: u64,
     size: u64,
@@ -766,10 +774,9 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_section(file: &mut std::io::BufWriter<&File>, items_in_section: Vec<BedGraphSectionItem>, chromId: u32, current_offset: u64) -> std::io::Result<(Section, u64)> {
+    fn write_section(items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
-        
-        //let current_offset = file.seek(SeekFrom::Current(0))?;
+
         let start = items_in_section[0].start;
         let end = items_in_section[items_in_section.len() - 1].end;
         bytes.write_u32::<NativeEndian>(chromId)?;
@@ -796,19 +803,13 @@ impl BigWig {
         } else {
             bytes
         };
-        let out_length = out_bytes.len();
-        file.write_all(&out_bytes)?;
-        //let end_offset = file.seek(SeekFrom::Current(0))?;
-        let end_offset = current_offset + out_length as u64;
 
-
-        Ok((Section {
-            offset: current_offset,
-            size: end_offset - current_offset,
+        Ok(SectionData {
             chrom: chromId,
             start,
             end,
-        }, end_offset))
+            data: out_bytes,
+        })
     }
 
     fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> {
@@ -859,6 +860,39 @@ impl BigWig {
             Ok(())
         };
 
+        extern crate futures;
+        extern crate tokio_threadpool;
+
+        use futures::sync::oneshot;
+        use futures::*;
+        use tokio_threadpool::*;
+
+        let pool = Builder::new()
+            .pool_size(4)
+            .keep_alive(Some(std::time::Duration::from_secs(30)))
+            .build();
+        let tx = pool.sender().clone();
+/*
+        {
+            let ress = (0..10).map(|i| {
+                let mut res = oneshot::spawn(
+                    future::lazy(move || {
+                        println!("Running on the pool");
+                        std::thread::sleep(std::time::Duration::new(1, 0));
+                        Ok::<u32, ()>(i)
+                    }),
+                    &tx,
+                );
+                println!("Spawned");
+                res
+            });
+
+            let stream = futures::stream::futures_ordered(ress);
+            for res in stream.wait() {
+                println!("Result: {:?}", res);
+            }
+        }
+*/
         let file = &mut self.get_buf_writer();
         let mut current_offset = file.seek(SeekFrom::Current(0))?;
         for current_val in vals_iter {
@@ -875,9 +909,25 @@ impl BigWig {
                 let samechrom = current_val.chrom == chrom;
                 let chromId = chrom_ids.get_id(chrom);
 
-                let (section, next_offset) = BigWig::write_section(file, items_in_section, chromId, current_offset)?;
-                current_offset = next_offset;
-                sections.push(section);
+                let res = oneshot::spawn(
+                    future::lazy(move || {
+                        //println!("Running on the pool {:?}", items_in_section.len());
+                        BigWig::write_section(items_in_section, chromId)
+                    }),
+                    &tx,
+                );
+                sections.push(res);
+                // let section = BigWig::write_section(items_in_section, chromId)?;
+                // let size = section.data.len() as u64;
+                // file.write_all(&section.data)?;
+                // sections.push(Section {
+                //     chrom: section.chrom,
+                //     start: section.start,
+                //     end: section.end,
+                //     offset: current_offset,
+                //     size,
+                // });
+                // current_offset += size;
                 items_in_section = vec![];
 
                 if !samechrom {
@@ -981,10 +1031,35 @@ impl BigWig {
             last_start = current_val.start;
             last_chrom = Some(current_val.chrom);
         }
+
+        let mut sections_out = vec![];
+        let stream = futures::stream::futures_ordered(sections);
+        for section_raw in stream.wait() {
+            let section = section_raw?;
+            let size = section.data.len() as u64;
+            file.write_all(&section.data)?;
+            sections_out.push(Section {
+                chrom: section.chrom,
+                start: section.start,
+                end: section.end,
+                offset: current_offset,
+                size,
+            });
+            current_offset += size;
+        }
+
         if let Some(lastchrom) = last_chrom {
             let chromId = chrom_ids.get_id(lastchrom.to_string());
-            let (section, _) = BigWig::write_section(file, items_in_section, chromId, current_offset)?;
-            sections.push(section);
+            let section = BigWig::write_section(items_in_section, chromId)?;
+            let size = section.data.len() as u64;
+            file.write_all(&section.data)?;
+            sections_out.push(Section {
+                chrom: section.chrom,
+                start: section.start,
+                end: section.end,
+                offset: current_offset,
+                size,
+            });
 
             for mut zoom in &mut zooms {
                 match &zoom.2 {
@@ -1012,7 +1087,7 @@ impl BigWig {
             },
             Some(summary) => summary,
         };
-        Ok((sections, final_summary, zooms_out))
+        Ok((sections_out, final_summary, zooms_out))
     }
 
     fn write_zooms(&mut self, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {
