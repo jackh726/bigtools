@@ -18,6 +18,8 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 
+use crate::idmap::IdMap;
+
 const BIGWIG_MAGIC_LTH: u32 = 0x888FFC26;
 const BIGWIG_MAGIC_HTL: u32 = 0x26FC8F88;
 const BIGBED_MAGIC_LTH: u32 = 0x8789F2EB;
@@ -592,7 +594,7 @@ impl BigWig {
 
         self.write_blank_summary()?;
 
-        let mut chrom_ids = std::collections::HashMap::new();
+        let mut chrom_ids = IdMap::new();
 
         let full_data_offset = self.current_file_offset()?;
 
@@ -619,7 +621,7 @@ impl BigWig {
         // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
         //  but requires us to know all the data ahead of time (when writing)
         let chrom_index_start = self.current_file_offset()?;
-        self.write_chrom_tree(chrom_sizes, &chrom_ids)?;
+        self.write_chrom_tree(chrom_sizes, &chrom_ids.get_map())?;
 
         let index_start = self.current_file_offset()?;
         self.write_rtreeindex(sections)?;
@@ -809,7 +811,7 @@ impl BigWig {
         }, end_offset))
     }
 
-    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut std::collections::HashMap<String, u32>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> {
+    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> {
         let ITEMS_PER_SLOT: u16 = 1024;
 
         #[derive(Debug)]
@@ -833,8 +835,7 @@ impl BigWig {
             let temp = tempfile::tempfile()?;
             zooms.push((size, std::io::BufWriter::new(temp), None, 0));
         }
-        
-        let mut next_chrom_id: u32 = 0;
+
         let mut sections = Vec::new();
         let mut summary: Option<Summary> = None;
         let mut last_chrom: Option<String> = None;
@@ -871,17 +872,15 @@ impl BigWig {
 
             if items_in_section.len() >= ITEMS_PER_SLOT as usize || (last_chrom.is_some() && &current_val.chrom != last_chrom.as_ref().unwrap()) {
                 let chrom = last_chrom.unwrap();
-                let chromId: u32 = *chrom_ids.entry(chrom.clone()).or_insert(next_chrom_id);
-                if chromId == next_chrom_id {
-                    next_chrom_id += 1;
-                }
+                let samechrom = current_val.chrom == chrom;
+                let chromId = chrom_ids.get_id(chrom);
 
                 let (section, next_offset) = BigWig::write_section(file, items_in_section, chromId, current_offset)?;
                 current_offset = next_offset;
                 sections.push(section);
                 items_in_section = vec![];
 
-                if current_val.chrom != chrom {
+                if !samechrom {
                     for mut zoom in &mut zooms {
                         write_zoom(&mut zoom.1, &zoom.2, chromId)?;
                         zoom.3 += 1;
@@ -912,10 +911,7 @@ impl BigWig {
                             let next_end = zoom2.start + zoom.0;
                             if next_end < current_val.start {
                                 // The last zoom entry ended before this value begins, need to write
-                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
-                                if chromId == next_chrom_id {
-                                    next_chrom_id += 1;
-                                }
+                                let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
                                 write_zoom(&mut zoom.1, &zoom.2, chromId)?;
                                 zoom.3 += 1;
                                 zoom.2 = None;
@@ -931,10 +927,7 @@ impl BigWig {
                                 zoom2.sum += added_bases as f32 * current_val.value;
                                 zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
                                 if next_end == current_val.end {
-                                    let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
-                                    if chromId == next_chrom_id {
-                                        next_chrom_id += 1;
-                                    }
+                                    let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
                                     write_zoom(&mut zoom.1, &zoom.2, chromId)?;
                                     zoom.3 += 1;
                                     zoom.2 = None;
@@ -949,10 +942,7 @@ impl BigWig {
                                 zoom2.max_value = zoom2.max_value.max(current_val.value);
                                 zoom2.sum += added_bases as f32 * current_val.value;
                                 zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
-                                let chromId: u32 = *chrom_ids.entry(zoom2.chrom.to_string()).or_insert(next_chrom_id);
-                                if chromId == next_chrom_id {
-                                    next_chrom_id += 1;
-                                }
+                                let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
                                 write_zoom(&mut zoom.1, &zoom.2, chromId)?;
                                 zoom.3 += 1;
                                 zoom.2 = None;
@@ -992,10 +982,7 @@ impl BigWig {
             last_chrom = Some(current_val.chrom);
         }
         if let Some(lastchrom) = last_chrom {
-            let chromId: u32 = *chrom_ids.entry(lastchrom.to_string()).or_insert(next_chrom_id);
-            //if chromId == next_chrom_id {
-            //    next_chrom_id += 1;
-            //}
+            let chromId = chrom_ids.get_id(lastchrom.to_string());
             let (section, _) = BigWig::write_section(file, items_in_section, chromId, current_offset)?;
             sections.push(section);
 

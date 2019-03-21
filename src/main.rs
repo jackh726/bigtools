@@ -7,6 +7,8 @@ mod bigwig;
 use bigwig::BigWig;
 use bigwig::ValueWithChrom;
 
+mod idmap;
+
 fn main() -> Result<(), std::io::Error> {
     write_test()?;
 
