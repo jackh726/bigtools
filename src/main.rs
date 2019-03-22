@@ -10,27 +10,48 @@ use bigwig::ValueWithChrom;
 mod idmap;
 
 fn main() -> Result<(), std::io::Error> {
-    write_test()?;
+    let mut args = std::env::args();
+    args.next();
+    let bedgraph = args.next().unwrap_or("/home/hueyj/temp/final.min.chr17.full.bedGraph".to_string());
+    let chrom_map = args.next().unwrap_or("/home/hueyj/temp/hg38.chrom.sizes".to_string());
+    let out_file = args.next().unwrap_or("/home/hueyj/temp/out.bigWig".to_string());
+    println!("Args: {:} {:} {:}", bedgraph, chrom_map, out_file);
 
-    //read_test()?;
+    write_test(bedgraph, chrom_map, out_file.clone())?;
+
+    read_test(out_file)?;
     Ok(())
 }
 
-fn write_test() -> std::io::Result<()> {
-    let mut outb = BigWig::create_file(String::from("/home/hueyj/temp/out.bigWig"))?;
+fn get_chrom_map(file: File) -> std::collections::HashMap<String, u32> {
+    BufReader::new(file)
+        .lines()
+        .filter(|l| match l { Ok(s) => !s.is_empty(), _ => true })
+        .map(|l| {
+            let words = l.expect("Split error");
+            let mut split = words.split_whitespace();
+            (split.next().expect("Missing chrom").to_owned(), split.next().expect("Missing size").parse::<u32>().unwrap())
+        })
+        .collect()
+}
+
+fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
+    let mut outb = BigWig::create_file(out)?;
     println!("Path: {:?}", outb.path);
 
-    let chrom_map: std::collections::HashMap<&str, u32> = [
+    let chrom_map = get_chrom_map(File::open(chroms)?);
+    //println!("Chrom_map: {:?}", chrom_map);
+    /*let chrom_map: std::collections::HashMap<&str, u32> = [
         ("chr2", 242193529),
         ("chr10", 133797422),
         ("chr17", 83257441),
         ("chr17_GL000205v2_random", 185591),
         ("chr17_KI270729v1_random", 280839),
         ("chr17_KI270730v1_random", 112551),
-    ].iter().cloned().collect();
+    ].iter().cloned().collect();*/
 
     println!("Reading file.");
-    let infile = File::open("/home/hueyj/temp/final.min.chr17.full.bedGraph")?;
+    let infile = File::open(bg)?;
     //let infile = File::open("/home/hueyj/temp/test.bedGraph")?;
     let vals_iter = BufReader::new(infile)
         .lines()
@@ -49,18 +70,18 @@ fn write_test() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_test() -> std::io::Result<()> {
+fn read_test(bw: String) -> std::io::Result<()> {
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/ENCFF609KNT.bigWig"))?;
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
-    //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/out.bigWig"))?;
-    //println!("Path: {:?}", b.path);
+    let mut b = BigWig::from_file(bw)?;
+    println!("Read path: {:?}", b.path);
 
-    //b.read_info()?;
+    b.read_info()?;
 
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
     //let interval = b.get_interval("chr17", 10000000u32, 10010000u32)?;
     //println!("Interval result: {:?} {:?}", interval.len(), &interval[0..10]);
 
-    //b.test_read_zoom("chr17", 10000000u32, 10010000u32)?;
+    b.test_read_zoom("chr17", 10000000u32, 10010000u32)?;
     Ok(())
 }

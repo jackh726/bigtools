@@ -616,7 +616,7 @@ impl BigWig {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write<'a, V>(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+    pub fn write<V>(&mut self, chrom_sizes: std::collections::HashMap<String, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         self.write_blank_headers()?;
 
         let total_summary_offset = self.current_file_offset()?;
@@ -661,7 +661,7 @@ impl BigWig {
         let mut zoom_entries: Vec<ZoomHeader> = vec![];
         self.write_zooms(zooms, &mut zoom_entries)?;
 
-        println!("Zoom entries: {:?}", zoom_entries);
+        //println!("Zoom entries: {:?}", zoom_entries);
         let num_zooms = zoom_entries.len() as u16;
 
         // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
@@ -752,7 +752,7 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_chrom_tree(&mut self, chrom_sizes: std::collections::HashMap<&str, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
+    fn write_chrom_tree(&mut self, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
         let mut chroms: Vec<&String> = chrom_ids.keys().collect();
         chroms.sort();
         println!("Used chroms {:?}", chroms);
@@ -765,7 +765,6 @@ impl BigWig {
         let block_size = std::cmp::max(256, item_count) as u32;
         file.write_u32::<NativeEndian>(block_size)?;
         let max_bytes = chroms.iter().map(|a| a.len() as u32).fold(0, u32::max);
-        println!("Max bytes: {:?}", max_bytes);
         file.write_u32::<NativeEndian>(max_bytes)?;
         file.write_u32::<NativeEndian>(8)?; // size of Id (u32) + Size (u32)
         file.write_u64::<NativeEndian>(item_count)?;
@@ -780,7 +779,6 @@ impl BigWig {
             let key_bytes = &mut vec![0u8; max_bytes as usize];
             let chrom_bytes = chrom.as_bytes();
             key_bytes[..chrom_bytes.len()].copy_from_slice(chrom_bytes);
-            println!("Key bytes for {:?}: {:x?}", chrom, key_bytes);
             file.write_all(key_bytes)?;
             let id = *chrom_ids.get(chrom).unwrap();
             file.write_u32::<NativeEndian>(id)?;
@@ -1287,7 +1285,7 @@ impl BigWig {
         }).collect();
         let mut levels = 0;
         let nodes: RTreeNodeList<RTreeNode> = loop {
-            println!("Current_nodes (at level {}): {:?}", levels, current_nodes.len());
+            //println!("Current_nodes (at level {}): {:?}", levels, current_nodes.len());
             levels += 1;
 
             if current_nodes.len() < BLOCK_SIZE as usize {
@@ -1307,7 +1305,7 @@ impl BigWig {
                 let next_node = node_iter.next();
                 match next_node {
                     None => {
-                        println!("Remaining nodes at complete: {}", current_group.len());
+                        //println!("Remaining nodes at complete: {}", current_group.len());
                         next_nodes.push(RTreeNode{
                             start_chrom_idx,
                             start_base,
@@ -1402,7 +1400,7 @@ impl BigWig {
         if levels > 0 {
             calculate_offsets(&mut index_offsets, &nodes, levels - 1, levels)?;
         }
-        println!("index Offsets: {:?}", index_offsets);
+        //println!("index Offsets: {:?}", index_offsets);
 
 
         const NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * BLOCK_SIZE as u64;
@@ -1474,10 +1472,10 @@ impl BigWig {
         }
 
         let mut current_offset = file.seek(SeekFrom::Current(0))?;
-        println!("Start of index: {}", current_offset);
+        //println!("Start of index: {}", current_offset);
         for level in (0..levels).rev() {
             write_tree(&mut file, &index_offsets, &nodes, levels - 1, level, &mut current_offset)?;
-            println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
+            //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
 
         //assert!(file.seek(SeekFrom::Current(0))? == next_offset);
