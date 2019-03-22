@@ -30,7 +30,7 @@ fn write_test() -> std::io::Result<()> {
     ].iter().cloned().collect();
 
     println!("Reading file.");
-    let infile = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
+    let infile = File::open("/home/hueyj/temp/final.min.chr17.full.bedGraph")?;
     //let infile = File::open("/home/hueyj/temp/test.bedGraph")?;
     let vals_iter = BufReader::new(infile)
         .lines()

@@ -4,6 +4,15 @@
 
 extern crate flate2;
 extern crate tempfile;
+extern crate futures;
+extern crate tokio_threadpool;
+extern crate rayon;
+
+use futures::sync::oneshot;
+use futures::future;
+use futures::future::Future;
+use tokio_threadpool::Builder;
+use std::sync::mpsc;
 
 use std::vec::Vec;
 
@@ -144,12 +153,24 @@ struct Summary {
     sum_squares: f64,
 }
 
-type TempZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, u32 /* Number of zoom records */);
+type TempZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Vec<Section> /* sections */);
 
 struct BedGraphSectionItem {
     start: u32,
     end: u32,
     val: f32,
+}
+
+#[derive(Debug)]
+struct ZoomRecord {
+    chrom: u32,
+    start: u32,
+    end: u32,
+    valid_count: u32,
+    min_value: f32,
+    max_value: f32,
+    sum: f32,
+    sum_squares: f32,
 }
 
 pub struct BigWig {
@@ -622,7 +643,7 @@ impl BigWig {
         println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", sections.len());
         println!("Summary: {:?}", summary);
-        println!("Zooms: {:?}", zooms);
+        println!("Zooms: {:?}", zooms.len());
 
         // Since the chrom tree is read before the index, we put this before the full data index
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
@@ -679,7 +700,7 @@ impl BigWig {
         }
         {
             let mut file = self.get_buf_writer();
-            assert!(file.seek(SeekFrom::Current(0))? == total_summary_offset);
+            file.seek(SeekFrom::Start(total_summary_offset))?;
             file.write_u64::<NativeEndian>(summary.bases_covered)?;
             file.write_f64::<NativeEndian>(summary.min_val)?;
             file.write_f64::<NativeEndian>(summary.max_val)?;
@@ -812,6 +833,41 @@ impl BigWig {
         })
     }
 
+    fn write_zoom_section(items_in_section: Vec<ZoomRecord>, chromId: u32) -> std::io::Result<SectionData> {
+        let mut bytes: Vec<u8> = vec![];
+
+        let start = items_in_section[0].start;
+        let end = items_in_section[items_in_section.len() - 1].end;
+
+        for item in items_in_section.iter() {
+            bytes.write_u32::<NativeEndian>(chromId)?;
+            bytes.write_u32::<NativeEndian>(item.start)?;
+            bytes.write_u32::<NativeEndian>(item.end)?;
+            bytes.write_u32::<NativeEndian>(item.valid_count)?;
+            bytes.write_f32::<NativeEndian>(item.min_value)?;
+            bytes.write_f32::<NativeEndian>(item.max_value)?;
+            bytes.write_f32::<NativeEndian>(item.sum)?;
+            bytes.write_f32::<NativeEndian>(item.sum_squares)?; 
+        }
+
+        let COMPRESS = true;
+
+        let out_bytes = if COMPRESS {
+            let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
+            e.write_all(&bytes)?;
+            e.finish()?
+        } else {
+            bytes
+        };
+
+        Ok(SectionData {
+            chrom: chromId,
+            start,
+            end,
+            data: out_bytes,
+        })
+    }
+
     fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         let ITEMS_PER_SLOT: u16 = 1024;
 
@@ -827,46 +883,23 @@ impl BigWig {
             sum_squares: f32,
         }
 
-        type ZoomInfo<'a> = (u32, BufWriter<File>, Option<LiveZoomInfo>, u32);
+        type ZoomInfo<'a> = (u32, BufWriter<File>, Option<LiveZoomInfo>);
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2560, 10240, 40960, 163840, 655360, 2621440];
-        //let zoom_sizes: Vec<u32> = vec![];
         let mut zooms_vec: Vec<ZoomInfo> = vec![];
-        for size in zoom_sizes {
+        for size in zoom_sizes.iter() {
             let temp = tempfile::tempfile()?;
-            zooms_vec.push((size, std::io::BufWriter::new(temp), None, 0));
+            zooms_vec.push((*size, std::io::BufWriter::new(temp), None));
         }
         let zooms = &mut zooms_vec;
-
-        let write_zoom = |file: &mut Write, zoom_info: &Option<LiveZoomInfo>, chromId: u32| -> std::io::Result<()> {
-            match &zoom_info {
-                None => (),
-                Some(live) => {
-                    file.write_u32::<NativeEndian>(chromId)?;
-                    file.write_u32::<NativeEndian>(live.start)?;
-                    file.write_u32::<NativeEndian>(live.end)?;
-                    file.write_u32::<NativeEndian>(live.valid_count)?;
-                    file.write_f32::<NativeEndian>(live.min_value)?;
-                    file.write_f32::<NativeEndian>(live.max_value)?;
-                    file.write_f32::<NativeEndian>(live.sum)?;
-                    file.write_f32::<NativeEndian>(live.sum_squares)?;
-                }
-            }
-            Ok(())
-        };
-
-        extern crate futures;
-        extern crate tokio_threadpool;
-        extern crate rayon;
-
-        use futures::sync::oneshot;
-        use futures::*;
-        use tokio_threadpool::*;
+        let num_zooms = zooms.len();
+        let mut zoom_sections_out: Vec<Vec<Section>> = zoom_sizes.iter().map(|_| vec![]).collect();
 
         let mut sections_out = vec![];
         let mut summary_complete: Option<Summary> = None;
         let summary = &mut summary_complete;
-        let (ftx, frx) = std::sync::mpsc::channel::<futures::sync::oneshot::SpawnHandle<SectionData, _>>();
+        let (ftx, frx) = mpsc::channel::<oneshot::SpawnHandle<SectionData, _>>();
+        let (ftxzooms, frxzooms) = mpsc::channel::<(u32, oneshot::SpawnHandle<SectionData, _>)>();
         let pool = Builder::new()
             .pool_size(4)
             .keep_alive(Some(std::time::Duration::from_secs(30)))
@@ -896,16 +929,64 @@ impl BigWig {
                 };
                 match dorun() {
                     Ok(_) => (),
-                    _ => panic!("Error when wriing to file"),
+                    _ => panic!("Error when writing to file"),
+                }
+            });
+
+            s.spawn(|_| {
+                let dorun = || -> std::io::Result<()> {
+                    let mut current_offsets: Vec<u64> = zooms.iter_mut().map(|z| {
+                        // TODO: this should always be 0
+                        z.1.seek(SeekFrom::Current(0)).expect("Couldn't seek.")
+                    }).collect();
+                    let iter = frxzooms.into_iter();
+                    for (idx, future) in iter {
+                        let section_raw = future.wait();
+                        let section = section_raw?;
+                        let size = section.data.len() as u64;
+                        let file = &mut zooms[idx as usize].1;
+                        let current_offset = &mut current_offsets[idx as usize];
+                        file.write_all(&section.data)?;
+                        zoom_sections_out[idx as usize].push(Section {
+                            chrom: section.chrom,
+                            start: section.start,
+                            end: section.end,
+                            offset: *current_offset,
+                            size,
+                        });
+                        *current_offset += size;
+                    }
+                    println!("{:?}", current_offsets);
+                    Ok(())
+                };
+                match dorun() {
+                    Ok(_) => (),
+                    _ => panic!("Error when writing to file"),
                 }
             });
 
             s.spawn(move |_| {
                 let dorun = || -> std::io::Result<()> {
                     let tx = pool.sender().clone();
+                    // TODO: remove and just use items_in_section.last()
                     let mut last_chrom: Option<String> = None;
                     let mut last_start: u32 = 0;
                     let mut items_in_section: Vec<BedGraphSectionItem> = Vec::with_capacity(ITEMS_PER_SLOT as usize);
+                    let mut zoom_info: Vec<Option<LiveZoomInfo>> = (0..num_zooms).map(|_| None).collect();
+                    let mut zoom_items_in_section: Vec<Vec<ZoomRecord>> = (0..num_zooms).map(|_| vec![]).collect();
+
+                    let mut sent_items: u32 = 0;
+                    let mut write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
+                        let chromId = items[0].chrom;
+                        let res = oneshot::spawn(
+                            future::lazy(move || {
+                                BigWig::write_zoom_section(items, chromId)
+                            }),
+                            &tx,
+                        );
+                        sent_items += 1;
+                        ftxzooms.send((i as u32, res)).expect("Unable to send");
+                    };
                     for current_val in vals_iter {
                         if let Some(lastchrom) = &last_chrom {
                             assert!(lastchrom <= &current_val.chrom);
@@ -915,9 +996,9 @@ impl BigWig {
                         }
                         assert!(current_val.start <= current_val.end);
 
-                        if items_in_section.len() >= ITEMS_PER_SLOT as usize || (last_chrom.is_some() && &current_val.chrom != last_chrom.as_ref().unwrap()) {
+                        let diffchrom = last_chrom.is_some() && &current_val.chrom != last_chrom.as_ref().unwrap();
+                        if items_in_section.len() >= ITEMS_PER_SLOT as usize || diffchrom {
                             let chrom = last_chrom.unwrap();
-                            let samechrom = current_val.chrom == chrom;
                             let chromId = chrom_ids.get_id(chrom);
 
                             let res = oneshot::spawn(
@@ -928,21 +1009,45 @@ impl BigWig {
                             );
                             ftx.send(res).expect("Unable to send");
                             items_in_section = vec![];
-
-                            if !samechrom {
-                                for mut zoom in zooms.iter_mut() {
-                                    write_zoom(&mut zoom.1, &zoom.2, chromId)?;
-                                    zoom.3 += 1;
-                                    zoom.2 = None;
+                        }
+                        if diffchrom {
+                            for (i, mut zoom) in zoom_info.iter_mut().enumerate() {
+                                if zoom_items_in_section[i].len() >= ITEMS_PER_SLOT as usize {
+                                    zoom_items_in_section.push(vec![]);
+                                    let items = zoom_items_in_section.swap_remove(i);
+                                    write_zoom_items(i, items);
                                 }
+                                if let Some(zoom2) = &mut zoom {
+                                    let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
+                                    zoom_items_in_section[i].push(ZoomRecord {
+                                        chrom: chromId,
+                                        start: zoom2.start,
+                                        end: zoom2.end,
+                                        valid_count: zoom2.valid_count,
+                                        min_value: zoom2.min_value,
+                                        max_value: zoom2.max_value,
+                                        sum: zoom2.sum,
+                                        sum_squares: zoom2.sum_squares,
+
+                                    });
+                                    *zoom = None;
+                                }
+                                zoom_items_in_section.push(vec![]);
+                                let items = zoom_items_in_section.swap_remove(i);
+                                write_zoom_items(i, items);
                             }
                         }
-                        for mut zoom in zooms.iter_mut() {
+                        for (i, mut zoom) in zoom_info.iter_mut().enumerate() {
                             let mut add_start = current_val.start;
                             loop {
-                                match &mut zoom.2 {
+                                if zoom_items_in_section[i].len() >= ITEMS_PER_SLOT as usize {
+                                    zoom_items_in_section.push(vec![]);
+                                    let items = zoom_items_in_section.swap_remove(i);
+                                    write_zoom_items(i, items);
+                                }
+                                match &mut zoom {
                                     None => {
-                                        zoom.2 = Some(LiveZoomInfo {
+                                        *zoom = Some(LiveZoomInfo {
                                             chrom: current_val.chrom.clone(),
                                             start: add_start,
                                             end: add_start,
@@ -957,13 +1062,21 @@ impl BigWig {
                                         if zoom2.end >= current_val.end {
                                             break;
                                         }
-                                        let next_end = zoom2.start + zoom.0;
+                                        let next_end = zoom2.start + zoom_sizes[i];
                                         if next_end < current_val.start {
                                             // The last zoom entry ended before this value begins, need to write
                                             let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                            write_zoom(&mut zoom.1, &zoom.2, chromId)?;
-                                            zoom.3 += 1;
-                                            zoom.2 = None;
+                                            zoom_items_in_section[i].push(ZoomRecord {
+                                                chrom: chromId,
+                                                start: zoom2.start,
+                                                end: zoom2.end,
+                                                valid_count: zoom2.valid_count,
+                                                min_value: zoom2.min_value,
+                                                max_value: zoom2.max_value,
+                                                sum: zoom2.sum,
+                                                sum_squares: zoom2.sum_squares,
+                                            });
+                                            *zoom = None;
                                             continue;
                                         }
                                         if next_end >= current_val.end {
@@ -977,9 +1090,17 @@ impl BigWig {
                                             zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
                                             if next_end == current_val.end {
                                                 let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                                write_zoom(&mut zoom.1, &zoom.2, chromId)?;
-                                                zoom.3 += 1;
-                                                zoom.2 = None;
+                                                zoom_items_in_section[i].push(ZoomRecord {
+                                                    chrom: chromId,
+                                                    start: zoom2.start,
+                                                    end: zoom2.end,
+                                                    valid_count: zoom2.valid_count,
+                                                    min_value: zoom2.min_value,
+                                                    max_value: zoom2.max_value,
+                                                    sum: zoom2.sum,
+                                                    sum_squares: zoom2.sum_squares,
+                                                });
+                                                *zoom = None;
                                                 break;
                                             }
                                         } else {
@@ -992,9 +1113,17 @@ impl BigWig {
                                             zoom2.sum += added_bases as f32 * current_val.value;
                                             zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
                                             let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                            write_zoom(&mut zoom.1, &zoom.2, chromId)?;
-                                            zoom.3 += 1;
-                                            zoom.2 = None;
+                                            zoom_items_in_section[i].push(ZoomRecord {
+                                                chrom: chromId,
+                                                start: zoom2.start,
+                                                end: zoom2.end,
+                                                valid_count: zoom2.valid_count,
+                                                min_value: zoom2.min_value,
+                                                max_value: zoom2.max_value,
+                                                sum: zoom2.sum,
+                                                sum_squares: zoom2.sum_squares,
+                                            });
+                                            *zoom = None;
                                             add_start = next_end;
                                         }
                                     }
@@ -1031,41 +1160,60 @@ impl BigWig {
                         last_chrom = Some(current_val.chrom);
                     }
 
+                    // We have previously had data, need to write final section (if needed)
                     if let Some(lastchrom) = last_chrom {
                         let chromId = chrom_ids.get_id(lastchrom.to_string());
-                        let res = oneshot::spawn(
-                            future::lazy(move || {
-                                BigWig::write_section(items_in_section, chromId)
-                            }),
-                            &tx,
-                        );
-                        ftx.send(res).expect("Unable to send");
+                        if items_in_section.len() > 0 {
+                            let res = oneshot::spawn(
+                                future::lazy(move || {
+                                    BigWig::write_section(items_in_section, chromId)
+                                }),
+                                &tx,
+                            );
+                            ftx.send(res).expect("Unable to send");
+                        }
 
-                        for mut zoom in zooms.iter_mut() {
-                            match &zoom.2 {
+                        for (i, zoom) in zoom_info.iter_mut().enumerate() {
+                            match &zoom {
                                 None => (),
                                 Some(zoom2) => {
                                     assert!(lastchrom == zoom2.chrom);
-                                    write_zoom(&mut zoom.1, &zoom.2, chromId)?;
-                                    zoom.3 += 1;
-                                    zoom.2 = None;
-                                    println!("Zoom file size ({:?}): {:?}", zoom.0, zoom.1.seek(SeekFrom::End(0))?)
+                                    zoom_items_in_section[i].push(ZoomRecord {
+                                        chrom: chromId,
+                                        start: zoom2.start,
+                                        end: zoom2.end,
+                                        valid_count: zoom2.valid_count,
+                                        min_value: zoom2.min_value,
+                                        max_value: zoom2.max_value,
+                                        sum: zoom2.sum,
+                                        sum_squares: zoom2.sum_squares,
+                                    });
+                                    *zoom = None;
+                                    //println!("Zoom file size ({:?}): {:?}", zoom.0, zoom.1.seek(SeekFrom::End(0))?)
                                 }
+                            }
+                            if zoom_items_in_section[i].len() > 0 {
+                                zoom_items_in_section.push(vec![]);
+                                let items = zoom_items_in_section.swap_remove(i);
+                                write_zoom_items(i, items);
                             }
                         }
                     }
+                    pool.shutdown_on_idle().wait().unwrap();
                     Ok(())
                 };
                 match dorun() {
-                    Ok(_) => (),
+                    Ok(_) => println!("Done iterating over lines."),
                     _ => panic!("Error when iterating"),
                 }
             });
         });
-        
 
-        println!("Zooms: {:?}", zooms_vec);
-        let zooms_out: Vec<TempZoomInfo> = zooms_vec.into_iter().map(|z| (z.0, z.1.into_inner().expect("Can't get inner file"), z.3)).collect();
+        //println!("Zooms: {:?}", zooms_vec);
+        let zooms_out: Vec<TempZoomInfo> = zooms_vec.into_iter().zip(zoom_sections_out.into_iter())
+            .map(|(z, sections)|
+                (z.0, z.1.into_inner().expect("Can't get inner file"), sections)
+                ).collect();
         let final_summary = match summary_complete {
             None => Summary {
                 bases_covered: 0,
@@ -1089,59 +1237,24 @@ impl BigWig {
                 let mut file = self.get_buf_writer();
                 let zoom_data_offset = file.seek(SeekFrom::Current(0))?;
                 zoom.1.seek(SeekFrom::Start(0))?;
-                let mut sections: Vec<Section> = vec![];
-                let mut buf: Vec<u8> = vec![];
-                let mut state: Option<(u32, u32, u32)> = None;
-                let mut items_in_section: u32 = 0;
 
-                let mut write_section = |buf: Vec<u8>, state: &Option<(u32, u32, u32)>| -> std::io::Result<Section> {
-                    let current_offset = file.seek(SeekFrom::Current(0))?;
-                    let out_bytes = if DO_COMPRESS {
-                        let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-                        e.write_all(&buf)?;
-                        e.finish()?
-                    } else {
-                        buf
-                    };
-                    file.write_all(&out_bytes)?;
-                    let end_offset = file.seek(SeekFrom::Current(0))?;
-                    Ok(Section {
-                        offset: current_offset,
-                        size: end_offset - current_offset,
-                        chrom: state.unwrap().0,
-                        start: state.unwrap().1,
-                        end: state.unwrap().2,
-                    })
-                };
-                for _ in 0..zoom.2 {
-                    let chrom = read_u32(&mut zoom.1, false)?;
-                    let start = read_u32(&mut zoom.1, false)?;
-                    let end = read_u32(&mut zoom.1, false)?;
-                    let mut rest = vec![0u8; 20];
-                    zoom.1.read_exact(&mut rest)?;
-                    //println!("Read zoom entry: {:?} {:?} {:?} {:?}", chrom, start, end, rest);
-                    if items_in_section >= ITEMS_PER_SLOT || (state.is_some() && state.as_ref().unwrap().0 != chrom) {
-                        let section = write_section(buf, &state)?;
-                        sections.push(section);
-                        buf = vec![];
-                        state = None;
-                        items_in_section = 0;
+                let sections = zoom.2.iter().map(|section| {
+                    let chrom = section.chrom;
+                    let start = section.start;
+                    let end = section.end;
+                    Section {
+                        offset: zoom_data_offset + section.offset,
+                        size: section.size,
+                        chrom: chrom,
+                        start: start,
+                        end: end,
                     }
-                    buf.write_u32::<NativeEndian>(chrom)?;
-                    buf.write_u32::<NativeEndian>(start)?;
-                    buf.write_u32::<NativeEndian>(end)?;
-                    buf.write_all(&rest)?;
-                    match state {
-                        None => {
-                            state = Some((chrom, start, end));
-                        },
-                        Some((_chrom, state_start, _end)) => state = Some((chrom, state_start, end)),
-                    }
-                    items_in_section += 1;
-                }
-                let section = write_section(buf, &state)?;
-                sections.push(section);
-                
+                }).collect();
+
+                let mut buf_reader = std::io::BufReader::new(zoom.1);
+                std::io::copy(&mut buf_reader, &mut file)?;
+
+
                 let zoom_index_offset = file.seek(SeekFrom::Current(0))?;
                 (sections, zoom_data_offset, zoom_index_offset)
             };
