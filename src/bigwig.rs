@@ -996,34 +996,32 @@ impl BigWig {
                         }
                         assert!(current_val.start <= current_val.end);
 
-                        if let Some(state_val) = state {
+                        if let Some(state_val) = &mut state {
                             let diffchrom = current_val.chrom != state_val.chrom;
-                            if state_val.items.len() >= ITEMS_PER_SLOT as usize || diffchrom {
+                            if diffchrom {
+                                let mut state_val = state.unwrap();
                                 let chromId = chrom_ids.get_id(state_val.chrom);
-                                write_section_items(state_val.items, chromId);
-                                if diffchrom {
-                                    for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
-                                        if let Some(zoom2) = zoom_item.live_info {
-                                            let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                            zoom_item.records.push(ZoomRecord {
-                                                chrom: chromId,
-                                                start: zoom2.start,
-                                                end: zoom2.end,
-                                                valid_count: zoom2.valid_count,
-                                                min_value: zoom2.min_value,
-                                                max_value: zoom2.max_value,
-                                                sum: zoom2.sum,
-                                                sum_squares: zoom2.sum_squares,
+                                let items = std::mem::replace(&mut state_val.items, vec![]);
+                                write_section_items(items, chromId);
+                                for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
+                                    if let Some(zoom2) = zoom_item.live_info {
+                                        let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
+                                        zoom_item.records.push(ZoomRecord {
+                                            chrom: chromId,
+                                            start: zoom2.start,
+                                            end: zoom2.end,
+                                            valid_count: zoom2.valid_count,
+                                            min_value: zoom2.min_value,
+                                            max_value: zoom2.max_value,
+                                            sum: zoom2.sum,
+                                            sum_squares: zoom2.sum_squares,
 
-                                            });
-                                            zoom_item.live_info = None;
-                                        }
-                                        write_zoom_items(i, zoom_item.records);
+                                        });
+                                        zoom_item.live_info = None;
                                     }
+                                    write_zoom_items(i, zoom_item.records);
                                 }
                                 state = None;
-                            } else {
-                                state = Some(state_val);
                             }
                         }
                         if let None = state {
@@ -1036,7 +1034,13 @@ impl BigWig {
                                 }).collect(),
                             });
                         }
+
                         let state_val = state.as_mut().unwrap();
+                        if state_val.items.len() >= ITEMS_PER_SLOT as usize {
+                            let chromId = chrom_ids.get_id(state_val.chrom.clone());
+                            let items = std::mem::replace(&mut state_val.items, vec![]);
+                            write_section_items(items, chromId);
+                        }
                         for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
                             let mut add_start = current_val.start;
                             loop {
@@ -1174,59 +1178,6 @@ impl BigWig {
                 .keep_alive(Some(std::time::Duration::from_secs(30)))
                 .build();
 
-            /*
-            s.spawn(|_| {
-                let dorun = || -> std::io::Result<()> {
-                    use tokio::prelude::{AsyncWrite, Future};
-                    use futures::*;
-
-                    self.fp.flush()?;
-                    let f = tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(self.path.clone())
-                        .and_then(|file| file.seek(SeekFrom::End(0)))
-                        .map(|(mut file, mut current_offset): (tokio::fs::File, u64)| {
-                            let stream_future = frx.map(|s| s.into_future()).map(move |section_raw| {
-                                let do_next = || {
-                                    let section = section_raw.wait()?;
-                                    let size = section.data.len() as u64;
-                                    let section_offset = current_offset;
-                                    current_offset += size;
-                                    let sec = file
-                                        .poll_write(&section.data)
-                                        .map(|_| Section {
-                                            chrom: section.chrom,
-                                            start: section.start,
-                                            end: section.end,
-                                            offset: section_offset,
-                                            size,
-                                        });
-                                    sec
-                                };
-                                let sec = do_next();
-                                sec
-                            })
-                            .map(|_| ())
-                            .map_err(|_| panic!());
-                            stream_future
-                            //Ok::<_, std::io::Error>(stream_future)
-                        }).flatten_stream().map(|_| ()).map_err(|e| panic!("Error: {}", e)).collect();
-                    let mut rt = tokio::runtime::Runtime::new().expect("Couldn't create runtime.");
-                    //let a: () = f;
-                    //println!("{:?}", f);
-                    rt.block_on(f);
-                    //rt.block_on(res)?;
-                    let file = &mut self.get_buf_writer();
-                    file.seek(SeekFrom::End(0))?;
-                    println!("Done");
-                    Ok(())
-                };
-                match dorun() {
-                    Ok(_) => (),
-                    Err(e) => panic!("Error when writing to file: {}", e),
-                }
-            });
-            */
             s.spawn(|_| {
                 let dorun = || -> std::io::Result<()> {
                     let mut current_offsets: Vec<u64> = zooms.iter().map(|_| 0).collect();
@@ -1272,6 +1223,8 @@ impl BigWig {
                 },
                 Err(e) => panic!("Error: {:?}", e),
             }
+
+            self.fp.seek(SeekFrom::End(0)).unwrap();
         });
 
         //println!("Zooms: {:?}", zooms_vec);
