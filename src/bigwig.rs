@@ -5,12 +5,11 @@
 extern crate flate2;
 extern crate tempfile;
 extern crate futures;
+extern crate tokio;
 extern crate tokio_threadpool;
 extern crate rayon;
 
 use futures::sync::oneshot;
-use futures::future;
-use futures::future::Future;
 use tokio_threadpool::Builder;
 use std::sync::mpsc;
 
@@ -623,7 +622,7 @@ impl BigWig {
 
         self.write_blank_summary()?;
 
-        let mut chrom_ids = IdMap::new();
+        let chrom_ids = IdMap::new();
 
         let full_data_offset = self.current_file_offset()?;
 
@@ -637,7 +636,7 @@ impl BigWig {
         }
 
         let pre_data = self.current_file_offset()?;
-        let (sections, summary, zooms) = self.write_vals(&mut vals, &mut chrom_ids)?;
+        let (sections, summary, zooms, chrom_ids) = self.write_vals(&mut vals, chrom_ids)?;
         let total_sections = sections.len() as u32;
         let data_size = self.current_file_offset()? - pre_data;
         println!("Data size: {:?}", data_size);
@@ -866,7 +865,7 @@ impl BigWig {
         })
     }
 
-    fn write_vals<'a, V>(&mut self, vals_iter: &mut V, chrom_ids: &mut IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>)> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+    fn write_vals<'a, V>(&mut self, vals_iter: V, chrom_ids: IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>, IdMap<String>)> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         let ITEMS_PER_SLOT: u16 = 1024;
 
         #[derive(Debug)]
@@ -896,66 +895,44 @@ impl BigWig {
         let mut sections_out = vec![];
         let mut summary_complete: Option<Summary> = None;
         let summary = &mut summary_complete;
-        let (ftx, frx) = mpsc::channel::<oneshot::SpawnHandle<SectionData, _>>();
+        //let (ftx, frx) = mpsc::channel::<oneshot::SpawnHandle<SectionData, _>>();
+        let (ftx, frx) = futures::sync::mpsc::unbounded::<oneshot::SpawnHandle<SectionData, _>>();
         let (ftxzooms, frxzooms) = mpsc::channel::<(u32, oneshot::SpawnHandle<SectionData, _>)>();
 
-        rayon::scope(|s| {
-            s.spawn(|_| {
-                let dorun = || -> std::io::Result<()> {
-                    let file = &mut self.get_buf_writer();
-                    let mut current_offset = file.seek(SeekFrom::Current(0))?;
-                    let iter = frx.into_iter();
-                    for future in iter {
-                        let section_raw = future.wait();
-                        let section = section_raw?;
+        use tokio::prelude::{AsyncWrite, Future};
+        use futures::*;
+        let sections_future = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(self.path.clone())
+            .and_then(|file| file.seek(SeekFrom::End(0)))
+            .map(|(mut file, mut current_offset): (tokio::fs::File, u64)| {
+                let stream_future = frx.map(|s| s.into_future()).map(move |section_raw| -> std::io::Result<Section> {
+                    let do_next = || {
+                        let section = section_raw.wait()?;
                         let size = section.data.len() as u64;
-                        file.write_all(&section.data)?;
-                        sections_out.push(Section {
-                            chrom: section.chrom,
-                            start: section.start,
-                            end: section.end,
-                            offset: current_offset,
-                            size,
-                        });
+                        let section_offset = current_offset;
                         current_offset += size;
-                    }
-                    Ok(())
-                };
-                match dorun() {
-                    Ok(_) => (),
-                    _ => panic!("Error when writing to file"),
-                }
-            });
+                        let sec = file
+                            .poll_write(&section.data)
+                            .map(|_| Section {
+                                chrom: section.chrom,
+                                start: section.start,
+                                end: section.end,
+                                offset: section_offset,
+                                size,
+                            })
+                            .map_err(|e| panic!("Error: {}", e));
+                        sec
+                    };
+                    do_next()
+                })
+                .map_err(|_| panic!());
+                stream_future
+                //Ok::<_, std::io::Error>(stream_future)
+            }).flatten_stream().map_err(|e| panic!("Error: {}", e)).collect();
 
-            s.spawn(|_| {
-                let dorun = || -> std::io::Result<()> {
-                    let mut current_offsets: Vec<u64> = zooms.iter().map(|_| 0).collect();
-                    let iter = frxzooms.into_iter();
-                    for (idx, future) in iter {
-                        let section_raw = future.wait();
-                        let section = section_raw?;
-                        let size = section.data.len() as u64;
-                        let file = &mut zooms[idx as usize].1;
-                        let current_offset = &mut current_offsets[idx as usize];
-                        file.write_all(&section.data)?;
-                        zoom_sections_out[idx as usize].push(Section {
-                            chrom: section.chrom,
-                            start: section.start,
-                            end: section.end,
-                            offset: *current_offset,
-                            size,
-                        });
-                        *current_offset += size;
-                    }
-                    Ok(())
-                };
-                match dorun() {
-                    Ok(_) => (),
-                    _ => panic!("Error when writing to file"),
-                }
-            });
-
-            s.spawn(move |_| {
+        let f = futures::done(Ok::<(V, IdMap<String>), ()>((vals_iter, chrom_ids)))
+            .and_then(move |(vals_iter, mut chrom_ids)| {
                 let dorun = || -> std::io::Result<()> {
                     struct ZoomItem {
                         live_info: Option<LiveZoomInfo>,
@@ -982,7 +959,12 @@ impl BigWig {
                             }),
                             &tx,
                         );
-                        ftx.send(res).expect("Unable to send");
+                        ftx.unbounded_send(res).expect("Couldn't send");
+                        //if let Err(e) = ftx.send(res) {
+                        //    println!("Error: {:?}", e);
+                        //    panic!("Unable to send: {:?}", e);
+                        //}
+                        //ftx.send(res).expect("Unable to send");
                     };
 
                     let write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
@@ -1181,7 +1163,115 @@ impl BigWig {
                     Ok(_) => println!("Done iterating over lines."),
                     _ => panic!("Error when iterating"),
                 }
+                Ok(chrom_ids)
             });
+
+        let mut chrom_ids_ = None;
+
+        rayon::scope(|s| {
+            let pool = Builder::new()
+                .pool_size(4)
+                .keep_alive(Some(std::time::Duration::from_secs(30)))
+                .build();
+
+            /*
+            s.spawn(|_| {
+                let dorun = || -> std::io::Result<()> {
+                    use tokio::prelude::{AsyncWrite, Future};
+                    use futures::*;
+
+                    self.fp.flush()?;
+                    let f = tokio::fs::OpenOptions::new()
+                        .append(true)
+                        .open(self.path.clone())
+                        .and_then(|file| file.seek(SeekFrom::End(0)))
+                        .map(|(mut file, mut current_offset): (tokio::fs::File, u64)| {
+                            let stream_future = frx.map(|s| s.into_future()).map(move |section_raw| {
+                                let do_next = || {
+                                    let section = section_raw.wait()?;
+                                    let size = section.data.len() as u64;
+                                    let section_offset = current_offset;
+                                    current_offset += size;
+                                    let sec = file
+                                        .poll_write(&section.data)
+                                        .map(|_| Section {
+                                            chrom: section.chrom,
+                                            start: section.start,
+                                            end: section.end,
+                                            offset: section_offset,
+                                            size,
+                                        });
+                                    sec
+                                };
+                                let sec = do_next();
+                                sec
+                            })
+                            .map(|_| ())
+                            .map_err(|_| panic!());
+                            stream_future
+                            //Ok::<_, std::io::Error>(stream_future)
+                        }).flatten_stream().map(|_| ()).map_err(|e| panic!("Error: {}", e)).collect();
+                    let mut rt = tokio::runtime::Runtime::new().expect("Couldn't create runtime.");
+                    //let a: () = f;
+                    //println!("{:?}", f);
+                    rt.block_on(f);
+                    //rt.block_on(res)?;
+                    let file = &mut self.get_buf_writer();
+                    file.seek(SeekFrom::End(0))?;
+                    println!("Done");
+                    Ok(())
+                };
+                match dorun() {
+                    Ok(_) => (),
+                    Err(e) => panic!("Error when writing to file: {}", e),
+                }
+            });
+            */
+            s.spawn(|_| {
+                let dorun = || -> std::io::Result<()> {
+                    let mut current_offsets: Vec<u64> = zooms.iter().map(|_| 0).collect();
+                    let iter = frxzooms.into_iter();
+                    for (idx, future) in iter {
+                        let section_raw = future.wait();
+                        let section = section_raw?;
+                        let size = section.data.len() as u64;
+                        let file = &mut zooms[idx as usize].1;
+                        let current_offset = &mut current_offsets[idx as usize];
+                        file.write_all(&section.data)?;
+                        zoom_sections_out[idx as usize].push(Section {
+                            chrom: section.chrom,
+                            start: section.start,
+                            end: section.end,
+                            offset: *current_offset,
+                            size,
+                        });
+                        *current_offset += size;
+                    }
+                    Ok(())
+                };
+                match dorun() {
+                    Ok(_) => (),
+                    _ => panic!("Error when writing to file"),
+                }
+            });
+
+            // For now, we open a completely separate handle
+            // Flush before, seek after
+            self.fp.flush().unwrap();
+
+            let sections_handle = pool.spawn_handle(sections_future);
+
+            let res = f.wait();
+            chrom_ids_ = Some(res.unwrap());
+
+            match sections_handle.wait() {
+                Ok(sections) => {
+                    println!("Sections length: {}", sections.len());
+                    let sections_res: Result<Vec<_>, _> = sections.into_iter().collect();
+                    sections_out.append(&mut sections_res.unwrap());
+                },
+                Err(e) => panic!("Error: {:?}", e),
+            }
         });
 
         //println!("Zooms: {:?}", zooms_vec);
@@ -1199,7 +1289,7 @@ impl BigWig {
             },
             Some(summary) => summary,
         };
-        Ok((sections_out, final_summary, zooms_out))
+        Ok((sections_out, final_summary, zooms_out, chrom_ids_.unwrap()))
     }
 
     fn write_zooms(&mut self, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {

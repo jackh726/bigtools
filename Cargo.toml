@@ -11,6 +11,7 @@ tempfile = "3"
 futures = "0.1.25"
 tokio-threadpool = "0.1.12"
 rayon = "1"
+tokio = "0.1"
 
 [profile.release]
 debug = true

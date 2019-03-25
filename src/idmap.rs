@@ -3,11 +3,13 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+#[derive(Debug)]
 struct State<K : Hash + Eq> {
     map: HashMap<K, u32>,
     next_id: u32,
 }
 
+#[derive(Debug)]
 pub struct IdMap<K : Hash + Eq> {
     state: RwLock<State<K>>,
 }
