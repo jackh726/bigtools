@@ -898,10 +898,6 @@ impl BigWig {
         let summary = &mut summary_complete;
         let (ftx, frx) = mpsc::channel::<oneshot::SpawnHandle<SectionData, _>>();
         let (ftxzooms, frxzooms) = mpsc::channel::<(u32, oneshot::SpawnHandle<SectionData, _>)>();
-        let pool = Builder::new()
-            .pool_size(4)
-            .keep_alive(Some(std::time::Duration::from_secs(30)))
-            .build();
 
         rayon::scope(|s| {
             s.spawn(|_| {
@@ -961,14 +957,22 @@ impl BigWig {
 
             s.spawn(move |_| {
                 let dorun = || -> std::io::Result<()> {
+                    struct ZoomItem {
+                        live_info: Option<LiveZoomInfo>,
+                        records: Vec<ZoomRecord>,
+                    }
                     struct BedGraphSection {
                         chrom: String,
                         items: Vec<BedGraphSectionItem>,
-                        zoom_items: Vec<Vec<ZoomRecord>>
+                        zoom_items: Vec<ZoomItem>
                     }
 
+                    let pool = Builder::new()
+                        .pool_size(4)
+                        .keep_alive(Some(std::time::Duration::from_secs(30)))
+                        .build();
+
                     let tx = pool.sender().clone();
-                    let mut zoom_info: Vec<Option<LiveZoomInfo>> = (0..num_zooms).map(|_| None).collect();
                     let mut state: Option<BedGraphSection> = None;
 
                     let write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32| {
@@ -1016,10 +1020,10 @@ impl BigWig {
                                 let chromId = chrom_ids.get_id(state_val.chrom);
                                 write_section_items(state_val.items, chromId);
                                 if diffchrom {
-                                    for (i, (mut zoom, mut items)) in zoom_info.iter_mut().zip(state_val.zoom_items).enumerate() {
-                                        if let Some(zoom2) = &mut zoom {
+                                    for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
+                                        if let Some(zoom2) = zoom_item.live_info {
                                             let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                            items.push(ZoomRecord {
+                                            zoom_item.records.push(ZoomRecord {
                                                 chrom: chromId,
                                                 start: zoom2.start,
                                                 end: zoom2.end,
@@ -1030,9 +1034,9 @@ impl BigWig {
                                                 sum_squares: zoom2.sum_squares,
 
                                             });
-                                            *zoom = None;
+                                            zoom_item.live_info = None;
                                         }
-                                        write_zoom_items(i, items);
+                                        write_zoom_items(i, zoom_item.records);
                                     }
                                 }
                                 state = None;
@@ -1044,19 +1048,22 @@ impl BigWig {
                             state = Some(BedGraphSection {
                                 chrom: current_val.chrom.clone(),
                                 items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
-                                zoom_items: (0..num_zooms).map(|_| Vec::with_capacity(ITEMS_PER_SLOT as usize)).collect(),
+                                zoom_items: (0..num_zooms).map(|_| ZoomItem {
+                                    live_info: None,
+                                    records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
+                                }).collect(),
                             });
                         }
                         let state_val = state.as_mut().unwrap();
-                        for (i, mut zoom) in zoom_info.iter_mut().enumerate() {
+                        for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
                             let mut add_start = current_val.start;
                             loop {
                                 if add_start >= current_val.end {
                                     break
                                 }
-                                match &mut zoom {
+                                match &mut zoom_item.live_info {
                                     None => {
-                                        *zoom = Some(LiveZoomInfo {
+                                        zoom_item.live_info = Some(LiveZoomInfo {
                                             chrom: current_val.chrom.clone(),
                                             start: add_start,
                                             end: add_start,
@@ -1085,7 +1092,7 @@ impl BigWig {
                                         // or we added to the end of the zoom), then write this zooms to the current section
                                         if add_end == next_end {
                                             let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                            state_val.zoom_items[i].push(ZoomRecord {
+                                            zoom_item.records.push(ZoomRecord {
                                                 chrom: chromId,
                                                 start: zoom2.start,
                                                 end: zoom2.end,
@@ -1095,15 +1102,14 @@ impl BigWig {
                                                 sum: zoom2.sum,
                                                 sum_squares: zoom2.sum_squares,
                                             });
-                                            *zoom = None;
+                                            zoom_item.live_info = None;
                                         }
                                         // Set where we would start for next time
                                         add_start = std::cmp::max(add_end, current_val.start);
                                         // Write section if full
-                                        assert!(state_val.zoom_items[i].len() <= ITEMS_PER_SLOT as usize);
-                                        if state_val.zoom_items[i].len() == ITEMS_PER_SLOT as usize {
-                                            state_val.zoom_items.push(vec![]);
-                                            let items = state_val.zoom_items.swap_remove(i);
+                                        assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
+                                        if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
+                                            let items = std::mem::replace(&mut zoom_item.records, vec![]);
                                             write_zoom_items(i, items);
                                         }
                                     }
@@ -1144,12 +1150,12 @@ impl BigWig {
                             write_section_items(state_val.items, chromId);
                         }
 
-                        for (i, (zoom, mut zoom_items)) in zoom_info.iter_mut().zip(state_val.zoom_items).enumerate() {
-                            match &zoom {
+                        for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
+                            match &zoom_item.live_info {
                                 None => (),
                                 Some(zoom2) => {
                                     assert!(lastchrom == zoom2.chrom);
-                                    zoom_items.push(ZoomRecord {
+                                    zoom_item.records.push(ZoomRecord {
                                         chrom: chromId,
                                         start: zoom2.start,
                                         end: zoom2.end,
@@ -1159,12 +1165,12 @@ impl BigWig {
                                         sum: zoom2.sum,
                                         sum_squares: zoom2.sum_squares,
                                     });
-                                    *zoom = None;
+                                    zoom_item.live_info = None;
                                     //println!("Zoom file size ({:?}): {:?}", zoom.0, zoom.1.seek(SeekFrom::End(0))?)
                                 }
                             }
-                            if zoom_items.len() > 0 {
-                                write_zoom_items(i, zoom_items);
+                            if zoom_item.records.len() > 0 {
+                                write_zoom_items(i, zoom_item.records);
                             }
                         }
                     }
