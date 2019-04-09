@@ -637,15 +637,13 @@ impl BigWig {
         let fp = std::mem::replace(&mut self.fp, tempfile::tempfile()?);
         let (chrom_summary_future, sections_stream, zooms_future, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
         let (chrom_ids, summary) = futures::executor::block_on(chrom_summary_future);
-        use futures::StreamExt;
-        let sections: Vec<Section> = futures::executor::block_on(sections_stream.collect());
+        let (nodes, levels, total_sections) = self.get_rtreeindex(sections_stream);
         let zooms = futures::executor::block_on(zooms_future);
         let file = futures::executor::block_on(file_future);
         std::mem::replace(&mut self.fp, file);
-        let total_sections = sections.len() as u32;
         let data_size = self.current_file_offset()? - pre_data;
         println!("Data size: {:?}", data_size);
-        println!("Sections: {:?}", sections.len());
+        println!("Sections: {:?}", total_sections);
         println!("Summary: {:?}", summary);
         println!("Zooms: {:?}", zooms.len());
 
@@ -657,7 +655,7 @@ impl BigWig {
         self.write_chrom_tree(chrom_sizes, &chrom_ids.get_map())?;
 
         let index_start = self.current_file_offset()?;
-        self.write_rtreeindex(sections)?;
+        self.write_rtreeindex(nodes, levels, total_sections)?;
 
         const DO_COMPRESS: bool = true; // TODO: param
         const ITEMS_PER_SLOT: u32 = 1024; // TODO: param
@@ -713,7 +711,7 @@ impl BigWig {
         }
         {
             let mut file = self.get_buf_writer();
-            file.write_u32::<NativeEndian>(total_sections)?;
+            file.write_u32::<NativeEndian>(total_sections as u32)?;
 
             file.seek(SeekFrom::End(0))?;
             file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
@@ -1217,12 +1215,14 @@ impl BigWig {
         const ITEMS_PER_SLOT: u32 = 1024;
 
         for mut zoom in zooms {
-            let (sections, zoom_data_offset, zoom_index_offset) = {
+            let zoom_data_offset = {
                 let mut file = self.get_buf_writer();
-                let zoom_data_offset = file.seek(SeekFrom::Current(0))?;
+                file.seek(SeekFrom::Current(0))?
+            };
+            let (sections_stream, zoom_index_offset) = {
+                let mut file = self.get_buf_writer();
                 zoom.1.seek(SeekFrom::Start(0))?;
-
-                let sections = zoom.2.iter().map(|section| {
+                let sections_iter = zoom.2.iter().map(|section| {
                     let chrom = section.chrom;
                     let start = section.start;
                     let end = section.end;
@@ -1233,16 +1233,17 @@ impl BigWig {
                         start: start,
                         end: end,
                     }
-                }).collect();
+                });
+                let sections_stream = futures::stream::iter(sections_iter);
 
                 let mut buf_reader = std::io::BufReader::new(zoom.1);
                 std::io::copy(&mut buf_reader, &mut file)?;
-
-
                 let zoom_index_offset = file.seek(SeekFrom::Current(0))?;
-                (sections, zoom_data_offset, zoom_index_offset)
+
+                (sections_stream, zoom_index_offset)
             };
-            self.write_rtreeindex(sections)?;
+            let (nodes, levels, total_sections) = self.get_rtreeindex(sections_stream);
+            self.write_rtreeindex(nodes, levels, total_sections)?;
 
             zoom_entries.push(ZoomHeader {
                 reduction_level: zoom.0,
@@ -1254,12 +1255,11 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_rtreeindex(&mut self, sections: Vec<Section>) -> std::io::Result<()> {
+    fn get_rtreeindex<S>(&mut self, sections_stream: S) -> (RTreeNodeList<RTreeNode>, usize, u64) where S : futures::stream::Stream<Item=Section> + Unpin {
         const BLOCK_SIZE: u32 = 256;
 
-        let section_count = sections.len() as u64;
-
-        let mut current_nodes: Vec<RTreeNode> = sections.into_iter().map(|s| RTreeNode {
+        let mut total_sections = 0;
+        let mut current_nodes: Box<Iterator<Item=RTreeNode>> = Box::new(futures::executor::block_on_stream(sections_stream).map(|s| RTreeNode {
             start_chrom_idx: s.chrom,
             start_base: s.start,
             end_chrom_idx: s.chrom,
@@ -1268,45 +1268,41 @@ impl BigWig {
                 offset: s.offset,
                 size: s.size,
             },
-        }).collect();
+        }));
         let mut levels = 0;
         let nodes: RTreeNodeList<RTreeNode> = loop {
-            //println!("Current_nodes (at level {}): {:?}", levels, current_nodes.len());
-            levels += 1;
-
-            if current_nodes.len() < BLOCK_SIZE as usize {
-                break RTreeNodeList::<RTreeNode> {
-                    nodes: current_nodes
-                }
-            }
-
             let mut start_chrom_idx = 0;
             let mut start_base = 0;
             let mut end_chrom_idx = 0;
             let mut end_base = 0;
             let mut next_nodes: Vec<RTreeNode> = vec![];
             let mut current_group: Vec<RTreeNode> = vec![];
-            let mut node_iter = current_nodes.into_iter();
             loop {
-                let next_node = node_iter.next();
+                let next_node = current_nodes.next();
                 match next_node {
                     None => {
                         //println!("Remaining nodes at complete: {}", current_group.len());
-                        next_nodes.push(RTreeNode{
-                            start_chrom_idx,
-                            start_base,
-                            end_chrom_idx,
-                            end_base,
-                            kind: RTreeNodeType::NonLeaf {
-                                children: RTreeNodeList::<RTreeNode> {
-                                    nodes: current_group
-                                }
-                            },
-                        });
+                        if next_nodes.len() == 0 {
+                            next_nodes = current_group;
+                        } else {
+                            next_nodes.push(RTreeNode{
+                                start_chrom_idx,
+                                start_base,
+                                end_chrom_idx,
+                                end_base,
+                                kind: RTreeNodeType::NonLeaf {
+                                    children: RTreeNodeList::<RTreeNode> {
+                                        nodes: current_group
+                                    }
+                                },
+                            });
+                        }
                         break
                     },
                     Some(node) => {
-
+                        if levels == 0 {
+                            total_sections += 1;
+                        }
                         if current_group.len() == 0 {
                             start_chrom_idx = node.start_chrom_idx;
                             start_base = node.start_base;
@@ -1327,9 +1323,9 @@ impl BigWig {
                                 end_chrom_idx,
                                 end_base,
                                 kind: RTreeNodeType::NonLeaf {
-                                children: RTreeNodeList::<RTreeNode> {
-                                    nodes: current_group
-                                }
+                                    children: RTreeNodeList::<RTreeNode> {
+                                        nodes: current_group
+                                    }
                                 },
                             });
                             current_group = vec![];
@@ -1337,11 +1333,24 @@ impl BigWig {
                     }
                 }
             }            
-            current_nodes = next_nodes;
+
+            levels += 1;
+            if next_nodes.len() < BLOCK_SIZE as usize {
+                break RTreeNodeList::<RTreeNode> {
+                    nodes: next_nodes
+                }
+            }
+
+            current_nodes = Box::new(next_nodes.into_iter());
         };
+        //println!("Total sections: {:?}", total_sections);
         //println!("Nodes ({:?}): {:?}", nodes.nodes.len(), nodes);
         //println!("Levels: {:?}", levels);
+        (nodes, levels, total_sections)
+    }
 
+    fn write_rtreeindex(&mut self, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64) -> std::io::Result<()> {
+        const BLOCK_SIZE: u32 = 256;
 
         const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
         const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
@@ -1351,7 +1360,7 @@ impl BigWig {
 
         let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
-        fn calculate_offsets(mut index_offsets: &mut Vec<u64>, trees: &RTreeNodeList<RTreeNode>, level: usize, levels: usize) -> std::io::Result<()> {
+        fn calculate_offsets(mut index_offsets: &mut Vec<u64>, trees: &RTreeNodeList<RTreeNode>, level: usize) -> std::io::Result<()> {
             let mut isleaf: i8 = -1;
             let mut current_index_size = NODEHEADER_SIZE;
             for tree in trees.nodes.iter() {
@@ -1374,17 +1383,17 @@ impl BigWig {
                             panic!("Mixed node types at level {}", level);
                         }
                         isleaf = 0;
-                        calculate_offsets(&mut index_offsets, &children, level - 1, levels)?;
+                        calculate_offsets(&mut index_offsets, &children, level - 1)?;
                         current_index_size += NON_LEAFNODE_SIZE;
+                        index_offsets[level - 1] += current_index_size;
                     },
                 }
             }
-            index_offsets[level] += current_index_size;
             Ok(())
         }
 
-        if levels > 0 {
-            calculate_offsets(&mut index_offsets, &nodes, levels - 1, levels)?;
+        if levels > 1 {
+            calculate_offsets(&mut index_offsets, &nodes, levels)?;
         }
         //println!("index Offsets: {:?}", index_offsets);
 
