@@ -1,3 +1,5 @@
+#![feature(async_await, await_macro, futures_api)]
+
 extern crate std;
 
 use std::io::{BufReader, BufRead};
