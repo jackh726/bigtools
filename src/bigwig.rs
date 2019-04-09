@@ -631,7 +631,17 @@ impl BigWig {
         }
 
         let pre_data = self.current_file_offset()?;
-        let (sections, summary, zooms, chrom_ids) = self.write_vals(&mut vals, chrom_ids)?;
+        // Ideally, should instead be passing a mutable borrow to self.fp
+        // However, write_vals needs ownership because of threading
+        // Alternatively, could not have a self.fp field and instead pass file around explicitly
+        let fp = std::mem::replace(&mut self.fp, tempfile::tempfile()?);
+        let (chrom_summary_future, sections_stream, zooms_future, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
+        let (chrom_ids, summary) = futures::executor::block_on(chrom_summary_future);
+        use futures::StreamExt;
+        let sections: Vec<Section> = futures::executor::block_on(sections_stream.collect());
+        let zooms = futures::executor::block_on(zooms_future);
+        let file = futures::executor::block_on(file_future);
+        std::mem::replace(&mut self.fp, file);
         let total_sections = sections.len() as u32;
         let data_size = self.current_file_offset()? - pre_data;
         println!("Data size: {:?}", data_size);
@@ -860,7 +870,17 @@ impl BigWig {
         })
     }
 
-    fn write_vals<'a, V>(&mut self, vals_iter: V, mut chrom_ids: IdMap<String>) -> std::io::Result<(Vec<Section>, Summary, Vec<TempZoomInfo>, IdMap<String>)> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+    fn write_vals<'a, V>(
+        &mut self,
+        vals_iter: V,
+        mut chrom_ids: IdMap<String>,
+        mut file: File
+    ) -> std::io::Result<(
+        impl futures::Future<Output=(IdMap<String>, Summary)>,
+        impl futures::stream::Stream<Item=Section>,
+        impl futures::Future<Output=Vec<TempZoomInfo>>,
+        impl futures::Future<Output=File>
+        )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         const ITEMS_PER_SLOT: u16 = 1024;
 
         #[derive(Debug)]
@@ -886,42 +906,38 @@ impl BigWig {
         let num_zooms = zooms.len();
         let mut zoom_sections_out: Vec<Vec<Section>> = zoom_sizes.iter().map(|_| vec![]).collect();
 
-        let mut summary_complete: Option<Summary> = None;
-        let summary = &mut summary_complete;
         use futures::channel::mpsc::{unbounded, UnboundedSender};
-        //let (ftx, frx) = unbounded::<Box<std::future::Future<Output=std::io::Result<SectionData>> + Unpin>>();
         let (mut ftx, mut frx) = unbounded::<_>();
-        //let (ftxzooms, frxzooms) = mpsc::channel::<(u32, Box<std::future::Future<Output=std::io::Result<SectionData>> + Unpin>)>();
+        let (ftxsections, frxsections) = unbounded::<_>();
         let (ftxzooms, frxzooms) = mpsc::channel::<(u32, _)>();
 
         use futures::*;
         use futures::future::{self, FutureExt};
 
-        let path = self.path.clone();
-        let do_write = async move || -> std::io::Result<Vec<Section>> {
-            let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+        let do_write = async move || -> std::io::Result<File> {
             let mut current_offset = file.seek(SeekFrom::End(0))?;
-            let mut sections: Vec<Section> = vec![];
             while let Some(section_raw) = await!(frx.next()) {
                 let section: SectionData = await!(section_raw)?;
                 let size = section.data.len() as u64;
                 let section_offset = current_offset;
                 current_offset += size;
                 file.write_all(&section.data)?;
-                sections.push(Section {
+                ftxsections.unbounded_send(Section {
                     chrom: section.chrom,
                     start: section.start,
                     end: section.end,
                     offset: section_offset,
                     size,
-                })
+                }).unwrap();
             }
-            Ok(sections)
+            Ok(file)
         };
 
 
         let sections_future = do_write();
-        let read_file = async move || -> std::io::Result<IdMap<String>> {
+        let read_file = async move || -> std::io::Result<(IdMap<String>, Summary)> {
+            let mut summary: Option<Summary> = None;
+            
             struct ZoomItem {
                 live_info: Option<LiveZoomInfo>,
                 records: Vec<ZoomRecord>,
@@ -1087,9 +1103,9 @@ impl BigWig {
                     val: current_val.value,
                 });
 
-                match summary {
+                match &mut summary {
                     None => {
-                        *summary = Some(Summary {
+                        summary = Some(Summary {
                             bases_covered: (current_val.end - current_val.start) as u64,
                             min_val: current_val.value as f64,
                             max_val: current_val.value as f64,
@@ -1139,7 +1155,17 @@ impl BigWig {
                     }
                 }
             }
-            Ok(chrom_ids)
+            let summary_complete = match summary {
+                None => Summary {
+                    bases_covered: 0,
+                    min_val: 0.0,
+                    max_val: 0.0,
+                    sum: 0.0,
+                    sum_squares: 0.0,
+                },
+                Some(summary) => summary,
+            };
+            Ok((chrom_ids, summary_complete))
         };
 
         let f = read_file();
@@ -1170,56 +1196,19 @@ impl BigWig {
             Ok(zooms_info)
         };
 
-        // For now, we open a completely separate handle
-        // Flush before, seek after
-        self.fp.flush().unwrap();
-
-
         let zooms_future = process_zooms();
 
         let (zooms_remote, zooms_handle) = zooms_future.remote_handle();
-        let zooms_join_handle = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             futures::executor::block_on(zooms_remote);
         });
 
         let (sections_remote, sections_handle) = sections_future.remote_handle();
-        let sections_join_handle = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             futures::executor::block_on(sections_remote);
         });
 
-        let chrom_ids_ = Some(futures::executor::block_on(f).unwrap());
-
-        let sections_out: Vec<Section> = match futures::executor::block_on(sections_handle) {
-            Ok(sections) => {
-                println!("Sections length: {}", sections.len());
-                sections.into_iter().collect()
-            },
-            Err(e) => {
-                println!("{:?}", e);
-                panic!("Error: {:?}", e)
-            },
-        };
-
-        let zooms_out = futures::executor::block_on(zooms_handle)?;
-        //println!("Zooms: {:?}", zooms_vec);
-
-        sections_join_handle.join().unwrap();
-        zooms_join_handle.join().unwrap();
-
-
-        self.fp.seek(SeekFrom::End(0)).unwrap();
-
-        let final_summary = match summary_complete {
-            None => Summary {
-                bases_covered: 0,
-                min_val: 0.0,
-                max_val: 0.0,
-                sum: 0.0,
-                sum_squares: 0.0,
-            },
-            Some(summary) => summary,
-        };
-        Ok((sections_out, final_summary, zooms_out, chrom_ids_.unwrap()))
+        Ok((f.map(|ab| ab.unwrap()), frxsections, zooms_handle.map(|z| z.unwrap()), sections_handle.map(|f| f.unwrap())))
     }
 
     fn write_zooms(&mut self, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {
