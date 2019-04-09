@@ -896,17 +896,6 @@ impl BigWig {
 
         use futures::*;
         use futures::future::{self, FutureExt};
-        use futures::compat::Future01CompatExt;
-
-        fn convert_poll<T, E>(poll: Result<tokio::prelude::Async<T>, E>) -> Poll<Result<T, E>> {
-            use tokio::prelude::Async::{NotReady, Ready};
-
-            match poll {
-                Ok(Ready(val)) => Poll::Ready(Ok(val)),
-                Ok(NotReady) => Poll::Pending,
-                Err(err) => Poll::Ready(Err(err)),
-            }
-        }
 
         let path = self.path.clone();
         let do_write = async move || -> std::io::Result<Vec<Section>> {
@@ -943,27 +932,29 @@ impl BigWig {
                 zoom_items: Vec<ZoomItem>
             }
 
-            use tokio_threadpool::Builder;
-            let pool = Builder::new()
-                .pool_size(4)
-                .keep_alive(Some(std::time::Duration::from_secs(30)))
-                .build();
+            let pool = futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool.");
+            let mut pool1 = pool.clone();
+            let mut pool2 = pool.clone();
 
             let mut state: Option<BedGraphSection> = None;
 
-            let write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32, ftx: &mut UnboundedSender<_>| {
-                let res = pool.spawn_handle(future::lazy(move |_| {
+            use futures::task::SpawnExt;
+
+            let mut write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32, ftx: &mut UnboundedSender<_>| {
+                let (remote, handle) = future::lazy(move |_| {
                     BigWig::write_section(items, chromId)
-                }).compat());
-                ftx.unbounded_send(Box::new(res.compat())).expect("Couldn't send");
+                }).remote_handle();
+                pool1.spawn(remote).expect("Couldn't spawn.");
+                ftx.unbounded_send(handle.boxed()).expect("Couldn't send");
             };
 
-            let write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
+            let mut write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
                 let chromId = items[0].chrom;
-                let res = pool.spawn_handle(future::lazy(move |_| {
+                let (remote, handle) = future::lazy(move |_| {
                     BigWig::write_zoom_section(items, chromId)
-                }).compat());
-                ftxzooms.send((i as u32, Box::new(res.compat()))).expect("Unable to send");
+                }).remote_handle();
+                pool2.spawn(remote).expect("Couldn't spawn.");
+                ftxzooms.send((i as u32, handle.boxed())).expect("Couldn't send");
             };
             for current_val in vals_iter {
                 // TODO: test this correctly fails
@@ -1148,8 +1139,6 @@ impl BigWig {
                     }
                 }
             }
-            use tokio::prelude::Future;
-            pool.shutdown_on_idle().wait().unwrap();
             Ok(chrom_ids)
         };
 
