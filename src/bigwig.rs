@@ -15,6 +15,8 @@ use std::io::prelude::*;
 use std::fs::File;
 use std::io::BufWriter;
 
+use futures::stream::{self, Stream, StreamExt};
+
 use byteorder::{LittleEndian, BigEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
 
 use flate2::Compression;
@@ -636,8 +638,13 @@ impl BigWig {
         // Alternatively, could not have a self.fp field and instead pass file around explicitly
         let fp = std::mem::replace(&mut self.fp, tempfile::tempfile()?);
         let (chrom_summary_future, sections_stream, zooms_future, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
-        let (chrom_ids, summary) = futures::executor::block_on(chrom_summary_future);
-        let (nodes, levels, total_sections) = self.get_rtreeindex(sections_stream);
+        let rti_future = BigWig::get_rtreeindex(sections_stream);
+        let fs = async {
+            futures::join!(chrom_summary_future, rti_future)
+        };
+        let (cs, rti) = futures::executor::block_on(fs);
+        let (chrom_ids, summary) = cs;
+        let (nodes, levels, total_sections) = rti;
         let zooms = futures::executor::block_on(zooms_future);
         let file = futures::executor::block_on(file_future);
         std::mem::replace(&mut self.fp, file);
@@ -1242,7 +1249,7 @@ impl BigWig {
 
                 (sections_stream, zoom_index_offset)
             };
-            let (nodes, levels, total_sections) = self.get_rtreeindex(sections_stream);
+            let (nodes, levels, total_sections) = futures::executor::block_on(BigWig::get_rtreeindex(sections_stream));
             self.write_rtreeindex(nodes, levels, total_sections)?;
 
             zoom_entries.push(ZoomHeader {
@@ -1255,11 +1262,11 @@ impl BigWig {
         Ok(())
     }
 
-    fn get_rtreeindex<S>(&mut self, sections_stream: S) -> (RTreeNodeList<RTreeNode>, usize, u64) where S : futures::stream::Stream<Item=Section> + Unpin {
+    async fn get_rtreeindex<S>(sections_stream: S) -> (RTreeNodeList<RTreeNode>, usize, u64) where S : Stream<Item=Section> + Unpin {
         const BLOCK_SIZE: u32 = 256;
 
         let mut total_sections = 0;
-        let mut current_nodes: Box<Iterator<Item=RTreeNode>> = Box::new(futures::executor::block_on_stream(sections_stream).map(|s| RTreeNode {
+        let mut current_nodes: Box<Stream<Item=RTreeNode> + Unpin> = Box::new(sections_stream.map(|s| RTreeNode {
             start_chrom_idx: s.chrom,
             start_base: s.start,
             end_chrom_idx: s.chrom,
@@ -1278,7 +1285,7 @@ impl BigWig {
             let mut next_nodes: Vec<RTreeNode> = vec![];
             let mut current_group: Vec<RTreeNode> = vec![];
             loop {
-                let next_node = current_nodes.next();
+                let next_node = await!(current_nodes.next());
                 match next_node {
                     None => {
                         //println!("Remaining nodes at complete: {}", current_group.len());
@@ -1341,7 +1348,7 @@ impl BigWig {
                 }
             }
 
-            current_nodes = Box::new(next_nodes.into_iter());
+            current_nodes = Box::new(stream::iter(next_nodes.into_iter()));
         };
         //println!("Total sections: {:?}", total_sections);
         //println!("Nodes ({:?}): {:?}", nodes.nodes.len(), nodes);
