@@ -1,7 +1,5 @@
 #![feature(async_await, await_macro, futures_api)]
 
-extern crate std;
-
 use std::io::{BufReader, BufRead};
 use std::fs::File;
 
@@ -82,7 +80,7 @@ fn read_test(bw: String) -> std::io::Result<()> {
 
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
     //let interval = b.get_interval("chr17", 10000000u32, 10010000u32)?;
-    //println!("Interval result: {:?} {:?}", interval.len(), &interval[0..10]);
+    //println!("Interval result: {:?}", interval.len());
 
     b.test_read_zoom("chr17", 10000000u32, 10010000u32)?;
     Ok(())

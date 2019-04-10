@@ -1,21 +1,16 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
-
-extern crate flate2;
-extern crate tempfile;
-extern crate futures;
-
-use std::sync::mpsc;
-
-use std::vec::Vec;
-
 use std::io::{Seek, SeekFrom};
+use std::io::BufWriter;
 use std::io::prelude::*;
 use std::fs::File;
-use std::io::BufWriter;
+use std::vec::Vec;
 
+use futures::future::{self, FutureExt};
+use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::stream::{self, Stream, StreamExt};
+use futures::task::SpawnExt;
 
 use byteorder::{LittleEndian, BigEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
 
@@ -177,6 +172,10 @@ pub struct BigWig {
 
 impl BigWig {
     pub fn test_read_zoom(&mut self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
+        if self.info.as_ref().unwrap().zoom_headers.len() == 0 {
+            println!("No zooms. Skipping test read.");
+            return Ok(())
+        }
         let chrom_ix = {
             let info = self.info.as_ref().unwrap();
             let chrom_info = &info.chrom_info;
@@ -342,13 +341,13 @@ impl BigWig {
         let mut file = &mut self.fp;
 
         let mut zoom_headers = vec![];
-        for _ in 1..header.zoom_levels {
+        for _ in 0..header.zoom_levels {
             let reduction_level = read_u32(&mut file, header.isBigEndian)?;
             let _reserved = read_u32(&mut file, header.isBigEndian)?;
             let data_offset = read_u64(&mut file, header.isBigEndian)?;
             let index_offset = read_u64(&mut file, header.isBigEndian)?;
 
-            println!("Zoom header: reductionLevel: {:?} Reserved: {:?} Data offset: {:?} Index offset: {:?}", reduction_level, _reserved, data_offset, index_offset);
+            //println!("Zoom header: reductionLevel: {:?} Reserved: {:?} Data offset: {:?} Index offset: {:?}", reduction_level, _reserved, data_offset, index_offset);
 
             zoom_headers.push(ZoomHeader {
                 reduction_level,
@@ -419,14 +418,15 @@ impl BigWig {
     }
 
     fn search_overlapping_blocks(&mut self, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
-        println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
+        // Don't use get_buf_reader because it will overread
+        //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
         let bigendian = {
             let info = self.info.as_ref().unwrap();
             (&info.header).isBigEndian
         };
         let (isleaf, count): (u8, u16) = {
-            let mut file = self.get_buf_reader();
+            let mut file = &mut self.fp;
             let isleaf = read_u8(&mut file, bigendian)?;
             let _reserved = read_u8(&mut file, bigendian)?;
             let count = read_u16(&mut file, bigendian)?;
@@ -435,7 +435,7 @@ impl BigWig {
         };
         if isleaf == 1 {
             for _ in 0..count {
-                let mut file = self.get_buf_reader();
+                let mut file = &mut self.fp;
                 let start_chrom_ix = read_u32(&mut file, bigendian)?;
                 let start_base = read_u32(&mut file, bigendian)?;
                 let end_chrom_ix = read_u32(&mut file, bigendian)?;
@@ -454,7 +454,7 @@ impl BigWig {
         } else {
             let mut childblocks: Vec<u64> = vec![];
             {
-                let mut file = self.get_buf_reader();
+                let mut file = &mut self.fp;
                 for _ in 0..count {
                     let start_chrom_ix = read_u32(&mut file, bigendian)?;
                     let start_base = read_u32(&mut file, bigendian)?;
@@ -483,7 +483,8 @@ impl BigWig {
             (&info.header).isBigEndian
         };
         let blocks = {
-            let mut file = self.get_buf_reader();
+            // Specifically can't use getBufReader here since we require specific positioning next
+            let mut file = &mut self.fp;
             let magic = read_u32(&mut file, bigendian)?;
             if magic != CIR_TREE_MAGIC {
                 return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CIR_TREE_MAGIC does not match."));
@@ -911,13 +912,9 @@ impl BigWig {
         let num_zooms = zooms.len();
         let mut zoom_sections_out: Vec<Vec<Section>> = zoom_sizes.iter().map(|_| vec![]).collect();
 
-        use futures::channel::mpsc::{unbounded, UnboundedSender};
         let (mut ftx, mut frx) = unbounded::<_>();
         let (ftxsections, frxsections) = unbounded::<_>();
-        let (ftxzooms, frxzooms) = mpsc::channel::<(u32, _)>();
-
-        use futures::*;
-        use futures::future::{self, FutureExt};
+        let (ftxzooms, mut frxzooms) = unbounded::<(u32, _)>();
 
         let do_write = async move || -> std::io::Result<File> {
             let mut current_offset = file.seek(SeekFrom::End(0))?;
@@ -959,8 +956,6 @@ impl BigWig {
 
             let mut state: Option<BedGraphSection> = None;
 
-            use futures::task::SpawnExt;
-
             let mut write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32, ftx: &mut UnboundedSender<_>| {
                 let (remote, handle) = future::lazy(move |_| {
                     BigWig::write_section(items, chromId)
@@ -975,7 +970,7 @@ impl BigWig {
                     BigWig::write_zoom_section(items, chromId)
                 }).remote_handle();
                 pool2.spawn(remote).expect("Couldn't spawn.");
-                ftxzooms.send((i as u32, handle.boxed())).expect("Couldn't send");
+                ftxzooms.unbounded_send((i as u32, handle.boxed())).expect("Couldn't send");
             };
             for current_val in vals_iter {
                 // TODO: test this correctly fails
@@ -1177,8 +1172,7 @@ impl BigWig {
 
         let process_zooms = async move || -> std::io::Result<Vec<TempZoomInfo>> {
             let mut current_offsets: Vec<u64> = (0..num_zooms).map(|_| 0).collect();
-            let iter = frxzooms.into_iter();
-            for (idx, future) in iter {
+            while let Some((idx, future)) = await!(frxzooms.next()) {
                 let section_raw = await!(future);
                 let section = section_raw?;
                 let size = section.data.len() as u64;
@@ -1292,6 +1286,7 @@ impl BigWig {
                         if next_nodes.len() == 0 {
                             next_nodes = current_group;
                         } else {
+                            levels += 1;
                             next_nodes.push(RTreeNode{
                                 start_chrom_idx,
                                 start_base,
@@ -1341,7 +1336,6 @@ impl BigWig {
                 }
             }            
 
-            levels += 1;
             if next_nodes.len() < BLOCK_SIZE as usize {
                 break RTreeNodeList::<RTreeNode> {
                     nodes: next_nodes
@@ -1368,38 +1362,37 @@ impl BigWig {
         let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
         fn calculate_offsets(mut index_offsets: &mut Vec<u64>, trees: &RTreeNodeList<RTreeNode>, level: usize) -> std::io::Result<()> {
-            let mut isleaf: i8 = -1;
-            let mut current_index_size = NODEHEADER_SIZE;
+            if level == 0 {
+                return Ok(())
+            }
+            let isleaf: bool = {
+                if trees.nodes.len() == 0 {
+                    false
+                } else {
+                    match trees.nodes[0].kind {
+                        RTreeNodeType::Leaf { .. } => true,
+                        RTreeNodeType::NonLeaf { .. } => false,
+                    }
+                }
+            };
+            index_offsets[level - 1] += NODEHEADER_SIZE;
             for tree in trees.nodes.iter() {
                 match &tree.kind {
-                    RTreeNodeType::Leaf { .. } => {
-                        if level != 0 {
-                            panic!("Leaf node found at level {}", level)    
-                        }
-                        if isleaf == 0 {
-                            panic!("Mixed node types at level {}", level);
-                        }
-                        isleaf = 1;
-                        current_index_size += LEAFNODE_SIZE;
-                    },
+                    RTreeNodeType::Leaf { .. } => panic!("Only calculating offsets/sizes for indices (level > 0)"),
                     RTreeNodeType::NonLeaf { children, .. } => {
-                        if level == 0 {
-                            panic!("Non leaf node found at level 0")
-                        }
-                        if isleaf == 1 {
-                            panic!("Mixed node types at level {}", level);
-                        }
-                        isleaf = 0;
+                        debug_assert!(level != 0, "Non Leaf node found at level 0");
+                        debug_assert!(!isleaf, "Mixed node types at level {}", level);
+
+                        index_offsets[level - 1] += NON_LEAFNODE_SIZE;
+
                         calculate_offsets(&mut index_offsets, &children, level - 1)?;
-                        current_index_size += NON_LEAFNODE_SIZE;
-                        index_offsets[level - 1] += current_index_size;
                     },
                 }
             }
             Ok(())
         }
 
-        if levels > 1 {
+        if levels > 0 {
             calculate_offsets(&mut index_offsets, &nodes, levels)?;
         }
         //println!("index Offsets: {:?}", index_offsets);
@@ -1407,52 +1400,60 @@ impl BigWig {
 
         const NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * BLOCK_SIZE as u64;
         const LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * BLOCK_SIZE as u64;
-        fn write_tree(mut file: &mut Write, index_offsets: &Vec<u64>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, mut offset: &mut u64) -> std::io::Result<()> {
+        fn write_tree(mut file: &mut BufWriter<&File>, index_offsets: &Vec<u64>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64) -> std::io::Result<u64> {
             assert!(curr_level >= dest_level);
+            let mut total_size = 0;
             if curr_level != dest_level {
+                let mut next_offset_offset = 0;
                 for tree in trees.nodes.iter() {
                     match &tree.kind {
                         RTreeNodeType::Leaf { .. } => panic!("Leaf node found at level {}", curr_level),
                         RTreeNodeType::NonLeaf { children, .. } => {
-                            write_tree(&mut file, &index_offsets, &children, curr_level - 1, dest_level, &mut offset)?;
+                            next_offset_offset += write_tree(&mut file, &index_offsets, &children, curr_level - 1, dest_level, childnode_offset + next_offset_offset)?;
                         },
                     }
                 }
-                return Ok(())
+                total_size += next_offset_offset;
+                return Ok(total_size)
             }
             let isleaf = if let RTreeNodeType::Leaf { .. } = trees.nodes[0].kind {
                 1
             } else {
                 0
             };
+
             //println!("Writing {}. Isleaf: {} At: {}", trees.nodes.len(), isleaf, file.seek(SeekFrom::Current(0))?);
             file.write_u8(isleaf)?;
             file.write_u8(0)?;
             file.write_u16::<NativeEndian>(trees.nodes.len() as u16)?;
-            *offset += index_offsets[curr_level];
+            total_size += 4;
             for (idx, node) in trees.nodes.iter().enumerate() {
                 file.write_u32::<NativeEndian>(node.start_chrom_idx)?;
                 file.write_u32::<NativeEndian>(node.start_base)?;
                 file.write_u32::<NativeEndian>(node.end_chrom_idx)?;
                 file.write_u32::<NativeEndian>(node.end_base)?;
+                total_size += 16;
                 match &node.kind {
                     RTreeNodeType::Leaf { offset, size } => {
                         file.write_u64::<NativeEndian>(*offset)?;
                         file.write_u64::<NativeEndian>(*size)?;
+                        total_size += 16;
                     },
                     RTreeNodeType::NonLeaf { .. } => {
-                        let full_size = if curr_level >= 2 {
+                        debug_assert!(curr_level != 0);
+                        let full_size = if (curr_level - 1) > 0 {
                             NON_LEAFNODE_FULL_BLOCK_SIZE
                         } else {
                             LEAFNODE_FULL_BLOCK_SIZE
                         };
-                        let child_offset: u64 = *offset + idx as u64 * full_size;
+                        let child_offset: u64 = childnode_offset + idx as u64 * full_size;
                         //println!("Child node offset: {}; Added: {}", child_offset, idx as u64 * full_size);
                         file.write_u64::<NativeEndian>(child_offset)?;
+                        total_size += 8;
                     },
                 }
             }
-            Ok(())
+            Ok(total_size)
         }
 
         // TODO remove
@@ -1461,6 +1462,7 @@ impl BigWig {
         let end_of_data = file.seek(SeekFrom::Current(0))?;
         // TODO: handle case with no data
         {
+            //println!("cirTree header (write):\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", BLOCK_SIZE, section_count, nodes.nodes[0].start_chrom_idx, nodes.nodes[0].start_base, nodes.nodes[nodes.nodes.len() - 1].end_chrom_idx, nodes.nodes[nodes.nodes.len() - 1].end_base, end_of_data, ITEMS_PER_SLOT, 0);
             file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
             file.write_u32::<NativeEndian>(BLOCK_SIZE)?;
             file.write_u64::<NativeEndian>(section_count)?;
@@ -1474,13 +1476,15 @@ impl BigWig {
         }
 
         let mut current_offset = file.seek(SeekFrom::Current(0))?;
+        //println!("Levels: {:?}", levels);
         //println!("Start of index: {}", current_offset);
-        for level in (0..levels).rev() {
-            write_tree(&mut file, &index_offsets, &nodes, levels - 1, level, &mut current_offset)?;
+        for level in (0..=levels).rev() {
+            if level > 0 {
+                current_offset += index_offsets[level - 1];
+            }
+            write_tree(&mut file, &index_offsets, &nodes, levels, level, current_offset)?;
             //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
-
-        //assert!(file.seek(SeekFrom::Current(0))? == next_offset);
 
         Ok(())
     }
