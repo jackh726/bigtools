@@ -12,7 +12,9 @@ use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::stream::{self, Stream, StreamExt};
 use futures::task::SpawnExt;
 
-use byteorder::{LittleEndian, BigEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
+use byteordered::{ByteOrdered, Endianness};
+
+use byteorder::{NativeEndian, WriteBytesExt};
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
@@ -30,7 +32,7 @@ const CHROM_TREE_MAGIC: u32 = 0x78CA8C91;
 
 #[derive(Debug)]
 struct BBIHeader {
-    isBigEndian: bool,
+    endianness: Endianness,
 
     version: u16,
     zoom_levels: u16,
@@ -186,23 +188,20 @@ impl BigWig {
                 None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
             }
         };
-        {
-            let file = &mut self.fp;
-            let info = self.info.as_ref().unwrap();
-            file.seek(SeekFrom::Start(info.zoom_headers[0].index_offset))?;
-        }
-        let blocks = self.get_overlapping_blocks(chrom_ix, start, end)?;
+        let uncompress_buf_size = self.info.as_ref().unwrap().header.uncompress_buf_size;
+        let index_offset = self.info.as_ref().unwrap().zoom_headers[0].index_offset;
+        let endianness = self.info.as_ref().unwrap().header.endianness;
+        let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
+        file.seek(SeekFrom::Start(index_offset))?;
+        let blocks = BigWig::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
 
         for block in blocks {
-            let info = self.info.as_ref().unwrap();
-            let bigendian = info.header.isBigEndian;
-            let file = &mut self.fp;
             file.seek(SeekFrom::Start(block.offset))?;
 
             let mut raw_data = vec![0u8; block.size as usize];
             file.read_exact(&mut raw_data)?;
-            let data = if info.header.uncompress_buf_size > 0 {
-                let mut uncompressed_block_data = vec![0u8; info.header.uncompress_buf_size as usize];
+            let data = if uncompress_buf_size > 0 {
+                let mut uncompressed_block_data = vec![0u8; uncompress_buf_size as usize];
                 let mut d = ZlibDecoder::new(&raw_data[..]);
                 d.read(&mut uncompressed_block_data)?;
                 uncompressed_block_data
@@ -211,16 +210,16 @@ impl BigWig {
             };
             let itemcount = data.len() / (4 * 8);
             assert!(data.len() % (4 * 8) == 0);
-            let mut data_mut = &data[..];
+            let mut data_mut = ByteOrdered::runtime(&data[..], endianness);
             for _ in 0..itemcount {
-                read_u32(&mut data_mut, bigendian)?;
-                read_u32(&mut data_mut, bigendian)?;
-                read_u32(&mut data_mut, bigendian)?;
-                read_u32(&mut data_mut, bigendian)?;
-                read_f32(&mut data_mut, bigendian)?;
-                read_f32(&mut data_mut, bigendian)?;
-                read_f32(&mut data_mut, bigendian)?;
-                read_f32(&mut data_mut, bigendian)?;
+                data_mut.read_u32()?;
+                data_mut.read_u32()?;
+                data_mut.read_u32()?;
+                data_mut.read_u32()?;
+                data_mut.read_f32()?;
+                data_mut.read_f32()?;
+                data_mut.read_f32()?;
+                data_mut.read_f32()?;
             }
         }
 
@@ -255,68 +254,65 @@ impl BigWig {
             return Ok(());
         }
 
-        let header = {
-            let mut file = &mut self.fp;
+        let mut file = ByteOrdered::runtime(self.get_buf_reader(), Endianness::Little);
 
-            let magic = read_u32(&mut file, false)?;
-            println!("Magic {:x?}: ", magic);
-            let bigendian = match magic {
-                BIGWIG_MAGIC_HTL => true,
-                BIGWIG_MAGIC_LTH => false,
-                _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, "File not a big wig"))
-            };
-
-            let version = read_u16(&mut file, bigendian)?;
-            let zoom_levels = read_u16(&mut file, bigendian)?;
-            let chromosome_tree_offset = read_u64(&mut file, bigendian)?;
-            let full_data_offset = read_u64(&mut file, bigendian)?;
-            let full_index_offset = read_u64(&mut file, bigendian)?;
-            let field_count = read_u16(&mut file, bigendian)?;
-            let defined_field_count = read_u16(&mut file, bigendian)?;
-            let auto_sql_offset = read_u64(&mut file, bigendian)?;
-            let total_summary_offset = read_u64(&mut file, bigendian)?;
-            let uncompress_buf_size = read_u32(&mut file, bigendian)?;
-            let reserved = read_u64(&mut file, bigendian)?;
-
-            BBIHeader {
-                isBigEndian: bigendian,
-                version,
-                zoom_levels,
-                chromosome_tree_offset,
-                full_data_offset,
-                full_index_offset,
-                field_count,
-                defined_field_count,
-                auto_sql_offset,
-                total_summary_offset,
-                uncompress_buf_size,
-                reserved,
-            }
+        let magic = file.read_u32()?;
+        println!("Magic {:x?}: ", magic);
+        match magic {
+            BIGWIG_MAGIC_HTL => {
+                file = file.into_opposite();
+                true
+            },
+            BIGWIG_MAGIC_LTH => false,
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, "File not a big wig"))
         };
+
+        let version = file.read_u16()?;
+        let zoom_levels = file.read_u16()?;
+        let chromosome_tree_offset = file.read_u64()?;
+        let full_data_offset = file.read_u64()?;
+        let full_index_offset = file.read_u64()?;
+        let field_count = file.read_u16()?;
+        let defined_field_count = file.read_u16()?;
+        let auto_sql_offset = file.read_u64()?;
+        let total_summary_offset = file.read_u64()?;
+        let uncompress_buf_size = file.read_u32()?;
+        let reserved = file.read_u64()?;
+
+        let header = BBIHeader {
+            endianness: file.endianness(),
+            version,
+            zoom_levels,
+            chromosome_tree_offset,
+            full_data_offset,
+            full_index_offset,
+            field_count,
+            defined_field_count,
+            auto_sql_offset,
+            total_summary_offset,
+            uncompress_buf_size,
+            reserved,
+        };
+
         println!("Header: {:?}", header);
 
-        let zoom_headers = self.read_zoom_headers(&header)?;
+        let zoom_headers = BigWig::read_zoom_headers(&mut file, &header)?;
 
-        let chrom_info = {
-            let mut file = &mut self.fp;
+        file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
+        let magic = file.read_u32()?;
+        let _block_size = file.read_u32()?;
+        let key_size = file.read_u32()?;
+        let val_size = file.read_u32()?;
+        let item_count = file.read_u64()?;
+        let _reserved = file.read_u64()?;
+        if magic != CHROM_TREE_MAGIC {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CHROM_TREE_MAGIC does not match."))
+        }
+        //println!("{:x?} {:?} {:?} {:?} {:?} {:?}", magic, _block_size, key_size, val_size, item_count, _reserved);
+        assert_eq!(val_size, 8u32); 
 
-            file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
-            let magic = read_u32(&mut file, header.isBigEndian)?;
-            let _block_size = read_u32(&mut file, header.isBigEndian)?;
-            let key_size = read_u32(&mut file, header.isBigEndian)?;
-            let val_size = read_u32(&mut file, header.isBigEndian)?;
-            let item_count = read_u64(&mut file, header.isBigEndian)?;
-            let _reserved = read_u64(&mut file, header.isBigEndian)?;
-            if magic != CHROM_TREE_MAGIC {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CHROM_TREE_MAGIC does not match."))
-            }
-            //println!("{:x?} {:?} {:?} {:?} {:?} {:?}", magic, _block_size, key_size, val_size, item_count, _reserved);
-            assert_eq!(val_size, 8u32); 
-
-            let mut chroms = Vec::with_capacity(item_count as usize);
-            BigWig::read_chrom_tree_block(&mut file, header.isBigEndian, &mut chroms, key_size)?;
-            chroms
-        };
+        let mut chrom_info = Vec::with_capacity(item_count as usize);
+        BigWig::read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
 
         let info = BigWigInfo {
             header: Box::new(header),
@@ -337,15 +333,13 @@ impl BigWig {
         Err("Must first call read_info")
     }
 
-    fn read_zoom_headers(&mut self, header: &BBIHeader) -> std::io::Result<Vec<ZoomHeader>> {
-        let mut file = &mut self.fp;
-
+    fn read_zoom_headers(file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, header: &BBIHeader) -> std::io::Result<Vec<ZoomHeader>> {
         let mut zoom_headers = vec![];
         for _ in 0..header.zoom_levels {
-            let reduction_level = read_u32(&mut file, header.isBigEndian)?;
-            let _reserved = read_u32(&mut file, header.isBigEndian)?;
-            let data_offset = read_u64(&mut file, header.isBigEndian)?;
-            let index_offset = read_u64(&mut file, header.isBigEndian)?;
+            let reduction_level = file.read_u32()?;
+            let _reserved = file.read_u32()?;
+            let data_offset = file.read_u64()?;
+            let index_offset = file.read_u64()?;
 
             //println!("Zoom header: reductionLevel: {:?} Reserved: {:?} Data offset: {:?} Index offset: {:?}", reduction_level, _reserved, data_offset, index_offset);
 
@@ -359,10 +353,10 @@ impl BigWig {
         Ok(zoom_headers)
     }
 
-    fn read_chrom_tree_block(mut f: &mut File, bigendian: bool, chroms: &mut Vec<ChromInfo>, key_size: u32) -> std::io::Result<()> {
-        let isleaf = read_u8(&mut f, bigendian)?;
-        let _reserved = read_u8(&mut f, bigendian)?;
-        let count = read_u16(&mut f, bigendian)?;
+    fn read_chrom_tree_block(f: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> std::io::Result<()> {
+        let isleaf = f.read_u8()?;
+        let _reserved = f.read_u8()?;
+        let count = f.read_u16()?;
 
         if isleaf == 1 {
             for _ in 0..count {
@@ -372,8 +366,8 @@ impl BigWig {
                     Ok(s) => s.trim_matches(char::from(0)).to_owned(),
                     Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: Invalid utf-8 string.")),
                 };
-                let chrom_id = read_u32(&mut f, bigendian)?;
-                let chrom_size = read_u32(&mut f, bigendian)?;
+                let chrom_id = f.read_u32()?;
+                let chrom_size = f.read_u32()?;
                 chroms.push(ChromInfo {
                     name: key_string,
                     id: chrom_id,
@@ -386,10 +380,10 @@ impl BigWig {
                 let mut key_bytes = vec![0u8; key_size as usize];
                 f.read_exact(&mut key_bytes)?;
                 // TODO: could add specific find here by comparing key string
-                let child_offset = read_u64(&mut f, bigendian)?;
+                let child_offset = f.read_u64()?;
                 current_position = f.seek(SeekFrom::Current(0))?;
                 f.seek(SeekFrom::Start(child_offset))?;
-                BigWig::read_chrom_tree_block(f, bigendian, chroms, key_size)?;
+                BigWig::read_chrom_tree_block(f, chroms, key_size)?;
                 f.seek(SeekFrom::Start(current_position))?;
             }
         }
@@ -417,31 +411,24 @@ impl BigWig {
         return BigWig::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWig::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0;
     }
 
-    fn search_overlapping_blocks(&mut self, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
-        // Don't use get_buf_reader because it will overread
+    fn search_overlapping_blocks(mut file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
         //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
-        let bigendian = {
-            let info = self.info.as_ref().unwrap();
-            (&info.header).isBigEndian
-        };
-        let (isleaf, count): (u8, u16) = {
-            let mut file = &mut self.fp;
-            let isleaf = read_u8(&mut file, bigendian)?;
-            let _reserved = read_u8(&mut file, bigendian)?;
-            let count = read_u16(&mut file, bigendian)?;
-            println!("Index: {:?} {:?} {:?}", isleaf, _reserved, count);
-            (isleaf, count)
-        };
-        if isleaf == 1 {
-            for _ in 0..count {
-                let mut file = &mut self.fp;
-                let start_chrom_ix = read_u32(&mut file, bigendian)?;
-                let start_base = read_u32(&mut file, bigendian)?;
-                let end_chrom_ix = read_u32(&mut file, bigendian)?;
-                let end_base = read_u32(&mut file, bigendian)?;
-                let data_offset = read_u64(&mut file, bigendian)?;
-                let data_size = read_u64(&mut file, bigendian)?;
+        let isleaf: u8 = file.read_u8()?;
+        assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
+        let _reserved = file.read_u8()?;
+        let count: u16 = file.read_u16()?;
+        println!("Index: {:?} {:?} {:?}", isleaf, _reserved, count);
+
+        let mut childblocks: Vec<u64> = vec![];
+        for _ in 0..count {
+            let start_chrom_ix = file.read_u32()?;
+            let start_base = file.read_u32()?;
+            let end_chrom_ix = file.read_u32()?;
+            let end_base = file.read_u32()?;
+            if isleaf == 1 {
+                let data_offset = file.read_u64()?;
+                let data_size = file.read_u64()?;
                 if !BigWig::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
                     continue;
                 }
@@ -450,131 +437,104 @@ impl BigWig {
                     offset: data_offset,
                     size: data_size,
                 })
-            }
-        } else {
-            let mut childblocks: Vec<u64> = vec![];
-            {
-                let mut file = &mut self.fp;
-                for _ in 0..count {
-                    let start_chrom_ix = read_u32(&mut file, bigendian)?;
-                    let start_base = read_u32(&mut file, bigendian)?;
-                    let end_chrom_ix = read_u32(&mut file, bigendian)?;
-                    let end_base = read_u32(&mut file, bigendian)?;
-                    let data_offset = read_u64(&mut file, bigendian)?;
-                    if !BigWig::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
-                        continue;
-                    }
-                    println!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
-                    childblocks.push(data_offset);
+            } else {
+                let data_offset = file.read_u64()?;
+                if !BigWig::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
+                    continue;
                 }
+                println!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
+                childblocks.push(data_offset);
             }
-            for childblock in childblocks {
-                println!("Seeking to {:?}", childblock);
-                (&mut self.fp).seek(SeekFrom::Start(childblock))?;
-                self.search_overlapping_blocks(chrom_ix, start, end, &mut blocks)?;
-            }
+        }
+        for childblock in childblocks {
+            println!("Seeking to {:?}", childblock);
+            file.seek(SeekFrom::Start(childblock))?;
+            BigWig::search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
         }
         return Ok(());
     }
 
-    fn get_overlapping_blocks(&mut self, chrom_ix: u32, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
-        let bigendian = {
-            let info = self.info.as_ref().unwrap();
-            (&info.header).isBigEndian
-        };
-        let blocks = {
-            // Specifically can't use getBufReader here since we require specific positioning next
-            let mut file = &mut self.fp;
-            let magic = read_u32(&mut file, bigendian)?;
-            if magic != CIR_TREE_MAGIC {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CIR_TREE_MAGIC does not match."));
-            }
-            let _blocksize = read_u32(&mut file, bigendian)?;
-            let _item_count = read_u64(&mut file, bigendian)?;
-            let _start_chrom_idx = read_u32(&mut file, bigendian)?;
-            let _start_base = read_u32(&mut file, bigendian)?;
-            let _end_chrom_idx = read_u32(&mut file, bigendian)?;
-            let _end_base = read_u32(&mut file, bigendian)?;
-            let _end_file_offset = read_u64(&mut file, bigendian)?;
-            let _item_per_slot = read_u32(&mut file, bigendian)?;
-            let _reserved = read_u32(&mut file, bigendian)?;
+    fn get_overlapping_blocks(file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chrom_ix: u32, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+        let magic = file.read_u32()?;
+        if magic != CIR_TREE_MAGIC {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CIR_TREE_MAGIC does not match."));
+        }
+        let _blocksize = file.read_u32()?;
+        let _item_count = file.read_u64()?;
+        let _start_chrom_idx = file.read_u32()?;
+        let _start_base = file.read_u32()?;
+        let _end_chrom_idx = file.read_u32()?;
+        let _end_base = file.read_u32()?;
+        let _end_file_offset = file.read_u64()?;
+        let _item_per_slot = file.read_u32()?;
+        let _reserved = file.read_u32()?;
 
-            // TODO: could do some optimization here to check if our interval overlaps with any data
+        // TODO: could do some optimization here to check if our interval overlaps with any data
 
-            println!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
-            let mut blocks: Vec<Block> = vec![];
-            self.search_overlapping_blocks(chrom_ix, start, end, &mut blocks)?;
-            println!("overlapping_blocks: {:?}", blocks);
-            blocks
-        };
+        println!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
+        let mut blocks: Vec<Block> = vec![];
+        BigWig::search_overlapping_blocks(file, chrom_ix, start, end, &mut blocks)?;
+        println!("overlapping_blocks: {:?}", blocks);
         Ok(blocks)
     }
 
     pub fn get_interval(&mut self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Value>> {
         self.ensure_info().or(Err(std::io::Error::new(std::io::ErrorKind::Other, "Must first call read_info")))?;
-        let bigendian = {
-            let info = self.info.as_ref().unwrap();
-            (&info.header).isBigEndian
-        };
-        let blocks = {
-            {
-                let info = self.info.as_ref().unwrap();
-                let file = &mut self.fp;
-                file.seek(SeekFrom::Start((&info.header).full_index_offset))?;
-            }
-            let chrom_ix = {
-                let info = self.info.as_ref().unwrap();
-                let chrom_info = &info.chrom_info;
-                let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
-                println!("Chrom: {:?}", chrom);
-                match chrom {
-                    Some(c) => c.id,
-                    None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
-                }
-            };
-            self.get_overlapping_blocks(chrom_ix, start, end)?
-        };
 
-        let mut values: Vec<Value> = Vec::new();
+        let chrom_ix = {
+            let info = self.info.as_ref().unwrap();
+            let chrom_info = &info.chrom_info;
+            let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
+            println!("Chrom: {:?}", chrom);
+            match chrom {
+                Some(c) => c.id,
+                None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
+            }
+        };
         let uncompress_buf_size: usize = {
             let info = self.info.as_ref().unwrap();
             info.header.uncompress_buf_size as usize
         };
-        let mut file = self.get_buf_reader();
+        let full_index_offset = self.info.as_ref().unwrap().header.full_index_offset;
+        let endianness = self.info.as_ref().unwrap().header.endianness;
+        let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
+        file.seek(SeekFrom::Start(full_index_offset))?;
+        let blocks = BigWig::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
+
+        let mut values: Vec<Value> = Vec::new();
+
         for block in blocks {
             // TODO: Could minimize this by chunking block reads
-            let block_data: Vec<u8> = {
-                file.seek(SeekFrom::Start(block.offset))?;
-                let mut raw_data = vec![0u8; block.size as usize];
-                file.read_exact(&mut raw_data)?;
-                let data = if uncompress_buf_size > 0 {
-                    let mut uncompressed_block_data = vec![0u8; uncompress_buf_size];
-                    let mut d = ZlibDecoder::new(&raw_data[..]);
-                    d.read(&mut uncompressed_block_data)?;
-                    uncompressed_block_data
-                } else {
-                    raw_data
-                };
-                data
+            file.seek(SeekFrom::Start(block.offset))?;
+            let mut raw_data = vec![0u8; block.size as usize];
+            file.read_exact(&mut raw_data)?;
+            let block_data: Vec<u8> = if uncompress_buf_size > 0 {
+                let mut uncompressed_block_data = vec![0u8; uncompress_buf_size];
+                let mut d = ZlibDecoder::new(&raw_data[..]);
+                d.read(&mut uncompressed_block_data)?;
+                uncompressed_block_data
+            } else {
+                raw_data
             };
-            let mut block_data_mut = &block_data[..];
-            let _chrom_id = read_u32(&mut block_data_mut, bigendian)?;
-            let chrom_start = read_u32(&mut block_data_mut, bigendian)?;
-            let _chrom_end = read_u32(&mut block_data_mut, bigendian)?;
-            let item_step = read_u32(&mut block_data_mut, bigendian)?;
-            let item_span = read_u32(&mut block_data_mut, bigendian)?;
-            let section_type = read_u8(&mut block_data_mut, bigendian)?;
-            let _reserved = read_u8(&mut block_data_mut, bigendian)?;
-            let item_count = read_u16(&mut block_data_mut, bigendian)?;
+
+            let mut block_data_mut = ByteOrdered::runtime(&block_data[..], endianness);
+            let _chrom_id = block_data_mut.read_u32()?;
+            let chrom_start = block_data_mut.read_u32()?;
+            let _chrom_end = block_data_mut.read_u32()?;
+            let item_step = block_data_mut.read_u32()?;
+            let item_span = block_data_mut.read_u32()?;
+            let section_type = block_data_mut.read_u8()?;
+            let _reserved = block_data_mut.read_u8()?;
+            let item_count = block_data_mut.read_u16()?;
 
             let mut start = chrom_start;
             for _ in 0..item_count {
                 match section_type {
                     1 => {
                         // bedgraph
-                        let chrom_start = read_u32(&mut block_data_mut, bigendian)?;
-                        let chrom_end = read_u32(&mut block_data_mut, bigendian)?;
-                        let value = read_f32(&mut block_data_mut, bigendian)?;
+                        let chrom_start = block_data_mut.read_u32()?;
+                        let chrom_end = block_data_mut.read_u32()?;
+                        let value = block_data_mut.read_f32()?;
                         values.push(Value {
                             start: std::cmp::max(chrom_start, start),
                             end: std::cmp::min(chrom_end, end),
@@ -583,9 +543,9 @@ impl BigWig {
                     },
                     2 => {
                         // variable step
-                        let chrom_start = read_u32(&mut block_data_mut, bigendian)?;
+                        let chrom_start = block_data_mut.read_u32()?;
                         let chrom_end = chrom_start + item_span;
-                        let value = read_f32(&mut block_data_mut, bigendian)?;
+                        let value = block_data_mut.read_f32()?;
                         values.push(Value {
                             start: std::cmp::max(chrom_start, start),
                             end: std::cmp::min(chrom_end, end),
@@ -597,7 +557,7 @@ impl BigWig {
                         let chrom_start = start;
                         start += item_step;
                         let chrom_end = chrom_start + item_span;
-                        let value = read_f32(&mut block_data_mut, bigendian)?;
+                        let value = block_data_mut.read_f32()?;
                         values.push(Value {
                             start: std::cmp::max(chrom_start, start),
                             end: std::cmp::min(chrom_end, end),
@@ -681,49 +641,42 @@ impl BigWig {
         } else {
             0
         };
-        {
-            let mut file = self.get_buf_writer();
-            file.seek(SeekFrom::Start(0))?;
-            file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
-            file.write_u16::<NativeEndian>(4)?;
-            file.write_u16::<NativeEndian>(num_zooms)?;
-            file.write_u64::<NativeEndian>(chrom_index_start)?;
-            file.write_u64::<NativeEndian>(full_data_offset)?;
-            file.write_u64::<NativeEndian>(index_start)?;
-            file.write_u16::<NativeEndian>(0)?;
-            file.write_u16::<NativeEndian>(0)?;
-            file.write_u64::<NativeEndian>(0)?;
-            file.write_u64::<NativeEndian>(total_summary_offset)?;
-            file.write_u32::<NativeEndian>(uncompress_buf_size)?;
-            file.write_u64::<NativeEndian>(0)?;
 
-            assert!(file.seek(SeekFrom::Current(0))? == 64);
-        }
-        {
-            let mut file = self.get_buf_writer();
-            for zoom_entry in zoom_entries {
-                file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
-                file.write_u32::<NativeEndian>(0)?;
-                file.write_u64::<NativeEndian>(zoom_entry.data_offset)?;
-                file.write_u64::<NativeEndian>(zoom_entry.index_offset)?;
-            }
-        }
-        {
-            let mut file = self.get_buf_writer();
-            file.seek(SeekFrom::Start(total_summary_offset))?;
-            file.write_u64::<NativeEndian>(summary.bases_covered)?;
-            file.write_f64::<NativeEndian>(summary.min_val)?;
-            file.write_f64::<NativeEndian>(summary.max_val)?;
-            file.write_f64::<NativeEndian>(summary.sum)?;
-            file.write_f64::<NativeEndian>(summary.sum_squares)?;
-        }
-        {
-            let mut file = self.get_buf_writer();
-            file.write_u32::<NativeEndian>(total_sections as u32)?;
+        let mut file = self.get_buf_writer();
+        file.seek(SeekFrom::Start(0))?;
+        file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
+        file.write_u16::<NativeEndian>(4)?;
+        file.write_u16::<NativeEndian>(num_zooms)?;
+        file.write_u64::<NativeEndian>(chrom_index_start)?;
+        file.write_u64::<NativeEndian>(full_data_offset)?;
+        file.write_u64::<NativeEndian>(index_start)?;
+        file.write_u16::<NativeEndian>(0)?;
+        file.write_u16::<NativeEndian>(0)?;
+        file.write_u64::<NativeEndian>(0)?;
+        file.write_u64::<NativeEndian>(total_summary_offset)?;
+        file.write_u32::<NativeEndian>(uncompress_buf_size)?;
+        file.write_u64::<NativeEndian>(0)?;
 
-            file.seek(SeekFrom::End(0))?;
-            file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
+        assert!(file.seek(SeekFrom::Current(0))? == 64);
+
+        for zoom_entry in zoom_entries {
+            file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
+            file.write_u32::<NativeEndian>(0)?;
+            file.write_u64::<NativeEndian>(zoom_entry.data_offset)?;
+            file.write_u64::<NativeEndian>(zoom_entry.index_offset)?;
         }
+
+        file.seek(SeekFrom::Start(total_summary_offset))?;
+        file.write_u64::<NativeEndian>(summary.bases_covered)?;
+        file.write_f64::<NativeEndian>(summary.min_val)?;
+        file.write_f64::<NativeEndian>(summary.max_val)?;
+        file.write_f64::<NativeEndian>(summary.sum)?;
+        file.write_f64::<NativeEndian>(summary.sum_squares)?;
+
+
+        file.write_u32::<NativeEndian>(total_sections as u32)?;
+        file.seek(SeekFrom::End(0))?;
+        file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
 
         Ok(())
     }
@@ -1487,47 +1440,5 @@ impl BigWig {
         }
 
         Ok(())
-    }
-}
-
-
-// TODO: switch to byteordered, which allows for runtime endianness
-fn read_u8(f: &mut Read, bigendian: bool) -> std::io::Result<u8> {
-    if bigendian {
-        return f.read_u8()
-    } else {
-        return f.read_u8()
-    }
-}
-
-fn read_u16(f: &mut dyn Read, bigendian: bool) -> std::io::Result<u16> {
-    if bigendian {
-        return f.read_u16::<BigEndian>()
-    } else {
-        return f.read_u16::<LittleEndian>()
-    }
-}
-
-fn read_u32(f: &mut dyn Read, bigendian: bool) -> std::io::Result<u32> {
-    if bigendian {
-        return f.read_u32::<BigEndian>()
-    } else {
-        return f.read_u32::<LittleEndian>()
-    }
-}
-
-fn read_u64(f: &mut dyn Read, bigendian: bool) -> std::io::Result<u64> {
-    if bigendian {
-        return f.read_u64::<BigEndian>()
-    } else {
-        return f.read_u64::<LittleEndian>()
-    }
-}
-
-fn read_f32(f: &mut dyn Read, bigendian: bool) -> std::io::Result<f32> {
-    if bigendian {
-        return f.read_f32::<BigEndian>()
-    } else {
-        return f.read_f32::<LittleEndian>()
     }
 }
