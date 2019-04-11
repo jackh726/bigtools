@@ -8,7 +8,7 @@ use std::fs::File;
 use std::vec::Vec;
 
 use futures::future::{self, FutureExt};
-use futures::channel::mpsc::{unbounded, UnboundedSender};
+use futures::channel::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
 use futures::stream::{self, Stream, StreamExt};
 use futures::task::SpawnExt;
 
@@ -598,7 +598,7 @@ impl BigWig {
         // However, write_vals needs ownership because of threading
         // Alternatively, could not have a self.fp field and instead pass file around explicitly
         let fp = std::mem::replace(&mut self.fp, tempfile::tempfile()?);
-        let (chrom_summary_future, sections_stream, zooms_future, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
+        let (chrom_summary_future, sections_stream, zoom_futures, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
         let rti_future = BigWig::get_rtreeindex(sections_stream);
         let fs = async {
             futures::join!(chrom_summary_future, rti_future)
@@ -606,7 +606,7 @@ impl BigWig {
         let (cs, rti) = futures::executor::block_on(fs);
         let (chrom_ids, summary) = cs;
         let (nodes, levels, total_sections) = rti;
-        let zooms = futures::executor::block_on(zooms_future);
+        let zooms = zoom_futures.into_iter().map(|zooms_future| futures::executor::block_on(zooms_future).expect("Error with zoom.")).collect::<Vec<_>>();
         let file = futures::executor::block_on(file_future);
         std::mem::replace(&mut self.fp, file);
         let data_size = self.current_file_offset()? - pre_data;
@@ -837,7 +837,7 @@ impl BigWig {
     ) -> std::io::Result<(
         impl futures::Future<Output=(IdMap<String>, Summary)>,
         impl futures::stream::Stream<Item=Section>,
-        impl futures::Future<Output=Vec<TempZoomInfo>>,
+        Vec<impl futures::Future<Output=std::io::Result<TempZoomInfo>>>,
         impl futures::Future<Output=File>
         )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         const ITEMS_PER_SLOT: u16 = 1024;
@@ -863,11 +863,9 @@ impl BigWig {
             zooms.push((*size, std::io::BufWriter::new(temp), None));
         }
         let num_zooms = zooms.len();
-        let mut zoom_sections_out: Vec<Vec<Section>> = zoom_sizes.iter().map(|_| vec![]).collect();
 
         let (mut ftx, mut frx) = unbounded::<_>();
         let (ftxsections, frxsections) = unbounded::<_>();
-        let (ftxzooms, mut frxzooms) = unbounded::<(u32, _)>();
 
         let do_write = async move || -> std::io::Result<File> {
             let mut current_offset = file.seek(SeekFrom::End(0))?;
@@ -887,9 +885,34 @@ impl BigWig {
             }
             Ok(file)
         };
-
-
         let sections_future = do_write();
+
+        let process_zooms = async move |mut zoom_channel: UnboundedReceiver<_>, mut zoom: ZoomInfo| -> std::io::Result<TempZoomInfo> {
+            let mut current_offset = 0;
+            let mut sections = vec![];
+            while let Some(future) = await!(zoom_channel.next()) {
+                let section: SectionData = await!(future)?;
+                let size = section.data.len() as u64;
+                let file = &mut zoom.1;
+                file.write_all(&section.data)?;
+                sections.push(Section {
+                    chrom: section.chrom,
+                    start: section.start,
+                    end: section.end,
+                    offset: current_offset,
+                    size,
+                });
+                current_offset += size;
+            }
+            Ok((zoom.0, zoom.1.into_inner().expect("Can't get inner file"), sections))
+        };
+
+        let (zooms_futures, zooms_channels): (Vec<_>, Vec<_>) = zooms.into_iter().map(|zoom| {
+            let (ftx, frx) = unbounded::<_>();
+            let f = process_zooms(frx, zoom);
+            (f, ftx)
+        }).unzip();
+
         let read_file = async move || -> std::io::Result<(IdMap<String>, Summary)> {
             let mut summary: Option<Summary> = None;
             
@@ -923,7 +946,7 @@ impl BigWig {
                     BigWig::write_zoom_section(items, chromId)
                 }).remote_handle();
                 pool2.spawn(remote).expect("Couldn't spawn.");
-                ftxzooms.unbounded_send((i as u32, handle.boxed())).expect("Couldn't send");
+                zooms_channels[i].unbounded_send(handle.boxed()).expect("Couln't send");
             };
             for current_val in vals_iter {
                 // TODO: test this correctly fails
@@ -1123,36 +1146,13 @@ impl BigWig {
 
         let f = read_file();
 
-        let process_zooms = async move || -> std::io::Result<Vec<TempZoomInfo>> {
-            let mut current_offsets: Vec<u64> = (0..num_zooms).map(|_| 0).collect();
-            while let Some((idx, future)) = await!(frxzooms.next()) {
-                let section_raw = await!(future);
-                let section = section_raw?;
-                let size = section.data.len() as u64;
-                let file = &mut zooms[idx as usize].1;
-                let current_offset = &mut current_offsets[idx as usize];
-                file.write_all(&section.data)?;
-                zoom_sections_out[idx as usize].push(Section {
-                    chrom: section.chrom,
-                    start: section.start,
-                    end: section.end,
-                    offset: *current_offset,
-                    size,
-                });
-                *current_offset += size;
-            }
-            let zooms_info = zooms.into_iter().zip(zoom_sections_out.into_iter())
-                .map(|(z, sections)|
-                    (z.0, z.1.into_inner().expect("Can't get inner file"), sections)
-                    ).collect();
-            Ok(zooms_info)
-        };
-
-        let zooms_future = process_zooms();
-
-        let (zooms_remote, zooms_handle) = zooms_future.remote_handle();
+        let (zoom_remotes, zoom_handles): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|f| f.remote_handle()).unzip();
         std::thread::spawn(move || {
-            futures::executor::block_on(zooms_remote);
+            let mut pool = futures::executor::LocalPool::new();
+            for zoom_remote in zoom_remotes {
+                pool.spawner().spawn(zoom_remote).expect("Couldn't spawn future.");
+            }
+            pool.run()
         });
 
         let (sections_remote, sections_handle) = sections_future.remote_handle();
@@ -1160,7 +1160,7 @@ impl BigWig {
             futures::executor::block_on(sections_remote);
         });
 
-        Ok((f.map(|ab| ab.unwrap()), frxsections, zooms_handle.map(|z| z.unwrap()), sections_handle.map(|f| f.unwrap())))
+        Ok((f.map(|ab| ab.unwrap()), frxsections, zoom_handles, sections_handle.map(|f| f.unwrap())))
     }
 
     fn write_zooms(&mut self, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {
