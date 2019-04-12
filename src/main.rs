@@ -4,10 +4,12 @@ use std::io::{BufReader, BufRead};
 use std::fs::File;
 
 mod bigwig;
-use bigwig::BigWig;
+use bigwig::BigWigRead;
+use bigwig::BigWigWrite;
 use bigwig::ValueWithChrom;
 
 mod idmap;
+mod tell;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
@@ -36,7 +38,7 @@ fn get_chrom_map(file: File) -> std::collections::HashMap<String, u32> {
 }
 
 fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
-    let mut outb = BigWig::create_file(out)?;
+    let mut outb = BigWigWrite::create_file(out)?;
     println!("Path: {:?}", outb.path);
 
     let chrom_map = get_chrom_map(File::open(chroms)?);
@@ -73,7 +75,7 @@ fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
 fn read_test(bw: String) -> std::io::Result<()> {
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/ENCFF609KNT.bigWig"))?;
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
-    let mut b = BigWig::from_file(bw)?;
+    let mut b = BigWigRead::from_file(bw)?;
     println!("Read path: {:?}", b.path);
 
     b.read_info()?;

@@ -21,6 +21,7 @@ use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 
 use crate::idmap::IdMap;
+use crate::tell::Tell;
 
 const BIGWIG_MAGIC_LTH: u32 = 0x888FFC26;
 const BIGWIG_MAGIC_HTL: u32 = 0x26FC8F88;
@@ -166,13 +167,29 @@ struct ZoomRecord {
     sum_squares: f32,
 }
 
-pub struct BigWig {
+pub struct BigWigRead {
     pub path: String,
-    fp: File,
+    pub fp: File,
     info: Option<Box<BigWigInfo>>,
 }
 
-impl BigWig {
+impl BigWigRead {
+    pub fn from_file(path: String) -> std::io::Result<Self> {
+        let fp = File::open(path.clone())?;
+        println!("{:?}", fp);
+        return Ok(BigWigRead {
+            path,
+            fp,
+            info: Option::None,
+        });
+    }
+
+    fn get_buf_reader(&mut self) -> std::io::BufReader<&File> {
+        let file = &mut self.fp;
+        std::io::BufReader::new(file)
+    }
+
+
     pub fn test_read_zoom(&mut self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
         if self.info.as_ref().unwrap().zoom_headers.len() == 0 {
             println!("No zooms. Skipping test read.");
@@ -193,7 +210,7 @@ impl BigWig {
         let endianness = self.info.as_ref().unwrap().header.endianness;
         let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
         file.seek(SeekFrom::Start(index_offset))?;
-        let blocks = BigWig::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
+        let blocks = BigWigRead::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
 
         for block in blocks {
             file.seek(SeekFrom::Start(block.offset))?;
@@ -224,29 +241,6 @@ impl BigWig {
         }
 
         Ok(())
-    }
-    pub fn from_file(path: String) -> std::io::Result<Self> {
-        let fp = File::open(path.clone())?;
-        println!("{:?}", fp);
-        return Ok(
-            BigWig {
-                path,
-                fp: fp,
-                info: Option::None,
-            }
-        )
-    }
-
-    pub fn create_file(path: String) -> std::io::Result<Self> {
-        let fp = File::create(path.clone())?;
-        println!("{:?}", fp);
-        return Ok(
-            BigWig {
-                path,
-                fp: fp,
-                info: Option::None,
-            }
-        )
     }
 
     pub fn read_info(&mut self) -> std::io::Result<()> {
@@ -296,7 +290,7 @@ impl BigWig {
 
         println!("Header: {:?}", header);
 
-        let zoom_headers = BigWig::read_zoom_headers(&mut file, &header)?;
+        let zoom_headers = BigWigRead::read_zoom_headers(&mut file, &header)?;
 
         file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
         let magic = file.read_u32()?;
@@ -312,7 +306,7 @@ impl BigWig {
         assert_eq!(val_size, 8u32); 
 
         let mut chrom_info = Vec::with_capacity(item_count as usize);
-        BigWig::read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
+        BigWigRead::read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
 
         let info = BigWigInfo {
             header: Box::new(header),
@@ -383,7 +377,7 @@ impl BigWig {
                 let child_offset = f.read_u64()?;
                 current_position = f.seek(SeekFrom::Current(0))?;
                 f.seek(SeekFrom::Start(child_offset))?;
-                BigWig::read_chrom_tree_block(f, chroms, key_size)?;
+                BigWigRead::read_chrom_tree_block(f, chroms, key_size)?;
                 f.seek(SeekFrom::Start(current_position))?;
             }
         }
@@ -408,7 +402,7 @@ impl BigWig {
     }
 
     fn overlaps(chromq: u32, chromq_start: u32, chromq_end: u32, chromb1: u32, chromb1_start: u32, chromb2: u32, chromb2_end: u32) -> bool {
-        return BigWig::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWig::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0;
+        return BigWigRead::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWigRead::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0;
     }
 
     fn search_overlapping_blocks(mut file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
@@ -429,7 +423,7 @@ impl BigWig {
             if isleaf == 1 {
                 let data_offset = file.read_u64()?;
                 let data_size = file.read_u64()?;
-                if !BigWig::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
+                if !BigWigRead::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
                     continue;
                 }
                 println!("Overlaps (leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
@@ -439,7 +433,7 @@ impl BigWig {
                 })
             } else {
                 let data_offset = file.read_u64()?;
-                if !BigWig::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
+                if !BigWigRead::overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
                     continue;
                 }
                 println!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
@@ -449,7 +443,7 @@ impl BigWig {
         for childblock in childblocks {
             println!("Seeking to {:?}", childblock);
             file.seek(SeekFrom::Start(childblock))?;
-            BigWig::search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
+            BigWigRead::search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
         }
         return Ok(());
     }
@@ -473,7 +467,7 @@ impl BigWig {
 
         println!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
         let mut blocks: Vec<Block> = vec![];
-        BigWig::search_overlapping_blocks(file, chrom_ix, start, end, &mut blocks)?;
+        BigWigRead::search_overlapping_blocks(file, chrom_ix, start, end, &mut blocks)?;
         println!("overlapping_blocks: {:?}", blocks);
         Ok(blocks)
     }
@@ -499,7 +493,7 @@ impl BigWig {
         let endianness = self.info.as_ref().unwrap().header.endianness;
         let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
         file.seek(SeekFrom::Start(full_index_offset))?;
-        let blocks = BigWig::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
+        let blocks = BigWigRead::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
 
         let mut values: Vec<Value> = Vec::new();
 
@@ -570,19 +564,33 @@ impl BigWig {
         }
         Ok(values)
     }
+}
+
+
+pub struct BigWigWrite {
+    pub path: String,
+}
+
+impl BigWigWrite {
+    pub fn create_file(path: String) -> std::io::Result<Self> {
+        println!("{:?}", path);
+        return Ok(BigWigWrite {
+            path,
+        })
+    }
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
     pub fn write<V>(&mut self, chrom_sizes: std::collections::HashMap<String, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
-        self.write_blank_headers()?;
+        let fp = File::create(self.path.clone())?;
+        let mut file = BufWriter::new(fp);
 
-        let total_summary_offset = self.current_file_offset()?;
+        BigWigWrite::write_blank_headers(&mut file)?;
 
-        self.write_blank_summary()?;
+        let total_summary_offset = file.tell()?;
+        file.write_all(&vec![0; 40])?;
 
-        let chrom_ids = IdMap::new();
-
-        let full_data_offset = self.current_file_offset()?;
+        let full_data_offset = file.tell()?;
 
         {
             // Total items
@@ -590,16 +598,12 @@ impl BigWig {
             // Even then simply doing "(vals.len() as u32 + ITEMS_PER_SLOT - 1) / ITEMS_PER_SLOT"
             // underestimates because sections are split by chrom too, not just size.
             // Skip for now, and come back when we write real header + summary.
-            (&mut self.fp).write_u32::<NativeEndian>(0)?;
+            file.write_u32::<NativeEndian>(0)?;
         }
 
-        let pre_data = self.current_file_offset()?;
-        // Ideally, should instead be passing a mutable borrow to self.fp
-        // However, write_vals needs ownership because of threading
-        // Alternatively, could not have a self.fp field and instead pass file around explicitly
-        let fp = std::mem::replace(&mut self.fp, tempfile::tempfile()?);
-        let (chrom_summary_future, sections_stream, zoom_futures, file_future) = self.write_vals(&mut vals, chrom_ids, fp)?;
-        let rti_future = BigWig::get_rtreeindex(sections_stream);
+        let pre_data = file.tell()?;
+        let (chrom_summary_future, sections_stream, zoom_futures, file_future) = self.write_vals(&mut vals, IdMap::new(), file)?;
+        let rti_future = BigWigWrite::get_rtreeindex(sections_stream);
         let fs = async {
             futures::join!(chrom_summary_future, rti_future)
         };
@@ -607,9 +611,8 @@ impl BigWig {
         let (chrom_ids, summary) = cs;
         let (nodes, levels, total_sections) = rti;
         let zooms = zoom_futures.into_iter().map(|zooms_future| futures::executor::block_on(zooms_future).expect("Error with zoom.")).collect::<Vec<_>>();
-        let file = futures::executor::block_on(file_future);
-        std::mem::replace(&mut self.fp, file);
-        let data_size = self.current_file_offset()? - pre_data;
+        let mut file = futures::executor::block_on(file_future);
+        let data_size = file.tell()? - pre_data;
         println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", total_sections);
         println!("Summary: {:?}", summary);
@@ -619,17 +622,17 @@ impl BigWig {
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
         // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
         //  but requires us to know all the data ahead of time (when writing)
-        let chrom_index_start = self.current_file_offset()?;
-        self.write_chrom_tree(chrom_sizes, &chrom_ids.get_map())?;
+        let chrom_index_start = file.tell()?;
+        BigWigWrite::write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
 
-        let index_start = self.current_file_offset()?;
-        self.write_rtreeindex(nodes, levels, total_sections)?;
+        let index_start = file.tell()?;
+        BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections)?;
 
         const DO_COMPRESS: bool = true; // TODO: param
         const ITEMS_PER_SLOT: u32 = 1024; // TODO: param
 
         let mut zoom_entries: Vec<ZoomHeader> = vec![];
-        self.write_zooms(zooms, &mut zoom_entries)?;
+        BigWigWrite::write_zooms(&mut file, zooms, &mut zoom_entries)?;
 
         //println!("Zoom entries: {:?}", zoom_entries);
         let num_zooms = zoom_entries.len() as u16;
@@ -642,7 +645,6 @@ impl BigWig {
             0
         };
 
-        let mut file = self.get_buf_writer();
         file.seek(SeekFrom::Start(0))?;
         file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?;
         file.write_u16::<NativeEndian>(4)?;
@@ -681,46 +683,21 @@ impl BigWig {
         Ok(())
     }
 
-    fn current_file_offset(&mut self) -> std::io::Result<u64> {
-        let file = &mut self.fp;
-        file.seek(SeekFrom::Current(0))
-    }
-
-    fn get_buf_reader(&mut self) -> std::io::BufReader<&File> {
-        let file = &mut self.fp;
-        std::io::BufReader::new(file)
-    }
-
-    fn get_buf_writer(&mut self) -> std::io::BufWriter<&File> {
-        let file = &mut self.fp;
-        //std::io::BufWriter::new(file)
-        std::io::BufWriter::with_capacity(1024 * 1024 * 5, file)
-    }
-
-    fn write_blank_headers(&mut self) -> std::io::Result<()> {
-        let mut file = self.get_buf_writer();
+    fn write_blank_headers(file: &mut BufWriter<File>) -> std::io::Result<()> {
         file.seek(SeekFrom::Start(0))?;
         // Common header
         file.write_all(&vec![0; 64])?;
         // Zoom levels
-        file.write_all(&vec![0; BigWig::MAX_ZOOM_LEVELS * 24])?;
+        file.write_all(&vec![0; BigWigWrite::MAX_ZOOM_LEVELS * 24])?;
 
         Ok(())
     }
 
-    fn write_blank_summary(&mut self) -> std::io::Result<()> {
-        let mut file = self.get_buf_writer();
-        file.write_all(&vec![0; 40])?;
-
-        Ok(())
-    }
-
-    fn write_chrom_tree(&mut self, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
+    fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
         let mut chroms: Vec<&String> = chrom_ids.keys().collect();
         chroms.sort();
         println!("Used chroms {:?}", chroms);
 
-        let mut file = self.get_buf_writer();
         file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
         let item_count = chroms.len() as u64;
         // TODO: for now, always just use the length of chroms (if less than 256). This means we don't have to implement writing non-leaf nodes for now...
@@ -833,12 +810,12 @@ impl BigWig {
         &mut self,
         vals_iter: V,
         mut chrom_ids: IdMap<String>,
-        mut file: File
+        mut file: BufWriter<File>
     ) -> std::io::Result<(
         impl futures::Future<Output=(IdMap<String>, Summary)>,
         impl futures::stream::Stream<Item=Section>,
         Vec<impl futures::Future<Output=std::io::Result<TempZoomInfo>>>,
-        impl futures::Future<Output=File>
+        impl futures::Future<Output=std::io::BufWriter<File>>
         )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         const ITEMS_PER_SLOT: u16 = 1024;
 
@@ -867,7 +844,7 @@ impl BigWig {
         let (mut ftx, mut frx) = unbounded::<_>();
         let (ftxsections, frxsections) = unbounded::<_>();
 
-        let do_write = async move || -> std::io::Result<File> {
+        let do_write = async move || -> std::io::Result<BufWriter<File>> {
             let mut current_offset = file.seek(SeekFrom::End(0))?;
             while let Some(section_raw) = await!(frx.next()) {
                 let section: SectionData = await!(section_raw)?;
@@ -933,13 +910,13 @@ impl BigWig {
             let mut state: Option<BedGraphSection> = None;
 
             let mut write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32, ftx: &mut UnboundedSender<_>| {
-                let handle = pool1.spawn_with_handle(BigWig::write_section(items, chromId)).expect("Couldn't spawn.");
+                let handle = pool1.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
                 ftx.unbounded_send(handle.boxed()).expect("Couldn't send");
             };
 
             let mut write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
                 let chromId = items[0].chrom;
-                let handle = pool2.spawn_with_handle(BigWig::write_zoom_section(items, chromId)).expect("Couldn't spawn.");
+                let handle = pool2.spawn_with_handle(BigWigWrite::write_zoom_section(items, chromId)).expect("Couldn't spawn.");
                 zooms_channels[i].unbounded_send(handle.boxed()).expect("Couln't send");
             };
             for current_val in vals_iter {
@@ -1158,18 +1135,14 @@ impl BigWig {
         Ok((f.map(|ab| ab.unwrap()), frxsections, zoom_handles, sections_handle.map(|f| f.unwrap())))
     }
 
-    fn write_zooms(&mut self, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {
+    fn write_zooms(mut file: &mut BufWriter<File>, zooms: Vec<TempZoomInfo>, zoom_entries: &mut Vec<ZoomHeader>) -> std::io::Result<()> {
         // TODO: param
         const DO_COMPRESS: bool = true;
         const ITEMS_PER_SLOT: u32 = 1024;
 
         for mut zoom in zooms {
-            let zoom_data_offset = {
-                let mut file = self.get_buf_writer();
-                file.seek(SeekFrom::Current(0))?
-            };
+            let zoom_data_offset = file.tell()?;
             let (sections_stream, zoom_index_offset) = {
-                let mut file = self.get_buf_writer();
                 zoom.1.seek(SeekFrom::Start(0))?;
                 let sections_iter = zoom.2.iter().map(|section| {
                     let chrom = section.chrom;
@@ -1191,8 +1164,8 @@ impl BigWig {
 
                 (sections_stream, zoom_index_offset)
             };
-            let (nodes, levels, total_sections) = futures::executor::block_on(BigWig::get_rtreeindex(sections_stream));
-            self.write_rtreeindex(nodes, levels, total_sections)?;
+            let (nodes, levels, total_sections) = futures::executor::block_on(BigWigWrite::get_rtreeindex(sections_stream));
+            BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections)?;
 
             zoom_entries.push(ZoomHeader {
                 reduction_level: zoom.0,
@@ -1298,14 +1271,12 @@ impl BigWig {
         (nodes, levels, total_sections)
     }
 
-    fn write_rtreeindex(&mut self, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64) -> std::io::Result<()> {
+    fn write_rtreeindex(file: &mut BufWriter<File>, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64) -> std::io::Result<()> {
         const BLOCK_SIZE: u32 = 256;
 
         const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
         const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
         const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
-
-        let mut file = self.get_buf_writer();
 
         let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
@@ -1348,7 +1319,7 @@ impl BigWig {
 
         const NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * BLOCK_SIZE as u64;
         const LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * BLOCK_SIZE as u64;
-        fn write_tree(mut file: &mut BufWriter<&File>, index_offsets: &Vec<u64>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64) -> std::io::Result<u64> {
+        fn write_tree(mut file: &mut BufWriter<File>, index_offsets: &Vec<u64>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64) -> std::io::Result<u64> {
             assert!(curr_level >= dest_level);
             let mut total_size = 0;
             if curr_level != dest_level {
@@ -1430,7 +1401,7 @@ impl BigWig {
             if level > 0 {
                 current_offset += index_offsets[level - 1];
             }
-            write_tree(&mut file, &index_offsets, &nodes, levels, level, current_offset)?;
+            write_tree(file, &index_offsets, &nodes, levels, level, current_offset)?;
             //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
 
