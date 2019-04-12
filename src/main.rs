@@ -38,7 +38,7 @@ fn get_chrom_map(file: File) -> std::collections::HashMap<String, u32> {
 }
 
 fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
-    let mut outb = BigWigWrite::create_file(out)?;
+    let outb = BigWigWrite::create_file(out)?;
     println!("Path: {:?}", outb.path);
 
     let chrom_map = get_chrom_map(File::open(chroms)?);
@@ -75,14 +75,12 @@ fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
 fn read_test(bw: String) -> std::io::Result<()> {
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/ENCFF609KNT.bigWig"))?;
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
-    let mut b = BigWigRead::from_file(bw)?;
+    let b = BigWigRead::from_file_and_attach(bw)?;
     println!("Read path: {:?}", b.path);
 
-    b.read_info()?;
-
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
-    //let interval = b.get_interval("chr17", 10000000u32, 10010000u32)?;
-    //println!("Interval result: {:?}", interval.len());
+    let interval = b.get_interval("chr17", 10000000u32, 10010000u32)?;
+    println!("Interval result: {:?}", interval.len());
 
     b.test_read_zoom("chr17", 10000000u32, 10010000u32)?;
     Ok(())

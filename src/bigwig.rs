@@ -70,9 +70,9 @@ pub struct ChromSize {
 
 #[derive(Debug)]
 pub struct BigWigInfo {
-    header: Box<BBIHeader>,
-    zoom_headers: Box<Vec<ZoomHeader>>,
-    chrom_info: Box<Vec<ChromInfo>>,
+    header: BBIHeader,
+    zoom_headers: Vec<ZoomHeader>,
+    chrom_info: Vec<ChromInfo>,
 }
 
 #[derive(Debug)]
@@ -169,35 +169,31 @@ struct ZoomRecord {
 
 pub struct BigWigRead {
     pub path: String,
-    pub fp: File,
-    info: Option<Box<BigWigInfo>>,
+    info: BigWigInfo,
 }
 
 impl BigWigRead {
-    pub fn from_file(path: String) -> std::io::Result<Self> {
+    pub fn from_file_and_attach(path: String) -> std::io::Result<Self> {
+        println!("{:?}", path);
         let fp = File::open(path.clone())?;
-        println!("{:?}", fp);
+        let file = std::io::BufReader::new(fp);
+        let info = BigWigRead::read_info(file)?;
         return Ok(BigWigRead {
             path,
-            fp,
-            info: Option::None,
+            info,
         });
     }
 
-    fn get_buf_reader(&mut self) -> std::io::BufReader<&File> {
-        let file = &mut self.fp;
-        std::io::BufReader::new(file)
-    }
+    pub fn test_read_zoom(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
+        let fp = File::open(self.path.clone())?;
+        let file = std::io::BufReader::new(fp);
 
-
-    pub fn test_read_zoom(&mut self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
-        if self.info.as_ref().unwrap().zoom_headers.len() == 0 {
+        if self.info.zoom_headers.len() == 0 {
             println!("No zooms. Skipping test read.");
             return Ok(())
         }
         let chrom_ix = {
-            let info = self.info.as_ref().unwrap();
-            let chrom_info = &info.chrom_info;
+            let chrom_info = &self.info.chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
             println!("Chrom: {:?}", chrom);
             match chrom {
@@ -205,10 +201,10 @@ impl BigWigRead {
                 None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
             }
         };
-        let uncompress_buf_size = self.info.as_ref().unwrap().header.uncompress_buf_size;
-        let index_offset = self.info.as_ref().unwrap().zoom_headers[0].index_offset;
-        let endianness = self.info.as_ref().unwrap().header.endianness;
-        let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
+        let uncompress_buf_size = self.info.header.uncompress_buf_size;
+        let index_offset = self.info.zoom_headers[0].index_offset;
+        let endianness = self.info.header.endianness;
+        let mut file = ByteOrdered::runtime(file, endianness);
         file.seek(SeekFrom::Start(index_offset))?;
         let blocks = BigWigRead::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
 
@@ -243,12 +239,8 @@ impl BigWigRead {
         Ok(())
     }
 
-    pub fn read_info(&mut self) -> std::io::Result<()> {
-        if let Some(_) = &self.info {
-            return Ok(());
-        }
-
-        let mut file = ByteOrdered::runtime(self.get_buf_reader(), Endianness::Little);
+    fn read_info(file: std::io::BufReader<File>) -> std::io::Result<BigWigInfo> {
+        let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
         let magic = file.read_u32()?;
         println!("Magic {:x?}: ", magic);
@@ -292,6 +284,7 @@ impl BigWigRead {
 
         let zoom_headers = BigWigRead::read_zoom_headers(&mut file, &header)?;
 
+        // TODO: could instead store this as an Option and only read when needed
         file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
         let magic = file.read_u32()?;
         let _block_size = file.read_u32()?;
@@ -309,25 +302,16 @@ impl BigWigRead {
         BigWigRead::read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
 
         let info = BigWigInfo {
-            header: Box::new(header),
-            zoom_headers: Box::new(zoom_headers),
-            chrom_info: Box::new(chrom_info),
+            header,
+            zoom_headers,
+            chrom_info,
         };
 
-        self.info = Some(Box::new(info));
-
         println!("Info read successfully.");
-        Ok(())
+        Ok(info)
     }
 
-    fn ensure_info(&self) -> Result<(), &'static str> {
-        if let Some(_) = &self.info {
-            return Ok(());
-        }
-        Err("Must first call read_info")
-    }
-
-    fn read_zoom_headers(file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, header: &BBIHeader) -> std::io::Result<Vec<ZoomHeader>> {
+    fn read_zoom_headers(file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, header: &BBIHeader) -> std::io::Result<Vec<ZoomHeader>> {
         let mut zoom_headers = vec![];
         for _ in 0..header.zoom_levels {
             let reduction_level = file.read_u32()?;
@@ -347,7 +331,7 @@ impl BigWigRead {
         Ok(zoom_headers)
     }
 
-    fn read_chrom_tree_block(f: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> std::io::Result<()> {
+    fn read_chrom_tree_block(f: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> std::io::Result<()> {
         let isleaf = f.read_u8()?;
         let _reserved = f.read_u8()?;
         let count = f.read_u16()?;
@@ -405,7 +389,7 @@ impl BigWigRead {
         return BigWigRead::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWigRead::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0;
     }
 
-    fn search_overlapping_blocks(mut file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
+    fn search_overlapping_blocks(mut file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
         //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
         let isleaf: u8 = file.read_u8()?;
@@ -448,7 +432,7 @@ impl BigWigRead {
         return Ok(());
     }
 
-    fn get_overlapping_blocks(file: &mut ByteOrdered<std::io::BufReader<&File>, Endianness>, chrom_ix: u32, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+    fn get_overlapping_blocks(file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chrom_ix: u32, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CIR_TREE_MAGIC does not match."));
@@ -472,12 +456,13 @@ impl BigWigRead {
         Ok(blocks)
     }
 
-    pub fn get_interval(&mut self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Value>> {
-        self.ensure_info().or(Err(std::io::Error::new(std::io::ErrorKind::Other, "Must first call read_info")))?;
+    pub fn get_interval(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Value>> {
+        let endianness = self.info.header.endianness;
+        let fp = File::open(self.path.clone())?;
+        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
 
         let chrom_ix = {
-            let info = self.info.as_ref().unwrap();
-            let chrom_info = &info.chrom_info;
+            let chrom_info = &self.info.chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
             println!("Chrom: {:?}", chrom);
             match chrom {
@@ -485,13 +470,9 @@ impl BigWigRead {
                 None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
             }
         };
-        let uncompress_buf_size: usize = {
-            let info = self.info.as_ref().unwrap();
-            info.header.uncompress_buf_size as usize
-        };
-        let full_index_offset = self.info.as_ref().unwrap().header.full_index_offset;
-        let endianness = self.info.as_ref().unwrap().header.endianness;
-        let mut file = ByteOrdered::runtime(self.get_buf_reader(), endianness);
+        let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
+        let full_index_offset = self.info.header.full_index_offset;
+        let endianness = self.info.header.endianness;
         file.seek(SeekFrom::Start(full_index_offset))?;
         let blocks = BigWigRead::get_overlapping_blocks(&mut file, chrom_ix, start, end)?;
 
@@ -581,7 +562,7 @@ impl BigWigWrite {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write<V>(&mut self, chrom_sizes: std::collections::HashMap<String, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+    pub fn write<V>(&self, chrom_sizes: std::collections::HashMap<String, u32>, mut vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -807,7 +788,7 @@ impl BigWigWrite {
     }
 
     fn write_vals<'a, V>(
-        &mut self,
+        &self,
         vals_iter: V,
         mut chrom_ids: IdMap<String>,
         mut file: BufWriter<File>
