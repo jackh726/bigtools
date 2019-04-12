@@ -7,7 +7,7 @@ use std::io::prelude::*;
 use std::fs::File;
 use std::vec::Vec;
 
-use futures::future::{self, FutureExt};
+use futures::future::FutureExt;
 use futures::channel::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
 use futures::stream::{self, Stream, StreamExt};
 use futures::task::SpawnExt;
@@ -756,7 +756,7 @@ impl BigWig {
         Ok(())
     }
 
-    fn write_section(items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
+    async fn write_section(items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -794,7 +794,7 @@ impl BigWig {
         })
     }
 
-    fn write_zoom_section(items_in_section: Vec<ZoomRecord>, chromId: u32) -> std::io::Result<SectionData> {
+    async fn write_zoom_section(items_in_section: Vec<ZoomRecord>, chromId: u32) -> std::io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -933,23 +933,18 @@ impl BigWig {
             let mut state: Option<BedGraphSection> = None;
 
             let mut write_section_items = |items: Vec<BedGraphSectionItem>, chromId: u32, ftx: &mut UnboundedSender<_>| {
-                let (remote, handle) = future::lazy(move |_| {
-                    BigWig::write_section(items, chromId)
-                }).remote_handle();
-                pool1.spawn(remote).expect("Couldn't spawn.");
+                let handle = pool1.spawn_with_handle(BigWig::write_section(items, chromId)).expect("Couldn't spawn.");
                 ftx.unbounded_send(handle.boxed()).expect("Couldn't send");
             };
 
             let mut write_zoom_items = |i: usize, items: Vec<ZoomRecord>| {
                 let chromId = items[0].chrom;
-                let (remote, handle) = future::lazy(move |_| {
-                    BigWig::write_zoom_section(items, chromId)
-                }).remote_handle();
-                pool2.spawn(remote).expect("Couldn't spawn.");
+                let handle = pool2.spawn_with_handle(BigWig::write_zoom_section(items, chromId)).expect("Couldn't spawn.");
                 zooms_channels[i].unbounded_send(handle.boxed()).expect("Couln't send");
             };
             for current_val in vals_iter {
                 // TODO: test this correctly fails
+                // TODO: change these to not panic
                 if let Some(state) = &state {
                     assert!(state.chrom <= current_val.chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
                     if state.chrom == current_val.chrom {
@@ -1064,7 +1059,7 @@ impl BigWig {
                                 // Set where we would start for next time
                                 add_start = std::cmp::max(add_end, current_val.start);
                                 // Write section if full
-                                assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
+                                debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
                                 if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
                                     let items = std::mem::replace(&mut zoom_item.records, vec![]);
                                     write_zoom_items(i, items);
