@@ -200,6 +200,7 @@ impl BigWigRead {
         self.info.chrom_info.iter().map(|c| ChromAndSize { name: c.name.clone(), length: c.length }).collect::<Vec<_>>()
     }
 
+    #[allow(clippy::all)]
     pub fn test_read_zoom(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
         let fp = File::open(self.path.clone())?;
         let file = std::io::BufReader::new(fp);
@@ -209,15 +210,18 @@ impl BigWigRead {
             return Ok(())
         }
 
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-
         let uncompress_buf_size = self.info.header.uncompress_buf_size;
         let index_offset = self.info.zoom_headers[0].index_offset;
         let endianness = self.info.header.endianness;
         let mut file = ByteOrdered::runtime(file, endianness);
         file.seek(SeekFrom::Start(index_offset))?;
 
-        for block in blocks {
+        let blocks = self.search_cir_tree(&mut file, chrom_name, start, end)?;
+
+        println!("Number of zoom blocks: {:?}", blocks.len());
+
+        'blocks: for block in blocks {
+            println!("Block: {:?}", block);
             file.seek(SeekFrom::Start(block.offset))?;
 
             let mut raw_data = vec![0u8; block.size as usize];
@@ -234,14 +238,16 @@ impl BigWigRead {
             assert!(data.len() % (4 * 8) == 0);
             let mut data_mut = ByteOrdered::runtime(&data[..], endianness);
             for _ in 0..itemcount {
-                data_mut.read_u32()?;
-                data_mut.read_u32()?;
-                data_mut.read_u32()?;
-                data_mut.read_u32()?;
-                data_mut.read_f32()?;
-                data_mut.read_f32()?;
-                data_mut.read_f32()?;
-                data_mut.read_f32()?;
+                let _chrom_id = data_mut.read_u32()?;
+                let _chrom_start = data_mut.read_u32()?;
+                let _chrom_end = data_mut.read_u32()?;
+                let _valid_count = data_mut.read_u32()?;
+                let _min_val = data_mut.read_f32()?;
+                let _max_val = data_mut.read_f32()?;
+                let _sum_data = data_mut.read_f32()?;
+                let _sum_squares = data_mut.read_f32()?;
+                println!("First zoom data: {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", _chrom_id, _chrom_start, _chrom_end, _valid_count, _min_val, _max_val, _sum_data, _sum_squares);
+                break 'blocks;
             }
         }
 
@@ -439,11 +445,7 @@ impl BigWigRead {
         Ok(())
     }
 
-    pub(crate) fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
-        let endianness = self.info.header.endianness;
-        let fp = File::open(self.path.clone())?;
-        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-
+    fn search_cir_tree(&self, mut file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
         let chrom_ix = {
             let chrom_info = &self.info.chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
@@ -453,8 +455,6 @@ impl BigWigRead {
                 None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
             }
         };
-        let full_index_offset = self.info.header.full_index_offset;
-        file.seek(SeekFrom::Start(full_index_offset))?;
 
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
@@ -477,6 +477,17 @@ impl BigWigRead {
         BigWigRead::search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
         //println!("overlapping_blocks: {:?}", blocks);
         Ok(blocks)
+    }
+
+    pub(crate) fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+        let endianness = self.info.header.endianness;
+        let fp = File::open(self.path.clone())?;
+        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
+
+        let full_index_offset = self.info.header.full_index_offset;
+        file.seek(SeekFrom::Start(full_index_offset))?;
+
+        self.search_cir_tree(&mut file, chrom_name, start, end)
     }
 
     pub(crate) fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: Block) -> std::io::Result<impl Iterator<Item =Value>> {
@@ -903,7 +914,6 @@ impl BigWigWrite {
                 records: Vec<ZoomRecord>,
             }
             struct BedGraphSection {
-                chrom: String,
                 items: Vec<BedGraphSectionItem>,
                 zoom_items: Vec<ZoomItem>
             }
@@ -924,57 +934,14 @@ impl BigWigWrite {
                 let handle = pool2.spawn_with_handle(BigWigWrite::write_zoom_section(items, chromId)).expect("Couldn't spawn.");
                 zooms_channels[i].unbounded_send(handle.boxed()).expect("Couln't send");
             };
-            for current_val in vals_iter {
+            let mut peekable_vals = vals_iter.peekable();
+            while let Some(current_val) = peekable_vals.next() {
                 // TODO: test this correctly fails
                 // TODO: change these to not panic
-                if let Some(state) = &state {
-                    assert!(state.chrom <= current_val.chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
-                    if state.chrom == current_val.chrom {
-                        let lastItem = state.items.last().expect("Invalid state");
-                        assert!(
-                            lastItem.end <= current_val.start,
-                            "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
-                            current_val.chrom,
-                            lastItem.start,
-                            lastItem.end,
-                            current_val.start,
-                            current_val.end,
-                        );
-                    }
-                }
                 assert!(current_val.start <= current_val.end);
 
-                if let Some(state_val) = &mut state {
-                    let diffchrom = current_val.chrom != state_val.chrom;
-                    if diffchrom {
-                        let mut state_val = state.unwrap();
-                        let chromId = chrom_ids.get_id(state_val.chrom);
-                        let items = std::mem::replace(&mut state_val.items, vec![]);
-                        write_section_items(items, chromId, &mut ftx);
-                        for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
-                            if let Some(zoom2) = zoom_item.live_info {
-                                let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                zoom_item.records.push(ZoomRecord {
-                                    chrom: chromId,
-                                    start: zoom2.start,
-                                    end: zoom2.end,
-                                    valid_count: zoom2.valid_count,
-                                    min_value: zoom2.min_value,
-                                    max_value: zoom2.max_value,
-                                    sum: zoom2.sum,
-                                    sum_squares: zoom2.sum_squares,
-
-                                });
-                                zoom_item.live_info = None;
-                            }
-                            write_zoom_items(i, zoom_item.records);
-                        }
-                        state = None;
-                    }
-                }
                 if state.is_none() {
                     state = Some(BedGraphSection {
-                        chrom: current_val.chrom.clone(),
                         items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
                         zoom_items: (0..num_zooms).map(|_| ZoomItem {
                             live_info: None,
@@ -984,11 +951,6 @@ impl BigWigWrite {
                 }
 
                 let state_val = state.as_mut().unwrap();
-                if state_val.items.len() >= ITEMS_PER_SLOT as usize {
-                    let chromId = chrom_ids.get_id(state_val.chrom.clone());
-                    let items = std::mem::replace(&mut state_val.items, vec![]);
-                    write_section_items(items, chromId, &mut ftx);
-                }
                 for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
                     let mut add_start = current_val.start;
                     loop {
@@ -1015,7 +977,7 @@ impl BigWigWrite {
                                 // If the last zoom ends before this value starts, we don't add anything
                                 if add_end >= add_start {
                                     let added_bases = add_end - add_start;                                
-                                    zoom2.end = current_val.end;
+                                    zoom2.end = add_end;
                                     zoom2.valid_count += added_bases;
                                     zoom2.min_value = zoom2.min_value.min(current_val.value);
                                     zoom2.max_value = zoom2.max_value.max(current_val.value);
@@ -1055,6 +1017,11 @@ impl BigWigWrite {
                     end: current_val.end,
                     val: current_val.value,
                 });
+                if state_val.items.len() >= ITEMS_PER_SLOT as usize {
+                    let chromId = chrom_ids.get_id(current_val.chrom.clone());
+                    let items = std::mem::replace(&mut state_val.items, vec![]);
+                    write_section_items(items, chromId, &mut ftx);
+                }
 
                 match &mut summary {
                     None => {
@@ -1074,20 +1041,18 @@ impl BigWigWrite {
                         summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
                     }
                 }
-            }
 
-            // We have previously had data, need to write final section (if needed)
-            if let Some(state_val) = state {
-                let lastchrom = state_val.chrom;
-                let chromId = chrom_ids.get_id(lastchrom.clone());
-                if !state_val.items.is_empty() {
-                    write_section_items(state_val.items, chromId, &mut ftx);
-                }
+                let mut write_state = |current_val: ValueWithChrom| {
+                    let state_val = state.take().unwrap();
 
-                for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
-                    match &zoom_item.live_info {
-                        None => (),
-                        Some(zoom2) => {
+                    let lastchrom = current_val.chrom.clone();
+                    let chromId = chrom_ids.get_id(current_val.chrom);
+                    if !state_val.items.is_empty() {
+                        write_section_items(state_val.items, chromId, &mut ftx);
+                    }
+
+                    for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
+                        if let Some(zoom2) = zoom_item.live_info {
                             assert!(lastchrom == zoom2.chrom);
                             zoom_item.records.push(ZoomRecord {
                                 chrom: chromId,
@@ -1100,14 +1065,41 @@ impl BigWigWrite {
                                 sum_squares: zoom2.sum_squares,
                             });
                             zoom_item.live_info = None;
-                            //println!("Zoom file size ({:?}): {:?}", zoom.0, zoom.1.seek(SeekFrom::End(0))?)
+                        }
+                        if !zoom_item.records.is_empty() {
+                            write_zoom_items(i, zoom_item.records);
                         }
                     }
-                    if !zoom_item.records.is_empty() {
-                        write_zoom_items(i, zoom_item.records);
-                    }
+                };
+
+                match peekable_vals.peek() {
+                    None => {
+                        write_state(current_val);
+                    },
+                    Some(next_val) => {
+                        // TODO: test this correctly fails
+                        // TODO: change these to not panic
+                        assert!(current_val.chrom <= next_val.chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
+                        if current_val.chrom == next_val.chrom {
+                            assert!(
+                                current_val.end <= next_val.start,
+                                "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
+                                current_val.chrom,
+                                current_val.start,
+                                current_val.end,
+                                next_val.start,
+                                next_val.end,
+                            );
+                        }
+
+                        let diffchrom = current_val.chrom != next_val.chrom;
+                        if diffchrom {
+                            write_state(current_val);
+                        }
+                    },
                 }
             }
+
             let summary_complete = match summary {
                 None => Summary {
                     bases_covered: 0,

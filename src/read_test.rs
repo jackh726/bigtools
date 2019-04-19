@@ -23,10 +23,13 @@ fn read_test(bw: String) -> std::io::Result<()> {
     let b = BigWigRead::from_file_and_attach(bw)?;
     println!("Read path: {:?}", b.path);
 
+    println!("BigWigInfo: {:?}", b.info);
+
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
     let interval = b.get_interval("chr17", 10_000_000u32, 10_010_000u32)?;
     println!("Interval result: {:?}", interval.len());
 
-    b.test_read_zoom("chr17", 10_000_000u32, 10_010_000u32)?;
+    b.test_read_zoom("chr17", 0, 83257441)?;
+    //b.test_read_zoom("chr17", 10_000_000u32, 10_010_000u32)?;
     Ok(())
 }
