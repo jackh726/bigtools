@@ -47,7 +47,7 @@ impl<K : Hash + Eq> IdMap<K> {
             if chrom_id == next_id {
                 state.next_id += 1;
             }
-            return chrom_id;
+            chrom_id
         }
     }
 }
