@@ -3,24 +3,24 @@ use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex, Condvar};
 
 
-struct TempFileWrite {
+pub struct TempFileWrite {
     closed: bool,
     total_bytes: usize,
     file_bytes: usize,
 }
 
-struct TempFileWriteWriter {
+pub struct TempFileWriteWriter {
     statemutex: Arc<(Mutex<TempFileWrite>, Condvar)>,
     writefile: File,
 }
 
-struct TempFileWriteReader {
+pub struct TempFileWriteReader {
     statemutex: Arc<(Mutex<TempFileWrite>, Condvar)>,
     readfile: File,
 }
 
 impl TempFileWrite {
-    fn new() -> io::Result<(TempFileWriteWriter, TempFileWriteReader)> {
+    pub fn new() -> io::Result<(TempFileWriteWriter, TempFileWriteReader)> {
         let temp = tempfile::NamedTempFile::new()?;
 
         let write = TempFileWrite {
