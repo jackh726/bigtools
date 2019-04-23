@@ -11,6 +11,7 @@ mod idmap;
 mod tell;
 
 mod bigwigmerge;
+mod tempfilewrite;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();

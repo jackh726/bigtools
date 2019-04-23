@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Result;
 
@@ -332,13 +332,13 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
     }
 }
 
-struct ValueSectionIter<I> where I : Iterator<Item=ValueSection> {
+struct ValueSectionIter<I> where I : Iterator<Item=ValueSection> + std::marker::Send {
     sections: Vec<I>,
     queue: std::collections::VecDeque<ValueSection>,
-    buffer: Option<Box<Iterator<Item = ValueSection>>>,
+    buffer: Option<Box<Iterator<Item = ValueSection> + std::marker::Send>>,
 }
 
-impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> {
+impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> + std::marker::Send {
     type Item = ValueSection;
 
     fn next(&mut self) -> Option<ValueSection> {
@@ -461,7 +461,7 @@ impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> {
     }
 }
 
-fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> where I : Iterator<Item=ValueSection> {    
+fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> + std::marker::Send where I : Iterator<Item=ValueSection> + std::marker::Send {    
     ValueSectionIter {
         sections: sections.into_iter().map(Box::new).collect(),
         queue: std::collections::VecDeque::new(),
@@ -469,69 +469,57 @@ fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> 
     }
 }
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=ValueWithChrom>> {
+pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=ValueWithChrom> + std::marker::Send> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
-    let mut chrom_sizes = HashMap::new();
+    let mut chrom_sizes = BTreeMap::new();
     for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
         if chrom_sizes.get(&chrom).is_some() {
             continue;
         }
-        let sizes = bigwigs.iter().map(|w| {
+        let (sizes, bws): (Vec<_>, Vec<_>) = bigwigs.iter().map(|w| {
             let chroms = w.get_chroms();
             let res = chroms.iter().find(|v| v.name == chrom);
             match res {
-                Some(s) => Some(s.length),
+                Some(s) => Some((s.length, w.clone())),
                 None => None,
             }
-        }).filter_map(|x| x).collect::<Vec<_>>();
+        }).filter_map(|x| x).unzip();
         let size = sizes[0];
         if !sizes.iter().all(|s| *s == size) {
             eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
             return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
         }
 
-        chrom_sizes.insert(chrom, size);
+        chrom_sizes.insert(chrom, (size, bws));
     }
 
-    let mut chroms: Vec<_> = chrom_sizes.keys().map(std::borrow::ToOwned::to_owned).collect();
-    chroms.sort();
+    let all_values = chrom_sizes.into_iter().flat_map(move |(chrom, (size, bws))| {
+        let current_chrom = chrom.clone();
 
-    let mut all_values: Box<Iterator<Item = ValueWithChrom>> = Box::new(vec![].into_iter());
-    for chrom in chroms.iter() {
-        let size = chrom_sizes.get(chrom).unwrap();
-        let blocks: Vec<_> = bigwigs.iter().filter_map(|b| {
-            match b.get_chroms().iter().find(|c| &c.name == chrom) {
-                Some(_) => {
-                    Some(b.get_overlapping_blocks(chrom, 1, *size).unwrap().into_iter())
-                },
-                None => None,
-            }
-        }).collect();
-        //println!("Block sizes: {:?}", blocks.iter().map(|b| b.len()).collect::<Vec<_>>());
-        let bws = bigwigs.clone();
-        let iters: Vec<_> = blocks
-            .into_iter()
-            .zip(bws.into_iter())
-            .map(move |(i, b)| {
+        let iters: Vec<_> = bws.into_iter()
+            .map(move |b| {
                 let endianness = b.info.header.endianness;
                 let path = b.path.clone();
                 let fp = File::open(path).unwrap();
                 let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-                i.flat_map(move |block| {
-                    b.get_block_values(&mut file, block).unwrap()
-                })
+                b
+                    .get_overlapping_blocks(&chrom, 1, size)
+                    .unwrap()
+                    .into_iter()
+                    .flat_map(move |block| {
+                        b.get_block_values(&mut file, block).unwrap()
+                    })
             }).collect();
 
-        let current_chrom = chrom.clone();
         let values = merge_sections_many(iters).map(move |v| ValueWithChrom {
             chrom: current_chrom.clone(),
             start: v.start,
             end: v.end,
             value: v.value,
         });
-        all_values = Box::new(all_values.chain(values));
-    }
+        values
+    });
 
     Ok(all_values)
 }
