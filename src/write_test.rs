@@ -38,18 +38,8 @@ fn get_chrom_map(file: File) -> std::collections::HashMap<String, u32> {
 
 fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
     let outb = BigWigWrite::create_file(out)?;
-    println!("Path: {:?}", outb.path);
 
     let chrom_map = get_chrom_map(File::open(chroms)?);
-    //println!("Chrom_map: {:?}", chrom_map);
-    /*let chrom_map: std::collections::HashMap<&str, u32> = [
-        ("chr2", 242193529),
-        ("chr10", 133797422),
-        ("chr17", 83257441),
-        ("chr17_GL000205v2_random", 185591),
-        ("chr17_KI270729v1_random", 280839),
-        ("chr17_KI270730v1_random", 112551),
-    ].iter().cloned().collect();*/
 
     println!("Reading file.");
     let infile = File::open(bg)?;

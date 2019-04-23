@@ -13,9 +13,9 @@ futures-preview = { version = "0.3.0-alpha.14", features = ["compat"] }
 rand = "0.6.5"
 
 [profile.release]
-debug = true
-debug-assertions = true
-overflow-checks = true
+#debug = true
+#debug-assertions = true
+#overflow-checks = true
 
 [profile.dev]
 opt-level = 3
