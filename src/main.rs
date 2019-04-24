@@ -11,6 +11,7 @@ mod idmap;
 mod tell;
 
 mod bigwigmerge;
+mod bigwigtobedgraph;
 mod tempfilewrite;
 
 fn main() -> Result<(), std::io::Error> {
@@ -20,7 +21,9 @@ fn main() -> Result<(), std::io::Error> {
     let b2 = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
     println!("Args: {:} {:}", b1, b2);
 
-    merge_test(b1, b2)?;
+    //merge_test(b1, b2)?;
+
+    bwtbg(b1, "/home/hueyj/temp/testout.bedGraph".to_string())?;
 
     Ok(())
 }
@@ -56,5 +59,14 @@ fn merge_test(b1path: String, b2path: String) -> std::io::Result<()> {
 
     outb.write(chrom_map, all_values)?;
     
+    Ok(())
+}
+
+fn bwtbg(inpath: String, outpath: String) -> std::io::Result<()> {
+    let b1 = BigWigRead::from_file_and_attach(inpath)?;
+    let out = File::create(outpath)?;
+
+    bigwigtobedgraph::write_bg(b1, out)?;
+
     Ok(())
 }

@@ -5,6 +5,7 @@ use bigwig::BigWigRead;
 
 mod idmap;
 mod tell;
+mod tempfilewrite;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
@@ -27,7 +28,7 @@ fn read_test(bw: String) -> std::io::Result<()> {
 
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
     let interval = b.get_interval("chr17", 10_000_000u32, 10_010_000u32)?;
-    println!("Interval result: {:?}", interval.len());
+    println!("Interval result: {:?}", interval.collect::<Vec<_>>().len());
 
     b.test_read_zoom("chr17", 0, 83257441)?;
     //b.test_read_zoom("chr17", 10_000_000u32, 10_010_000u32)?;

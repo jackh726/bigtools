@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Result;
+use std::io::{self, Result, Seek, SeekFrom};
 
 use byteordered::ByteOrdered;
 
@@ -488,29 +488,59 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
         let size = sizes[0];
         if !sizes.iter().all(|s| *s == size) {
             eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
+            return Err(io::Error::new(io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
         }
 
         chrom_sizes.insert(chrom, (size, bws));
     }
 
-    let all_values = chrom_sizes.into_iter().flat_map(move |(chrom, (size, bws))| {
+    let all_values = chrom_sizes.into_iter().flat_map(|(chrom, (size, bws))| {
         let current_chrom = chrom.clone();
 
-        let iters: Vec<_> = bws.into_iter()
-            .map(move |b| {
-                let endianness = b.info.header.endianness;
-                let path = b.path.clone();
-                let fp = File::open(path).unwrap();
-                let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-                b
-                    .get_overlapping_blocks(&chrom, 1, size)
-                    .unwrap()
-                    .into_iter()
-                    .flat_map(move |block| {
-                        b.get_block_values(&mut file, block).unwrap()
-                    })
-            }).collect();
+        // Owned version of BigWigRead::get_interval
+        // TODO: how to please the borrow checker
+        // This doesn't work:
+        // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
+
+        let iters: Vec<_> = bws.into_iter().map(move |b| {
+            let blocks = b.get_overlapping_blocks(&chrom, 1, size).unwrap();
+
+            let endianness = b.info.header.endianness;
+            let fp = File::open(b.path.clone()).unwrap();
+            let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
+
+            if blocks.len() > 0 {
+                file.seek(SeekFrom::Start(blocks[0].offset)).unwrap();
+            }
+            let mut iter = blocks.into_iter().peekable();
+            
+            let block_iter = std::iter::from_fn(move || {
+                let next = iter.next();
+                let peek = iter.peek();
+                let next_offset = match peek {
+                    None => None,
+                    Some(peek) => Some(peek.offset),
+                };
+                match next {
+                    None => None,
+                    Some(next) => Some((next, next_offset))
+                }
+            });
+            let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
+                // TODO: Could minimize this by chunking block reads
+                let vals = b.get_block_values(&mut file, &block).unwrap();
+                match next_offset {
+                    None => (),
+                    Some(next_offset) => {
+                        if next_offset != block.offset + block.size {
+                            file.seek(SeekFrom::Start(next_offset)).unwrap();
+                        }
+                    }
+                }
+                vals
+            });
+            vals_iter
+        }).collect();
 
         let values = merge_sections_many(iters).map(move |v| ValueWithChrom {
             chrom: current_chrom.clone(),

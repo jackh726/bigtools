@@ -58,10 +58,10 @@ struct ZoomHeader {
 }
 
 #[derive(Clone, Debug)]
-struct ChromInfo {
-    name: String,
+pub(crate) struct ChromInfo {
+    pub(crate) name: String,
     id: u32,
-    length: u32,
+    pub(crate) length: u32,
 }
 
 #[derive(Debug)]
@@ -91,8 +91,8 @@ pub struct BigWigInfo {
 
 #[derive(Debug)]
 pub(crate) struct Block {
-    offset: u64,
-    size: u64,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -492,12 +492,12 @@ impl BigWigRead {
         self.search_cir_tree(&mut file, chrom_name, start, end)
     }
 
-    pub(crate) fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: Block) -> std::io::Result<impl Iterator<Item =Value>> {
+    /// This assumes that the file is currently at the block's start
+    pub(crate) fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: &Block) -> std::io::Result<impl Iterator<Item=Value>> {
         let endianness = self.info.header.endianness;
         let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
         let mut values: Vec<Value> = Vec::new();
 
-        file.seek(SeekFrom::Start(block.offset))?;
         let mut raw_data = vec![0u8; block.size as usize];
         file.read_exact(&mut raw_data)?;
         let block_data: Vec<u8> = if uncompress_buf_size > 0 {
@@ -563,25 +563,45 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
-    pub fn get_interval(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Value>> {
+    pub fn get_interval<'a>(&'a self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<impl Iterator<Item=Value> + std::marker::Send + 'a> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
 
         let endianness = self.info.header.endianness;
         let fp = File::open(self.path.clone())?;
         let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
 
-        let mut values: Vec<Value> = Vec::new();
-
-        for block in blocks {
-            // TODO: Could minimize this by chunking block reads
-            let block_values = self.get_block_values(&mut file, block)?.map(|mut v| {
-                v.start = v.start.max(start);
-                v.end = v.end.min(end);
-                v
-            });
-            values.extend(block_values);
+        if blocks.len() > 0 {
+            file.seek(SeekFrom::Start(blocks[0].offset))?;
         }
-        Ok(values)
+        let mut iter = blocks.into_iter().peekable();
+        
+        let block_iter = std::iter::from_fn(move || {
+            let next = iter.next();
+            let peek = iter.peek();
+            let next_offset = match peek {
+                None => None,
+                Some(peek) => Some(peek.offset),
+            };
+            match next {
+                None => None,
+                Some(next) => Some((next, next_offset))
+            }
+        });
+        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
+            // TODO: Could minimize this by chunking block reads
+            let vals = self.get_block_values(&mut file, &block).unwrap();
+            match next_offset {
+                None => (),
+                Some(next_offset) => {
+                    if next_offset != block.offset + block.size {
+                        file.seek(SeekFrom::Start(next_offset)).unwrap();
+                    }
+                }
+            }
+            vals
+        });
+
+        Ok(vals_iter)
     }
 }
 
