@@ -11,6 +11,7 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 tempfile = "3"
 futures-preview = { version = "0.3.0-alpha.14", features = ["compat"] }
 rand = "0.6.5"
+parking_lot = { version = "0.7.1", features = ["nightly"] }
 
 [profile.release]
 debug = true
