@@ -852,27 +852,8 @@ impl BigWigWrite {
         )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
         const ITEMS_PER_SLOT: u16 = 1024;
 
-        #[derive(Debug)]
-        struct LiveZoomInfo {
-            chrom: String,
-            start: u32,
-            end: u32,
-            valid_count: u32,
-            min_value: f32,
-            max_value: f32,
-            sum: f32,
-            sum_squares: f32,
-        }
-
-        type ZoomInfo<'a> = (u32, BufWriter<File>, Option<LiveZoomInfo>);
-
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
-        let mut zooms: Vec<ZoomInfo> = vec![];
-        for size in zoom_sizes.iter() {
-            let temp = tempfile::tempfile()?;
-            zooms.push((*size, std::io::BufWriter::new(temp), None));
-        }
-        let num_zooms = zooms.len();
+        let num_zooms = zoom_sizes.len();
 
         let (mut ftx, mut frx) = channel::<_>(50);
 
@@ -917,9 +898,12 @@ impl BigWigWrite {
             })
         });
 
-        let process_zooms = async move |mut zoom_channel: UnboundedReceiver<_>, mut zoom: ZoomInfo| -> std::io::Result<TempZoomInfo> {
+        let process_zooms = async move |mut zoom_channel: UnboundedReceiver<_>, size: u32| -> std::io::Result<TempZoomInfo> {
             let (writer, reader) = TempFileWrite::new()?;
             let mut bufwriter = ByteOrdered::runtime(std::io::BufWriter::new(writer), Endianness::native());
+
+            let temp = tempfile::tempfile()?;
+            let mut file = std::io::BufWriter::new(temp);
 
             let mut current_offset = 0;
             let mut total_sections: usize = 0;
@@ -927,7 +911,6 @@ impl BigWigWrite {
                 let section: SectionData = await!(future)?;
                 total_sections += 1;
                 let size = section.data.len() as u64;
-                let file = &mut zoom.1;
                 file.write_all(&section.data)?;
                 bufwriter.write_u32(section.chrom)?;
                 bufwriter.write_u32(section.start)?;
@@ -936,7 +919,7 @@ impl BigWigWrite {
                 bufwriter.write_u64(size)?;
                 current_offset += size;
             }
-            let data_size = zoom.1.tell()?;
+            let data_size = file.tell()?;
             
             let mut bufreader = ByteOrdered::runtime(std::io::BufReader::new(reader), Endianness::native());
             let mut read_sections = 0;
@@ -959,17 +942,29 @@ impl BigWigWrite {
                 })
             });
 
-            Ok((zoom.0, zoom.1.into_inner().expect("Can't get inner file"), Box::new(section_iter), data_size))
+            Ok((size, file.into_inner().expect("Can't get inner file"), Box::new(section_iter), data_size))
         };
 
-        let (zooms_futures, zooms_channels): (Vec<_>, Vec<_>) = zooms.into_iter().map(|zoom| {
+        let (zooms_futures, zooms_channels): (Vec<_>, Vec<_>) = zoom_sizes.iter().map(|size| {
             let (ftx, frx) = unbounded::<_>();
-            let f = process_zooms(frx, zoom);
+            let f = process_zooms(frx, *size);
             (f, ftx)
         }).unzip();
 
         let read_file = async move || -> std::io::Result<(IdMap<String>, Summary)> {
             let mut summary: Option<Summary> = None;
+
+            #[derive(Debug)]
+            struct LiveZoomInfo {
+                chrom: String,
+                start: u32,
+                end: u32,
+                valid_count: u32,
+                min_value: f32,
+                max_value: f32,
+                sum: f32,
+                sum_squares: f32,
+            }
 
             struct ZoomItem {
                 live_info: Option<LiveZoomInfo>,
@@ -991,112 +986,130 @@ impl BigWigWrite {
                 let handle = pool2.spawn_with_handle(BigWigWrite::write_zoom_section(items, chromId)).expect("Couldn't spawn.");
                 zooms_channels[i].unbounded_send(handle.boxed()).expect("Couln't send");
             };
-            let mut peekable_vals = vals_iter.peekable();
-            while let Some(current_val) = peekable_vals.next() {
-                // TODO: test this correctly fails
-                // TODO: change these to not panic
-                assert!(current_val.start <= current_val.end);
 
-                if state.is_none() {
-                    state = Some(BedGraphSection {
-                        items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
-                        zoom_items: (0..num_zooms).map(|_| ZoomItem {
-                            live_info: None,
-                            records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
-                        }).collect(),
-                    });
-                }
+            let chrom_vals_iter = crate::bedgraphreader::BedGraphReader::new(vals_iter);
+            for (chrom, group) in chrom_vals_iter {
+                let mut peekable_vals = group.peekable();
 
-                let state_val = state.as_mut().unwrap();
-                for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
-                    let mut add_start = current_val.start;
-                    loop {
-                        if add_start >= current_val.end {
-                            break
-                        }
-                        match &mut zoom_item.live_info {
-                            None => {
-                                zoom_item.live_info = Some(LiveZoomInfo {
-                                    chrom: current_val.chrom.clone(),
-                                    start: add_start,
-                                    end: add_start,
-                                    valid_count: 0,
-                                    min_value: current_val.value,
-                                    max_value: current_val.value,
-                                    sum: 0.0,
-                                    sum_squares: 0.0,
-                                });
-                            },
-                            Some(zoom2) => {
-                                let next_end = zoom2.start + zoom_sizes[i];
-                                // End of bases that we could add
-                                let add_end = std::cmp::min(next_end, current_val.end);
-                                // If the last zoom ends before this value starts, we don't add anything
-                                if add_end >= add_start {
-                                    let added_bases = add_end - add_start;                                
-                                    zoom2.end = add_end;
-                                    zoom2.valid_count += added_bases;
-                                    zoom2.min_value = zoom2.min_value.min(current_val.value);
-                                    zoom2.max_value = zoom2.max_value.max(current_val.value);
-                                    zoom2.sum += added_bases as f32 * current_val.value;
-                                    zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
-                                }
-                                // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                                // or we added to the end of the zoom), then write this zooms to the current section
-                                if add_end == next_end {
-                                    let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                    zoom_item.records.push(ZoomRecord {
-                                        chrom: chromId,
-                                        start: zoom2.start,
-                                        end: zoom2.end,
-                                        valid_count: zoom2.valid_count,
-                                        min_value: zoom2.min_value,
-                                        max_value: zoom2.max_value,
-                                        sum: zoom2.sum,
-                                        sum_squares: zoom2.sum_squares,
+                assert!(state.is_none());
+                state = Some(BedGraphSection {
+                    items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
+                    zoom_items: (0..num_zooms).map(|_| ZoomItem {
+                        live_info: None,
+                        records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
+                    }).collect(),
+                });
+                while let Some(current_val) = peekable_vals.next() {
+                    // TODO: test this correctly fails
+                    // TODO: change these to not panic
+                    assert!(current_val.start <= current_val.end);
+
+                    let state_val = state.as_mut().unwrap();
+                    for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+                        let mut add_start = current_val.start;
+                        loop {
+                            if add_start >= current_val.end {
+                                break
+                            }
+                            match &mut zoom_item.live_info {
+                                None => {
+                                    zoom_item.live_info = Some(LiveZoomInfo {
+                                        chrom: chrom.clone(),
+                                        start: add_start,
+                                        end: add_start,
+                                        valid_count: 0,
+                                        min_value: current_val.value,
+                                        max_value: current_val.value,
+                                        sum: 0.0,
+                                        sum_squares: 0.0,
                                     });
-                                    zoom_item.live_info = None;
-                                }
-                                // Set where we would start for next time
-                                add_start = std::cmp::max(add_end, current_val.start);
-                                // Write section if full
-                                debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
-                                if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
-                                    let items = std::mem::replace(&mut zoom_item.records, vec![]);
-                                    write_zoom_items(i, items);
+                                },
+                                Some(zoom2) => {
+                                    let next_end = zoom2.start + zoom_sizes[i];
+                                    // End of bases that we could add
+                                    let add_end = std::cmp::min(next_end, current_val.end);
+                                    // If the last zoom ends before this value starts, we don't add anything
+                                    if add_end >= add_start {
+                                        let added_bases = add_end - add_start;                                
+                                        zoom2.end = add_end;
+                                        zoom2.valid_count += added_bases;
+                                        zoom2.min_value = zoom2.min_value.min(current_val.value);
+                                        zoom2.max_value = zoom2.max_value.max(current_val.value);
+                                        zoom2.sum += added_bases as f32 * current_val.value;
+                                        zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
+                                    }
+                                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
+                                    // or we added to the end of the zoom), then write this zooms to the current section
+                                    if add_end == next_end {
+                                        let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
+                                        zoom_item.records.push(ZoomRecord {
+                                            chrom: chromId,
+                                            start: zoom2.start,
+                                            end: zoom2.end,
+                                            valid_count: zoom2.valid_count,
+                                            min_value: zoom2.min_value,
+                                            max_value: zoom2.max_value,
+                                            sum: zoom2.sum,
+                                            sum_squares: zoom2.sum_squares,
+                                        });
+                                        zoom_item.live_info = None;
+                                    }
+                                    // Set where we would start for next time
+                                    add_start = std::cmp::max(add_end, current_val.start);
+                                    // Write section if full
+                                    debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
+                                    if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
+                                        let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                                        write_zoom_items(i, items);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                state_val.items.push(BedGraphSectionItem {
-                    start: current_val.start,
-                    end: current_val.end,
-                    val: current_val.value,
-                });
-                if state_val.items.len() >= ITEMS_PER_SLOT as usize {
-                    let chromId = chrom_ids.get_id(current_val.chrom.clone());
-                    let items = std::mem::replace(&mut state_val.items, vec![]);
-                    let handle = pool1.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
-                    await!(ftx.send(handle.boxed())).expect("Couldn't send");
-                }
+                    state_val.items.push(BedGraphSectionItem {
+                        start: current_val.start,
+                        end: current_val.end,
+                        val: current_val.value,
+                    });
+                    if state_val.items.len() >= ITEMS_PER_SLOT as usize {
+                        let chromId = chrom_ids.get_id(chrom.clone());
+                        let items = std::mem::replace(&mut state_val.items, vec![]);
+                        let handle = pool1.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
+                        await!(ftx.send(handle.boxed())).expect("Couldn't send");
+                    }
 
-                match &mut summary {
-                    None => {
-                        summary = Some(Summary {
-                            bases_covered: u64::from(current_val.end - current_val.start),
-                            min_val: f64::from(current_val.value),
-                            max_val: f64::from(current_val.value),
-                            sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
-                            sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
-                        })
-                    },
-                    Some(summary) => {
-                        summary.bases_covered += u64::from(current_val.end - current_val.start);
-                        summary.min_val = summary.min_val.min(f64::from(current_val.value));
-                        summary.max_val = summary.max_val.max(f64::from(current_val.value));
-                        summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
-                        summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
+                    match &mut summary {
+                        None => {
+                            summary = Some(Summary {
+                                bases_covered: u64::from(current_val.end - current_val.start),
+                                min_val: f64::from(current_val.value),
+                                max_val: f64::from(current_val.value),
+                                sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
+                                sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
+                            })
+                        },
+                        Some(summary) => {
+                            summary.bases_covered += u64::from(current_val.end - current_val.start);
+                            summary.min_val = summary.min_val.min(f64::from(current_val.value));
+                            summary.max_val = summary.max_val.max(f64::from(current_val.value));
+                            summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
+                            summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
+                        }
+                    }
+
+                    match peekable_vals.peek() {
+                        None => (),
+                        Some(next_val) => {
+                            assert!(
+                                current_val.end <= next_val.start,
+                                "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
+                                chrom,
+                                current_val.start,
+                                current_val.end,
+                                next_val.start,
+                                next_val.end,
+                            );
+                        }
                     }
                 }
 
@@ -1105,11 +1118,11 @@ impl BigWigWrite {
                 let pool1 = &mut pool1;
                 let ftx = &mut ftx;
                 let chrom_ids = &mut chrom_ids;
-                let write_state = async move |current_val: ValueWithChrom| {
+                let write_state = async move || {
                     let state_val = state.take().unwrap();
 
-                    let lastchrom = current_val.chrom.clone();
-                    let chromId = chrom_ids.get_id(current_val.chrom);
+                    let lastchrom = chrom.clone();
+                    let chromId = chrom_ids.get_id(chrom);
                     if !state_val.items.is_empty() {
                         let handle = pool1.spawn_with_handle(BigWigWrite::write_section(state_val.items, chromId)).expect("Couldn't spawn.");
                         await!(ftx.send(handle.boxed())).expect("Couldn't send");
@@ -1136,32 +1149,7 @@ impl BigWigWrite {
                     }
                 };
 
-                match peekable_vals.peek() {
-                    None => {
-                        await!(write_state(current_val));
-                    },
-                    Some(next_val) => {
-                        // TODO: test this correctly fails
-                        // TODO: change these to not panic
-                        assert!(current_val.chrom <= next_val.chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
-                        if current_val.chrom == next_val.chrom {
-                            assert!(
-                                current_val.end <= next_val.start,
-                                "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
-                                current_val.chrom,
-                                current_val.start,
-                                current_val.end,
-                                next_val.start,
-                                next_val.end,
-                            );
-                        }
-
-                        let diffchrom = current_val.chrom != next_val.chrom;
-                        if diffchrom {
-                            await!(write_state(current_val));
-                        }
-                    },
-                }
+                await!(write_state());
             }
 
             let summary_complete = match summary {

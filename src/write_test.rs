@@ -10,6 +10,7 @@ use bigwig::ValueWithChrom;
 mod idmap;
 mod tell;
 mod tempfilewrite;
+mod bedgraphreader;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
