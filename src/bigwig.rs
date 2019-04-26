@@ -1,16 +1,16 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
-use std::io::{Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::io::BufWriter;
 use std::io::prelude::*;
 use std::fs::File;
 use std::vec::Vec;
 
-use futures::future::FutureExt;
-use futures::channel::mpsc::{channel, Receiver};
+use futures::future::{Future, FutureExt};
+use futures::channel::mpsc::{unbounded, channel, Receiver};
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use futures::task::SpawnExt;
 
 use byteordered::{ByteOrdered, Endianness};
@@ -162,6 +162,7 @@ struct Summary {
 }
 
 type TempZoomInfo = (u32 /* resolution */, futures::future::RemoteHandle<std::io::Result<BufWriter<crate::tempfilebuffer::TempFileBufferWriter>>> /* Temp file that contains data */, crate::tempfilebuffer::TempFileBuffer, Box<Iterator<Item=Section> + std::marker::Send> /* sections */);
+type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Stream<Item=Section> + std::marker::Send + std::marker::Unpin> /* sections */);
 
 struct BedGraphSectionItem {
     start: u32,
@@ -640,19 +641,18 @@ impl BigWigWrite {
         }
 
         let pre_data = file.tell()?;
-        let (chrom_summary_future, raw_sections_iter, zooms, file_future) = self.write_vals(vals, IdMap::new(), file)?;
+        let (chrom_summary_future, raw_sections_iter) = self.write_vals(vals, file)?;
         let sections_iter = raw_sections_iter.map(|mut section| {
             section.offset += pre_data;
             section
         });
-        let (chrom_ids, summary) = futures::executor::block_on(chrom_summary_future);
-        let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter);
-        let mut file = futures::executor::block_on(file_future);
+        let (chrom_ids, summary, mut file, zoom_infos) = futures::executor::block_on(chrom_summary_future);
+        let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(futures::executor::block_on_stream(sections_iter));
         let data_size = file.tell()? - pre_data;
         println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", total_sections);
         println!("Summary: {:?}", summary);
-        println!("Zooms: {:?}", zooms.len());
+        println!("Zooms: {:?}", zoom_infos.len());
 
         // Since the chrom tree is read before the index, we put this before the full data index
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
@@ -668,7 +668,7 @@ impl BigWigWrite {
         const ITEMS_PER_SLOT: u32 = 1024; // TODO: param
 
         let mut zoom_entries: Vec<ZoomHeader> = vec![];
-        BigWigWrite::write_zooms(&mut file, zooms, &mut zoom_entries, data_size)?;
+        BigWigWrite::write_zooms(&mut file, zoom_infos, &mut zoom_entries, data_size)?;
 
         //println!("Zoom entries: {:?}", zoom_entries);
         let num_zooms = zoom_entries.len() as u16;
@@ -843,17 +843,7 @@ impl BigWigWrite {
         })
     }
 
-    fn write_vals<V: 'static>(
-        &self,
-        vals_iter: V,
-        mut chrom_ids: IdMap<String>,
-        file: BufWriter<File>
-    ) -> std::io::Result<(
-        impl futures::Future<Output=(IdMap<String>, Summary)>,
-        impl Iterator<Item=Section>,
-        Vec<TempZoomInfo>,
-        impl futures::Future<Output=std::io::BufWriter<File>>
-        )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+    fn read_group<I>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool) -> io::Result<(impl Future<Output=io::Result<Summary>> + std::marker::Send, impl Iterator<Item=Section> + std::marker::Send, crate::tempfilebuffer::TempFileBuffer, impl Future<Output=io::Result<BufWriter<crate::tempfilebuffer::TempFileBufferWriter>>> + std::marker::Send, Vec<TempZoomInfo>)> where I: Iterator<Item=Value> + std::marker::Send {
         const ITEMS_PER_SLOT: u16 = 1024;
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
@@ -900,14 +890,18 @@ impl BigWigWrite {
             section_iter
         }
 
-        let (sections_future, section_iter) = {
+        let (sections_future, buf, section_iter) = {
             let (writer, reader) = TempFileWrite::new()?;
             let bufwriter = ByteOrdered::runtime(std::io::BufWriter::new(writer), Endianness::native());
             let bufreader = ByteOrdered::runtime(std::io::BufReader::new(reader), Endianness::native());
 
+            use crate::tempfilebuffer::TempFileBuffer;
+            let (buf, write) = TempFileBuffer::new()?;
+            let file = BufWriter::new(write);
+
             let sections_future = create_do_write(file, bufwriter, frx);
             let section_iter = create_section_iter(bufreader);
-            (sections_future, section_iter)
+            (sections_future, buf, section_iter)
         };
 
         let process_zooms = move |zoom_channel: Receiver<_>, size: u32| -> std::io::Result<_> {
@@ -915,13 +909,14 @@ impl BigWigWrite {
             let bufwriter = ByteOrdered::runtime(std::io::BufWriter::new(writer), Endianness::native());
             let bufreader = ByteOrdered::runtime(std::io::BufReader::new(reader), Endianness::native());
 
-            let (mut buf, mut write) = crate::tempfilebuffer::TempFileBuffer::new()?;
+            let (buf, write) = crate::tempfilebuffer::TempFileBuffer::new()?;
             let file = BufWriter::new(write);
 
-            let file_future = create_do_write(file, bufwriter, zoom_channel);            
+            let file_future = create_do_write(file, bufwriter, zoom_channel);
+            //let file_future: Box<Future<Output=std::io::Result<BufWriter<crate::tempfilebuffer::TempFileBufferWriter>>> + std::marker::Send> = Box::new(create_do_write(file, bufwriter, zoom_channel));
             let section_iter: Box<Iterator<Item=Section> + std::marker::Send> = Box::new(create_section_iter(bufreader));
 
-            Ok((size, Box::new(file_future), buf, section_iter))
+            Ok((size, file_future, buf, section_iter))
         };
 
         let (zooms_futures, mut zooms_channels): (Vec<_>, Vec<_>) = zoom_sizes.iter().map(|size| {
@@ -930,7 +925,231 @@ impl BigWigWrite {
             (f, ftx)
         }).unzip();
 
-        let read_file = async move || -> std::io::Result<(IdMap<String>, Summary)> {
+        struct LiveZoomInfo {
+            chrom: String,
+            start: u32,
+            end: u32,
+            valid_count: u32,
+            min_value: f32,
+            max_value: f32,
+            sum: f32,
+            sum_squares: f32,
+        }
+
+        struct ZoomItem {
+            live_info: Option<LiveZoomInfo>,
+            records: Vec<ZoomRecord>,
+        }
+        struct BedGraphSection {
+            items: Vec<BedGraphSectionItem>,
+            zoom_items: Vec<ZoomItem>
+        }
+        
+        let read_file = async move || -> std::io::Result<Summary> {
+            let mut summary: Option<Summary> = None;
+
+            let mut peekable_vals = group.peekable();
+
+            let mut state_val = BedGraphSection {
+                items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
+                zoom_items: (0..num_zooms).map(|_| ZoomItem {
+                    live_info: None,
+                    records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
+                }).collect(),
+            };
+            while let Some(current_val) = peekable_vals.next() {
+                // TODO: test this correctly fails
+                // TODO: change these to not panic
+                assert!(current_val.start <= current_val.end);
+
+                for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+                    let mut add_start = current_val.start;
+                    loop {
+                        if add_start >= current_val.end {
+                            break
+                        }
+                        match &mut zoom_item.live_info {
+                            None => {
+                                zoom_item.live_info = Some(LiveZoomInfo {
+                                    chrom: chrom.clone(),
+                                    start: add_start,
+                                    end: add_start,
+                                    valid_count: 0,
+                                    min_value: current_val.value,
+                                    max_value: current_val.value,
+                                    sum: 0.0,
+                                    sum_squares: 0.0,
+                                });
+                            },
+                            Some(zoom2) => {
+                                let next_end = zoom2.start + zoom_sizes[i];
+                                // End of bases that we could add
+                                let add_end = std::cmp::min(next_end, current_val.end);
+                                // If the last zoom ends before this value starts, we don't add anything
+                                if add_end >= add_start {
+                                    let added_bases = add_end - add_start;                                
+                                    zoom2.end = add_end;
+                                    zoom2.valid_count += added_bases;
+                                    zoom2.min_value = zoom2.min_value.min(current_val.value);
+                                    zoom2.max_value = zoom2.max_value.max(current_val.value);
+                                    zoom2.sum += added_bases as f32 * current_val.value;
+                                    zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
+                                }
+                                // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
+                                // or we added to the end of the zoom), then write this zooms to the current section
+                                if add_end == next_end {
+                                    zoom_item.records.push(ZoomRecord {
+                                        chrom: chromId,
+                                        start: zoom2.start,
+                                        end: zoom2.end,
+                                        valid_count: zoom2.valid_count,
+                                        min_value: zoom2.min_value,
+                                        max_value: zoom2.max_value,
+                                        sum: zoom2.sum,
+                                        sum_squares: zoom2.sum_squares,
+                                    });
+                                    zoom_item.live_info = None;
+                                }
+                                // Set where we would start for next time
+                                add_start = std::cmp::max(add_end, current_val.start);
+                                // Write section if full
+                                debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
+                                if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
+                                    let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
+                                    await!(zooms_channels[i].send(handle.boxed())).expect("Couln't send");
+                                }
+                            }
+                        }
+                    }
+                }
+                state_val.items.push(BedGraphSectionItem {
+                    start: current_val.start,
+                    end: current_val.end,
+                    val: current_val.value,
+                });
+                if state_val.items.len() >= ITEMS_PER_SLOT as usize {
+                    let items = std::mem::replace(&mut state_val.items, vec![]);
+                    let handle = pool.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
+                    await!(ftx.send(handle.boxed())).expect("Couldn't send");
+                }
+
+                match &mut summary {
+                    None => {
+                        summary = Some(Summary {
+                            bases_covered: u64::from(current_val.end - current_val.start),
+                            min_val: f64::from(current_val.value),
+                            max_val: f64::from(current_val.value),
+                            sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
+                            sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
+                        })
+                    },
+                    Some(summary) => {
+                        summary.bases_covered += u64::from(current_val.end - current_val.start);
+                        summary.min_val = summary.min_val.min(f64::from(current_val.value));
+                        summary.max_val = summary.max_val.max(f64::from(current_val.value));
+                        summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
+                        summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
+                    }
+                }
+
+                match peekable_vals.peek() {
+                    None => (),
+                    Some(next_val) => {
+                        assert!(
+                            current_val.end <= next_val.start,
+                            "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
+                            chrom,
+                            current_val.start,
+                            current_val.end,
+                            next_val.start,
+                            next_val.end,
+                        );
+                    }
+                }
+            }
+
+            let lastchrom = chrom.clone();
+            if !state_val.items.is_empty() {
+                let handle = pool.spawn_with_handle(BigWigWrite::write_section(state_val.items, chromId)).expect("Couldn't spawn.");
+                await!(ftx.send(handle.boxed())).expect("Couldn't send");
+            }
+
+            for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
+                if let Some(zoom2) = zoom_item.live_info {
+                    assert!(lastchrom == zoom2.chrom);
+                    zoom_item.records.push(ZoomRecord {
+                        chrom: chromId,
+                        start: zoom2.start,
+                        end: zoom2.end,
+                        valid_count: zoom2.valid_count,
+                        min_value: zoom2.min_value,
+                        max_value: zoom2.max_value,
+                        sum: zoom2.sum,
+                        sum_squares: zoom2.sum_squares,
+                    });
+                    zoom_item.live_info = None;
+                }
+                if !zoom_item.records.is_empty() {
+                    let items = zoom_item.records;
+                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
+                    await!(zooms_channels[i].send(handle.boxed())).expect("Couln't send");
+                }
+            }
+
+            let summary_complete = match summary {
+                None => Summary {
+                    bases_covered: 0,
+                    min_val: 0.0,
+                    max_val: 0.0,
+                    sum: 0.0,
+                    sum_squares: 0.0,
+                },
+                Some(summary) => summary,
+            };
+            Ok(summary_complete)
+        };
+
+        let f = read_file();
+
+        let (zoom_infos, zoom_remotes): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|handle| {
+            let (size, file_future, buf, section_iter) = handle.unwrap();
+            let (remote, handle) = file_future.remote_handle();
+            ((size, handle, buf, section_iter), remote)
+        }).unzip();
+
+        std::thread::spawn(move || {
+            let mut pool = futures::executor::LocalPool::new();
+            for zoom_remote in zoom_remotes {
+                pool.spawner().spawn(zoom_remote).expect("Couldn't spawn future.");
+            }
+            pool.run()
+        });
+
+        let (sections_remote, sections_handle) = sections_future.remote_handle();
+        std::thread::spawn(move || {
+            futures::executor::block_on(sections_remote);
+        });
+
+        Ok((f, section_iter, buf, sections_handle, zoom_infos))    
+    }
+
+    fn write_vals<V: 'static>(
+        &self,
+        vals_iter: V,
+        file: BufWriter<File>
+    ) -> std::io::Result<(
+        impl futures::Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
+        impl Stream<Item=Section>,
+        )> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
+        const ITEMS_PER_SLOT: u16 = 1024;
+
+        let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
+
+        let (mut section_streams_tx, section_streams_rx) = unbounded();
+
+        let read_file = async move || -> std::io::Result<(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)> {
+            let mut chrom_ids = IdMap::new();
             let mut summary: Option<Summary> = None;
 
             #[derive(Debug)]
@@ -955,11 +1174,16 @@ impl BigWigWrite {
             }
 
             let pool = futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool.");
-            let mut pool1 = pool.clone();
-            let mut pool2 = pool.clone();
+
+            let mut zooms: Vec<_> = zoom_sizes.iter().map(|size| {
+                let (section_streams_tx, section_streams_rx) = unbounded();
+                let (buf, write) = crate::tempfilebuffer::TempFileBuffer::new().unwrap();
+                (size, section_streams_tx, section_streams_rx, buf, write)
+            }).collect();
 
             let chrom_vals_iter = crate::bedgraphreader::BedGraphReader::new(vals_iter);
             let mut last_chrom: Option<String> = None;
+            let mut raw_file = file.into_inner().unwrap();
             for (chrom, group) in chrom_vals_iter {
                 let last = last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
@@ -968,155 +1192,33 @@ impl BigWigWrite {
                     assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
                 }
 
-                let mut peekable_vals = group.peekable();
+                let chrom_id = chrom_ids.get_id(chrom.clone());
+                let (summary_future, sections_iter, mut sections_buf, sections_future, zoom_infos) = BigWigWrite::read_group(chrom, chrom_id, group, pool.clone())?;
 
-                let mut state_val = BedGraphSection {
-                    items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
-                    zoom_items: (0..num_zooms).map(|_| ZoomItem {
-                        live_info: None,
-                        records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
-                    }).collect(),
-                };
-                while let Some(current_val) = peekable_vals.next() {
-                    // TODO: test this correctly fails
-                    // TODO: change these to not panic
-                    assert!(current_val.start <= current_val.end);
+                await!(section_streams_tx.send(futures::stream::iter(sections_iter))).expect("Couldn't send.");
+                sections_buf.switch(raw_file)?;
+                let chrom_summary = await!(summary_future)?;
+                await!(sections_future)?;
+                raw_file = sections_buf.await();
 
-                    for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
-                        let mut add_start = current_val.start;
-                        loop {
-                            if add_start >= current_val.end {
-                                break
-                            }
-                            match &mut zoom_item.live_info {
-                                None => {
-                                    zoom_item.live_info = Some(LiveZoomInfo {
-                                        chrom: chrom.clone(),
-                                        start: add_start,
-                                        end: add_start,
-                                        valid_count: 0,
-                                        min_value: current_val.value,
-                                        max_value: current_val.value,
-                                        sum: 0.0,
-                                        sum_squares: 0.0,
-                                    });
-                                },
-                                Some(zoom2) => {
-                                    let next_end = zoom2.start + zoom_sizes[i];
-                                    // End of bases that we could add
-                                    let add_end = std::cmp::min(next_end, current_val.end);
-                                    // If the last zoom ends before this value starts, we don't add anything
-                                    if add_end >= add_start {
-                                        let added_bases = add_end - add_start;                                
-                                        zoom2.end = add_end;
-                                        zoom2.valid_count += added_bases;
-                                        zoom2.min_value = zoom2.min_value.min(current_val.value);
-                                        zoom2.max_value = zoom2.max_value.max(current_val.value);
-                                        zoom2.sum += added_bases as f32 * current_val.value;
-                                        zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
-                                    }
-                                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                                    // or we added to the end of the zoom), then write this zooms to the current section
-                                    if add_end == next_end {
-                                        let chromId = chrom_ids.get_id(zoom2.chrom.to_string());
-                                        zoom_item.records.push(ZoomRecord {
-                                            chrom: chromId,
-                                            start: zoom2.start,
-                                            end: zoom2.end,
-                                            valid_count: zoom2.valid_count,
-                                            min_value: zoom2.min_value,
-                                            max_value: zoom2.max_value,
-                                            sum: zoom2.sum,
-                                            sum_squares: zoom2.sum_squares,
-                                        });
-                                        zoom_item.live_info = None;
-                                    }
-                                    // Set where we would start for next time
-                                    add_start = std::cmp::max(add_end, current_val.start);
-                                    // Write section if full
-                                    debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
-                                    if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
-                                        let items = std::mem::replace(&mut zoom_item.records, vec![]);
-                                        let handle = pool2.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
-                                        await!(zooms_channels[i].send(handle.boxed())).expect("Couln't send");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    state_val.items.push(BedGraphSectionItem {
-                        start: current_val.start,
-                        end: current_val.end,
-                        val: current_val.value,
-                    });
-                    if state_val.items.len() >= ITEMS_PER_SLOT as usize {
-                        let chromId = chrom_ids.get_id(chrom.clone());
-                        let items = std::mem::replace(&mut state_val.items, vec![]);
-                        let handle = pool1.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
-                        await!(ftx.send(handle.boxed())).expect("Couldn't send");
-                    }
-
-                    match &mut summary {
-                        None => {
-                            summary = Some(Summary {
-                                bases_covered: u64::from(current_val.end - current_val.start),
-                                min_val: f64::from(current_val.value),
-                                max_val: f64::from(current_val.value),
-                                sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
-                                sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
-                            })
-                        },
-                        Some(summary) => {
-                            summary.bases_covered += u64::from(current_val.end - current_val.start);
-                            summary.min_val = summary.min_val.min(f64::from(current_val.value));
-                            summary.max_val = summary.max_val.max(f64::from(current_val.value));
-                            summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
-                            summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
-                        }
-                    }
-
-                    match peekable_vals.peek() {
-                        None => (),
-                        Some(next_val) => {
-                            assert!(
-                                current_val.end <= next_val.start,
-                                "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
-                                chrom,
-                                current_val.start,
-                                current_val.end,
-                                next_val.start,
-                                next_val.end,
-                            );
-                        }
-                    }
+                for (i, (_size, future, buf, zoom_sections_iter)) in zoom_infos.into_iter().enumerate() {
+                    let zoom = &mut zooms[i];
+                    await!(zoom.1.send(futures::stream::iter(zoom_sections_iter))).expect("Couldn't send.");
+                    // Await this future for its Result
+                    await!(future)?;
+                    buf.expect_closed_write(&mut zoom.4)?;
                 }
 
-                let lastchrom = chrom.clone();
-                let chromId = chrom_ids.get_id(chrom);
-                if !state_val.items.is_empty() {
-                    let handle = pool1.spawn_with_handle(BigWigWrite::write_section(state_val.items, chromId)).expect("Couldn't spawn.");
-                    await!(ftx.send(handle.boxed())).expect("Couldn't send");
-                }
-
-                for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
-                    if let Some(zoom2) = zoom_item.live_info {
-                        assert!(lastchrom == zoom2.chrom);
-                        zoom_item.records.push(ZoomRecord {
-                            chrom: chromId,
-                            start: zoom2.start,
-                            end: zoom2.end,
-                            valid_count: zoom2.valid_count,
-                            min_value: zoom2.min_value,
-                            max_value: zoom2.max_value,
-                            sum: zoom2.sum,
-                            sum_squares: zoom2.sum_squares,
-                        });
-                        zoom_item.live_info = None;
-                    }
-                    if !zoom_item.records.is_empty() {
-                        let items = zoom_item.records;
-                        let handle = pool2.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
-                        await!(zooms_channels[i].send(handle.boxed())).expect("Couln't send");
+                match &mut summary {
+                    None => {
+                        summary = Some(chrom_summary)
+                    },
+                    Some(summary) => {
+                        summary.bases_covered += chrom_summary.bases_covered;
+                        summary.min_val = summary.min_val.min(chrom_summary.min_val);
+                        summary.max_val = summary.max_val.max(chrom_summary.max_val);
+                        summary.sum += chrom_summary.sum;
+                        summary.sum_squares += chrom_summary.sum_squares;
                     }
                 }
             }
@@ -1131,56 +1233,36 @@ impl BigWigWrite {
                 },
                 Some(summary) => summary,
             };
-            Ok((chrom_ids, summary_complete))
+
+            let zoom_infos: Vec<_> = zooms.into_iter().map(|zoom| {
+                drop(zoom.4);
+                let stream: Box<Stream<Item=Section> + std::marker::Send + std::marker::Unpin> = Box::new(zoom.2.flatten());
+                (*zoom.0, zoom.3.await_raw(), stream)
+            }).collect();
+            Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), zoom_infos))
         };
 
         let f = read_file();
 
-        let (zoom_infos, zoom_remotes): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|handle| {
-            let (size, file_future, buf, section_iter) = handle.unwrap();
-            let (remote, handle) = file_future.remote_handle();
-            ((size, handle, buf, section_iter), remote)
-        }).unzip();
-
-        std::thread::spawn(move || {
-            let mut pool = futures::executor::LocalPool::new();
-            for zoom_remote in zoom_remotes {
-                pool.spawner().spawn(zoom_remote).expect("Couldn't spawn future.");
-            }
-            pool.run()
-        });
-
-        let (sections_remote, sections_handle) = sections_future.remote_handle();
-        std::thread::spawn(move || {
-            futures::executor::block_on(sections_remote);
-        });
-
-        let (f_remote, f_handle) = f.remote_handle();
-        std::thread::spawn(move || {
-            futures::executor::block_on(f_remote);
-        });
-
-        Ok((f_handle.map(Result::unwrap), section_iter, zoom_infos, sections_handle.map(Result::unwrap)))
+        Ok((f.map(Result::unwrap), section_streams_rx.flatten()))
     }
 
-    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<TempZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64) -> std::io::Result<()> {
+    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64) -> std::io::Result<()> {
         // TODO: param
         const DO_COMPRESS: bool = true;
         const ITEMS_PER_SLOT: u32 = 1024;
 
         let mut zoom_count = 0;
-        for mut zoom in zooms {
-            futures::executor::block_on(zoom.1)?;
+        for zoom in zooms {
             let zoom_data_offset = file.tell()?;
 
-            let buf = zoom.2;
-            let mut zoom_file = buf.await_raw();
+            let mut zoom_file = zoom.1;
             let zoom_size = zoom_file.seek(SeekFrom::End(0))?;
             if zoom_size > (data_size / 2) {
                 //println!("Skipping zoom {:?} because it's size ({:?}) is greater than the data_size/2 ({:?})", zoom.0, zoom.3, data_size/2);
                 continue;
             }
-            let sections_iter = zoom.3.as_mut().into_iter().map(|mut section| {
+            let sections_iter = futures::executor::block_on_stream(zoom.2).map(|mut section| {
                 section.offset += zoom_data_offset;
                 section
             });

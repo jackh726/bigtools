@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use parking_lot::{Condvar, Mutex};
 use std::sync::{Arc};
 
@@ -9,11 +9,13 @@ enum BufferState {
     Real(Option<File>),
 }
 
+#[derive(Debug)]
 pub struct TempFileBuffer {
     state: Arc<Mutex<BufferState>>,
     closed: Arc<(Mutex<bool>, Condvar)>,
 }
 
+#[derive(Debug)]
 pub struct TempFileBufferWriter {
     state: Arc<Mutex<BufferState>>,
     closed: Arc<(Mutex<bool>, Condvar)>,
@@ -30,6 +32,7 @@ impl TempFileBuffer {
         ))
     }
 
+    #[allow(dead_code)]
     pub fn new_from_real(file: File) -> io::Result<(TempFileBuffer, TempFileBufferWriter)> {
         let state = Arc::new(Mutex::new(BufferState::Real(Some(file)))); 
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
@@ -42,7 +45,7 @@ impl TempFileBuffer {
     pub fn switch(&mut self, mut new_file: File) -> io::Result<()> {
         let mut guard = self.state.lock();
         use std::ops::DerefMut;
-        let mut state: &mut BufferState = guard.deref_mut();
+        let state: &mut BufferState = guard.deref_mut();
 
         match state {
             BufferState::Temp(ref mut file) => {
@@ -58,9 +61,7 @@ impl TempFileBuffer {
                 }
                 Ok(())
             },
-            BufferState::Real(ref mut file) => {
-                panic!("Already switched!");
-            }
+            BufferState::Real(_) => panic!("Already switched!"),
         }
     }
 
@@ -77,9 +78,7 @@ impl TempFileBuffer {
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
-            BufferState::Temp(ref mut file) => {
-                panic!("Must be called after switch.");
-            },
+            BufferState::Temp(_) => panic!("Must be called after switch."),
             BufferState::Real(ref mut file) => {
                 let file = file.take();
                 match file {
@@ -115,6 +114,35 @@ impl TempFileBuffer {
             }
         }
     }
+
+    pub fn expect_closed_write<O>(self, mut real: &mut O) -> io::Result<()> where O: Write {
+        let &(ref lock, ref cvar) =  &*self.closed;
+        let mut closed = lock.lock();
+
+        while !*closed {
+            cvar.wait(&mut closed);
+        }
+
+        let mut guard = self.state.lock();
+        use std::ops::DerefMut;
+        let state: &mut BufferState = guard.deref_mut();
+
+        match state {
+            BufferState::Temp(ref mut file) => {
+                match file {
+                    None => panic!(),
+                    Some(file) => {
+                        use std::io::Seek;
+                        file.seek(io::SeekFrom::Start(0))?;
+
+                        std::io::copy(file, &mut real)?;
+                    }
+                }
+                Ok(())
+            },
+            BufferState::Real(_) => panic!("Should only be writing to real file.")
+        }
+    }
 }
 
 impl Drop for TempFileBufferWriter {
@@ -123,6 +151,7 @@ impl Drop for TempFileBufferWriter {
         let mut closed = lock.lock();
         *closed = true;
         cvar.notify_one();
+        drop(closed);
     }
 }
 
