@@ -5,7 +5,7 @@ use std::sync::{Arc};
 
 #[derive(Debug)]
 enum BufferState {
-    Temp(File),
+    Temp(Option<File>),
     Real(Option<File>),
 }
 
@@ -22,7 +22,16 @@ pub struct TempFileBufferWriter {
 impl TempFileBuffer {
     pub fn new() -> io::Result<(TempFileBuffer, TempFileBufferWriter)> {
         let file = tempfile::tempfile()?;
-        let state = Arc::new(Mutex::new(BufferState::Temp(file))); 
+        let state = Arc::new(Mutex::new(BufferState::Temp(Some(file)))); 
+        let closed = Arc::new((Mutex::new(false), Condvar::new()));
+        Ok((
+            TempFileBuffer { state: state.clone(), closed: closed.clone() },
+            TempFileBufferWriter { state, closed },
+        ))
+    }
+
+    pub fn new_from_real(file: File) -> io::Result<(TempFileBuffer, TempFileBufferWriter)> {
+        let state = Arc::new(Mutex::new(BufferState::Real(Some(file)))); 
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
         Ok((
             TempFileBuffer { state: state.clone(), closed: closed.clone() },
@@ -37,11 +46,16 @@ impl TempFileBuffer {
 
         match state {
             BufferState::Temp(ref mut file) => {
-                use std::io::Seek;
-                file.seek(io::SeekFrom::Start(0))?;
+                match file {
+                    None => panic!(),
+                    Some(file) => {
+                        use std::io::Seek;
+                        file.seek(io::SeekFrom::Start(0))?;
 
-                std::io::copy(file, &mut new_file)?;
-                *guard = BufferState::Real(Some(new_file));
+                        std::io::copy(file, &mut new_file)?;
+                        *guard = BufferState::Real(Some(new_file));
+                    }
+                }
                 Ok(())
             },
             BufferState::Real(ref mut file) => {
@@ -75,6 +89,32 @@ impl TempFileBuffer {
             }
         }
     }
+
+    pub fn await_raw(self) -> File {
+        let &(ref lock, ref cvar) =  &*self.closed;
+        let mut closed = lock.lock();
+
+        while !*closed {
+            cvar.wait(&mut closed);
+        }
+
+        let mut guard = self.state.lock();
+        use std::ops::DerefMut;
+        let state: &mut BufferState = guard.deref_mut();
+
+        match state {
+            BufferState::Temp(ref mut file) => {
+                file.take().unwrap()
+            },
+            BufferState::Real(ref mut file) => {
+                let file = file.take();
+                match file {
+                    None => panic!("Already switched!"),
+                    Some(file) => file,
+                }
+            }
+        }
+    }
 }
 
 impl Drop for TempFileBufferWriter {
@@ -95,7 +135,10 @@ impl Write for TempFileBufferWriter {
 
         match state {
             BufferState::Temp(ref mut file) => {
-                file.write(buf)
+                match file {
+                    None => panic!(),
+                    Some(file) => file.write(buf),
+                }
             },
             BufferState::Real(ref mut file) => {
                 match file {
@@ -113,7 +156,10 @@ impl Write for TempFileBufferWriter {
 
         match state {
             BufferState::Temp(ref mut file) => {
-                file.flush()
+                match file {
+                    None => panic!(),
+                    Some(file) => file.flush(),
+                }
             },
             BufferState::Real(ref mut file) => {
                 match file {
