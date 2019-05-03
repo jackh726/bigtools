@@ -4,11 +4,11 @@ use std::io::{self, Result, Seek, SeekFrom};
 
 use byteordered::ByteOrdered;
 
-use crate::bigwig::BigWigRead;
+use crate::bigwig::{BigWigRead, BigWigWrite};
 use crate::bigwig::Value as ValueSection;
-use crate::bigwig::ValueWithChrom;
+use crate::bigwig::ChromGroupRead;
 
-
+use crate::idmap::IdMap;
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
@@ -469,10 +469,11 @@ fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> 
     }
 }
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=ValueWithChrom> + std::marker::Send> {
+pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=ChromGroupRead> + std::marker::Send> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
+    let mut chrom_ids = IdMap::new();
     for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
         if chrom_sizes.get(&chrom).is_some() {
             continue;
@@ -491,10 +492,12 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
             return Err(io::Error::new(io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
         }
 
-        chrom_sizes.insert(chrom, (size, bws));
+        chrom_sizes.insert(chrom.clone(), (chrom_ids.get_id(chrom), size, bws));
     }
 
-    let all_values = chrom_sizes.into_iter().flat_map(|(chrom, (size, bws))| {
+    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+
+    let all_values = chrom_sizes.into_iter().map(move |(chrom, (chrom_id, size, bws))| {
         let current_chrom = chrom.clone();
 
         // Owned version of BigWigRead::get_interval
@@ -542,14 +545,9 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
             vals_iter
         }).collect();
 
-        let values = merge_sections_many(iters).map(move |v| ValueWithChrom {
-            chrom: current_chrom.clone(),
-            start: v.start,
-            end: v.end,
-            value: v.value,
-        });
-        values
-    });
+        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters), pool.clone()).unwrap()
+    }); // Could be appended with `.collect::<Vec<_>>().into_iter();` to process all chroms in parallel
+    // This has a huge overhead of file descriptors though
 
     Ok(all_values)
 }

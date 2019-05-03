@@ -20,9 +20,10 @@ fn main() -> Result<(), std::io::Error> {
     args.next();
     let b1 = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
     let b2 = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
+    let sizes = args.next().unwrap_or_else(|| "/home/hueyj/temp/hg38.chrom.sizes".to_string());
     println!("Args: {:} {:}", b1, b2);
 
-    merge_test(b1, b2)?;
+    merge_test(b1, b2, sizes)?;
 
     Ok(())
 }
@@ -39,7 +40,7 @@ fn get_chrom_map(file: File) -> std::collections::HashMap<String, u32> {
         .collect()
 }
 
-fn merge_test(b1path: String, b2path: String) -> std::io::Result<()> {
+fn merge_test(b1path: String, b2path: String, chroms: String) -> std::io::Result<()> {
     //let b1 = BigWigRead::from_file_and_attach(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
     //let b2 = BigWigRead::from_file_and_attach(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
     //let mut b1 = BigWigRead::from_file_and_attach(String::from("/home/hueyj/temp/ENCFF207QBX.chr17.bigWig"))?;
@@ -53,10 +54,9 @@ fn merge_test(b1path: String, b2path: String) -> std::io::Result<()> {
     let out = String::from("/home/hueyj/temp/merge_test.bigWig");
     let outb = BigWigWrite::create_file(out)?;
 
-    let chroms = String::from("/home/hueyj/temp/hg38.chrom.sizes");
     let chrom_map = get_chrom_map(File::open(chroms)?);
 
-    outb.write(chrom_map, all_values)?;
+    outb.write_groups(chrom_map, all_values)?;
     
     Ok(())
 }

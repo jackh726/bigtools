@@ -164,7 +164,7 @@ pub struct Summary {
 type TempZoomInfo = (u32 /* resolution */, futures::future::RemoteHandle<std::io::Result<BufWriter<crate::tempfilebuffer::TempFileBufferWriter>>> /* Temp file that contains data */, crate::tempfilebuffer::TempFileBuffer, Box<Iterator<Item=Section> + std::marker::Send> /* sections */);
 type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Stream<Item=Section> + std::marker::Send + std::marker::Unpin> /* sections */);
 
-type ChromGroupRead = (
+pub(crate) type ChromGroupRead = (
     Box<Future<Output=io::Result<Summary>> + std::marker::Send + std::marker::Unpin>,
     Box<Iterator<Item=Section> + std::marker::Send>,
     crate::tempfilebuffer::TempFileBuffer,
@@ -875,7 +875,7 @@ impl BigWigWrite {
         })
     }
 
-    fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool)
+    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool)
         -> io::Result<ChromGroupRead>
         where I: Iterator<Item=Value> + std::marker::Send {
         let cloned_chrom = chrom.clone();
