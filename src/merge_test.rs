@@ -1,4 +1,4 @@
-#![feature(async_await, await_macro, futures_api, test)]
+#![feature(async_await, test)]
 
 use std::io::{BufReader, BufRead};
 use std::fs::File;
@@ -25,6 +25,7 @@ fn main() -> Result<(), std::io::Error> {
 
     merge_test(b1, b2, sizes)?;
 
+    //TODO: fails with too many open files
     Ok(())
 }
 

@@ -473,7 +473,6 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
-    let mut chrom_ids = IdMap::new();
     for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
         if chrom_sizes.get(&chrom).is_some() {
             continue;
@@ -492,12 +491,15 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
             return Err(io::Error::new(io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
         }
 
-        chrom_sizes.insert(chrom.clone(), (chrom_ids.get_id(chrom), size, bws));
+        chrom_sizes.insert(chrom.clone(), (size, bws));
     }
+
+    let mut chrom_ids = IdMap::new();
 
     let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
 
-    let all_values = chrom_sizes.into_iter().map(move |(chrom, (chrom_id, size, bws))| {
+    let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
+    let all_values = chrom_sizes.into_iter().zip(chrom_ids).map(move |((chrom, (size, bws)), chrom_id)| {
         let current_chrom = chrom.clone();
 
         // Owned version of BigWigRead::get_interval

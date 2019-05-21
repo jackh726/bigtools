@@ -65,7 +65,7 @@ impl TempFileBuffer {
         }
     }
 
-    pub fn await(self) -> File {
+    pub fn await_file(self) -> File {
         let &(ref lock, ref cvar) =  &*self.closed;
         let mut closed = lock.lock();
 

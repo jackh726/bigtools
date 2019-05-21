@@ -1,4 +1,4 @@
-#![feature(async_await, await_macro, futures_api, test)]
+#![feature(async_await, await_macro, test)]
 
 use std::io::{BufReader, BufRead};
 use std::fs::File;
