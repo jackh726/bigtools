@@ -203,6 +203,7 @@ impl Write for TempFileBufferWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     extern crate test;
 
     #[test]
@@ -210,7 +211,7 @@ mod tests {
         let (mut buf, mut writer) = TempFileBuffer::new()?;
 
         const NUM_BYTES: usize = 50;
-        let writethread = std::thread::spawn(move || {
+        let _writethread = std::thread::spawn(move || {
             for i in 0..NUM_BYTES {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 let writebuf = &mut [(i % 8) as u8; 1];
@@ -223,7 +224,7 @@ mod tests {
         let outfile = tempfile::tempfile()?;
         buf.switch(outfile)?;
 
-        let mut file = buf.await();
+        let mut file = buf.await_raw();
 
         use std::io::Seek;
         file.seek(io::SeekFrom::Start(0))?;
