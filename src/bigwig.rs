@@ -616,15 +616,27 @@ impl BigWigRead {
     }
 }
 
+#[derive(Clone)]
+pub struct BigWigWriteOptions {
+    pub compress: bool,
+    pub items_per_slot: u32,
+    pub block_size: u32,
+}
 
 pub struct BigWigWrite {
     pub path: String,
+    pub options: BigWigWriteOptions,
 }
 
 impl BigWigWrite {
     pub fn create_file(path: String) -> std::io::Result<Self> {
         Ok(BigWigWrite {
             path,
+            options: BigWigWriteOptions {
+                compress: true,
+                items_per_slot: 1024,
+                block_size: 256,
+            }
         })
     }
 
@@ -638,6 +650,7 @@ impl BigWigWrite {
 
         let pool = futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool.");
 
+        let options = self.options.clone();
         let group_iter = chrom_vals_iter.map(move |(chrom, group)| {
             let last = last_chrom.replace(chrom.clone());
             if let Some(c) = last {
@@ -647,7 +660,7 @@ impl BigWigWrite {
             }
 
             let chrom_id = chrom_ids.get_id(chrom.clone());
-            BigWigWrite::read_group(chrom, chrom_id, group, pool.clone()).unwrap()
+            BigWigWrite::read_group(chrom, chrom_id, group, pool.clone(), options.clone()).unwrap()
         });
 
         self.write_groups(chrom_sizes, group_iter)
@@ -680,7 +693,7 @@ impl BigWigWrite {
             section
         });
         let (chrom_ids, summary, mut file, zoom_infos) = futures::executor::block_on(chrom_summary_future);
-        let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter);
+        let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, &self.options);
         let data_size = file.tell()? - pre_data;
         println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", total_sections);
@@ -695,21 +708,18 @@ impl BigWigWrite {
         BigWigWrite::write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
 
         let index_start = file.tell()?;
-        BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections)?;
-
-        const DO_COMPRESS: bool = true; // TODO: param
-        const ITEMS_PER_SLOT: u32 = 1024; // TODO: param
+        BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections, &self.options)?;
 
         let mut zoom_entries: Vec<ZoomHeader> = vec![];
-        BigWigWrite::write_zooms(&mut file, zoom_infos, &mut zoom_entries, data_size)?;
+        BigWigWrite::write_zooms(&mut file, zoom_infos, &mut zoom_entries, data_size, &self.options)?;
 
         //println!("Zoom entries: {:?}", zoom_entries);
         let num_zooms = zoom_entries.len() as u16;
 
         // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
         // In most cases, I think this is the true max size (unless there is only one section and its less than ITEMS_PER_SLOT in size)
-        let uncompress_buf_size = if DO_COMPRESS {
-            ITEMS_PER_SLOT * (1 + 1 + 2 + 4 + 4 + 4 + 4 + 8 + 8)
+        let uncompress_buf_size = if self.options.compress {
+            self.options.items_per_slot * (1 + 1 + 2 + 4 + 4 + 4 + 4 + 8 + 8)
         } else {
             0
         };
@@ -825,7 +835,7 @@ impl BigWigWrite {
         res
     }
 
-    async fn write_section(items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
+    async fn write_section(compress: bool, items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -845,9 +855,7 @@ impl BigWigWrite {
             bytes.write_f32::<NativeEndian>(item.val)?;   
         }
 
-        let COMPRESS = true;
-
-        let out_bytes = if COMPRESS {
+        let out_bytes = if compress {
             let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
             e.write_all(&bytes)?;
             e.finish()?
@@ -863,7 +871,7 @@ impl BigWigWrite {
         })
     }
 
-    async fn write_zoom_section(items_in_section: Vec<ZoomRecord>) -> std::io::Result<SectionData> {
+    async fn write_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> std::io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -881,9 +889,7 @@ impl BigWigWrite {
             bytes.write_f32::<NativeEndian>(item.sum_squares)?; 
         }
 
-        let COMPRESS = true;
-
-        let out_bytes = if COMPRESS {
+        let out_bytes = if compress {
             let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
             e.write_all(&bytes)?;
             e.finish()?
@@ -899,11 +905,10 @@ impl BigWigWrite {
         })
     }
 
-    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool)
+    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
         -> io::Result<ChromGroupRead>
         where I: Iterator<Item=Value> + std::marker::Send {
         let cloned_chrom = chrom.clone();
-        const ITEMS_PER_SLOT: u16 = 1024;
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
         let num_zooms = zoom_sizes.len();
@@ -981,10 +986,10 @@ impl BigWigWrite {
             let mut peekable_vals = group.peekable();
 
             let mut state_val = BedGraphSection {
-                items: Vec::with_capacity(ITEMS_PER_SLOT as usize),
+                items: Vec::with_capacity(options.items_per_slot as usize),
                 zoom_items: (0..num_zooms).map(|_| ZoomItem {
                     live_info: None,
-                    records: Vec::with_capacity(ITEMS_PER_SLOT as usize)
+                    records: Vec::with_capacity(options.items_per_slot as usize)
                 }).collect(),
             };
             while let Some(current_val) = peekable_vals.next() {
@@ -1043,10 +1048,10 @@ impl BigWigWrite {
                                 // Set where we would start for next time
                                 add_start = std::cmp::max(add_end, current_val.start);
                                 // Write section if full
-                                debug_assert!(zoom_item.records.len() <= ITEMS_PER_SLOT as usize);
-                                if zoom_item.records.len() == ITEMS_PER_SLOT as usize {
+                                debug_assert!(zoom_item.records.len() <= options.items_per_slot as usize);
+                                if zoom_item.records.len() == options.items_per_slot as usize {
                                     let items = std::mem::replace(&mut zoom_item.records, vec![]);
-                                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
+                                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(options.compress, items)).expect("Couldn't spawn.");
                                     zooms_channels[i].send(handle.boxed()).await.expect("Couln't send");
                                 }
                             }
@@ -1058,9 +1063,9 @@ impl BigWigWrite {
                     end: current_val.end,
                     val: current_val.value,
                 });
-                if state_val.items.len() >= ITEMS_PER_SLOT as usize {
+                if state_val.items.len() >= options.items_per_slot as usize {
                     let items = std::mem::replace(&mut state_val.items, vec![]);
-                    let handle = pool.spawn_with_handle(BigWigWrite::write_section(items, chromId)).expect("Couldn't spawn.");
+                    let handle = pool.spawn_with_handle(BigWigWrite::write_section(options.compress, items, chromId)).expect("Couldn't spawn.");
                     ftx.send(handle.boxed()).await.expect("Couldn't send");
                 }
 
@@ -1101,7 +1106,7 @@ impl BigWigWrite {
 
             let lastchrom = chrom.clone();
             if !state_val.items.is_empty() {
-                let handle = pool.spawn_with_handle(BigWigWrite::write_section(state_val.items, chromId)).expect("Couldn't spawn.");
+                let handle = pool.spawn_with_handle(BigWigWrite::write_section(options.compress, state_val.items, chromId)).expect("Couldn't spawn.");
                 ftx.send(handle.boxed()).await.expect("Couldn't send");
             }
 
@@ -1122,7 +1127,7 @@ impl BigWigWrite {
                 }
                 if !zoom_item.records.is_empty() {
                     let items = zoom_item.records;
-                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(items)).expect("Couldn't spawn.");
+                    let handle = pool.spawn_with_handle(BigWigWrite::write_zoom_section(options.compress, items)).expect("Couldn't spawn.");
                     zooms_channels[i].send(handle.boxed()).await.expect("Couln't send");
                 }
             }
@@ -1176,7 +1181,6 @@ impl BigWigWrite {
         impl futures::Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
         impl Iterator<Item=Section>,
         )> where V : std::iter::Iterator<Item=ChromGroupRead> + std::marker::Send {
-        const ITEMS_PER_SLOT: u16 = 1024;
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
@@ -1252,11 +1256,7 @@ impl BigWigWrite {
         Ok((f.map(Result::unwrap), BigWigWrite::create_section_iter(bo_reader)))
     }
 
-    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64) -> std::io::Result<()> {
-        // TODO: param
-        const DO_COMPRESS: bool = true;
-        const ITEMS_PER_SLOT: u32 = 1024;
-
+    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64, options: &BigWigWriteOptions) -> std::io::Result<()> {
         let mut zoom_count = 0;
         for zoom in zooms {
             let mut zoom_file = zoom.1;
@@ -1278,8 +1278,8 @@ impl BigWigWrite {
             let zoom_index_offset = file.tell()?;
             //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.0, zoom_data_offset, zoom_index_offset);
             assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
-            let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter);
-            BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections)?;
+            let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, options);
+            BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
 
             zoom_entries.push(ZoomHeader {
                 reduction_level: zoom.0,
@@ -1296,9 +1296,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    fn get_rtreeindex<S>(sections_stream: S) -> (RTreeNodeList<RTreeNode>, usize, u64) where S : Iterator<Item=Section> {
-        const BLOCK_SIZE: u32 = 256;
-
+    fn get_rtreeindex<S>(sections_stream: S, options: &BigWigWriteOptions) -> (RTreeNodeList<RTreeNode>, usize, u64) where S : Iterator<Item=Section> {
         let mut total_sections = 0;
         let mut current_nodes: Box<Iterator<Item=RTreeNode>> = Box::new(sections_stream.map(|s| RTreeNode {
             start_chrom_idx: s.chrom,
@@ -1361,7 +1359,7 @@ impl BigWigWrite {
                             end_chrom_idx = std::cmp::max(end_chrom_idx, node.end_chrom_idx);
                         }
                         current_group.push(node);
-                        if current_group.len() >= BLOCK_SIZE as usize {
+                        if current_group.len() >= options.block_size as usize {
                             if !levelup {
                                 levels += 1;
                                 levelup = true;
@@ -1383,7 +1381,7 @@ impl BigWigWrite {
                 }
             }
 
-            if next_nodes.len() < BLOCK_SIZE as usize {
+            if next_nodes.len() < options.block_size as usize {
                 break RTreeNodeList::<RTreeNode> {
                     nodes: next_nodes
                 }
@@ -1397,9 +1395,7 @@ impl BigWigWrite {
         (nodes, levels, total_sections)
     }
 
-    fn write_rtreeindex(file: &mut BufWriter<File>, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64) -> std::io::Result<()> {
-        const BLOCK_SIZE: u32 = 256;
-
+    fn write_rtreeindex(file: &mut BufWriter<File>, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64, options: &BigWigWriteOptions) -> std::io::Result<()> {
         const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
         const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
         const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
@@ -1440,10 +1436,9 @@ impl BigWigWrite {
         calculate_offsets(&mut index_offsets, &nodes, levels)?;
         //println!("index Offsets: {:?}", index_offsets);
 
-
-        const NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * BLOCK_SIZE as u64;
-        const LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * BLOCK_SIZE as u64;
-        fn write_tree(mut file: &mut BufWriter<File>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64) -> std::io::Result<u64> {
+        fn write_tree(mut file: &mut BufWriter<File>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64, options: &BigWigWriteOptions) -> std::io::Result<u64> {
+            let NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * options.block_size as u64;
+            let LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * options.block_size as u64;
             assert!(curr_level >= dest_level);
             let mut total_size = 0;
             if curr_level != dest_level {
@@ -1453,7 +1448,7 @@ impl BigWigWrite {
                         RTreeNodeType::Leaf { .. } => panic!("Leaf node found at level {}", curr_level),
                         RTreeNodeType::NonLeaf { children, .. } => {
                             debug_assert!(curr_level != 0);
-                            next_offset_offset += write_tree(&mut file, &children, curr_level - 1, dest_level, childnode_offset + next_offset_offset)?;
+                            next_offset_offset += write_tree(&mut file, &children, curr_level - 1, dest_level, childnode_offset + next_offset_offset, options)?;
                         },
                     }
                 }
@@ -1503,14 +1498,12 @@ impl BigWigWrite {
             Ok(total_size)
         }
 
-        // TODO remove
-        const ITEMS_PER_SLOT: u32 = 1024;
 
         let end_of_data = file.seek(SeekFrom::Current(0))?;
         {
             //println!("cirTree header (write):\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", BLOCK_SIZE, section_count, nodes.nodes[0].start_chrom_idx, nodes.nodes[0].start_base, nodes.nodes[nodes.nodes.len() - 1].end_chrom_idx, nodes.nodes[nodes.nodes.len() - 1].end_base, end_of_data, ITEMS_PER_SLOT, 0);
             file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
-            file.write_u32::<NativeEndian>(BLOCK_SIZE)?;
+            file.write_u32::<NativeEndian>(options.block_size)?;
             file.write_u64::<NativeEndian>(section_count)?;
             if nodes.nodes.len() == 0 {
                 file.write_u32::<NativeEndian>(0)?;
@@ -1524,7 +1517,7 @@ impl BigWigWrite {
                 file.write_u32::<NativeEndian>(nodes.nodes[nodes.nodes.len() - 1].end_base)?;
             }
             file.write_u64::<NativeEndian>(end_of_data)?;
-            file.write_u32::<NativeEndian>(ITEMS_PER_SLOT)?;
+            file.write_u32::<NativeEndian>(options.items_per_slot)?;
             file.write_u32::<NativeEndian>(0)?;
         }
 
@@ -1535,7 +1528,7 @@ impl BigWigWrite {
             if level > 0 {
                 next_offset += index_offsets[level - 1];
             }
-            write_tree(file, &nodes, levels, level, next_offset)?;
+            write_tree(file, &nodes, levels, level, next_offset, options)?;
             //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
 
