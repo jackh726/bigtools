@@ -765,7 +765,7 @@ impl BigWigWrite {
     fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
         let mut chroms: Vec<&String> = chrom_ids.keys().collect();
         chroms.sort();
-        println!("Used chroms {:?}", chroms);
+        //println!("Used chroms {:?}", chroms);
 
         file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
         let item_count = chroms.len() as u64;
@@ -845,7 +845,7 @@ impl BigWigWrite {
             bytes.write_f32::<NativeEndian>(item.val)?;   
         }
 
-        let COMPRESS = false;
+        let COMPRESS = true;
 
         let out_bytes = if COMPRESS {
             let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
@@ -881,7 +881,7 @@ impl BigWigWrite {
             bytes.write_f32::<NativeEndian>(item.sum_squares)?; 
         }
 
-        let COMPRESS = false;
+        let COMPRESS = true;
 
         let out_bytes = if COMPRESS {
             let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
@@ -1259,14 +1259,14 @@ impl BigWigWrite {
 
         let mut zoom_count = 0;
         for zoom in zooms {
-            let zoom_data_offset = file.tell()?;
-
             let mut zoom_file = zoom.1;
             let zoom_size = zoom_file.seek(SeekFrom::End(0))?;
             if zoom_size > (data_size / 2) {
                 //println!("Skipping zoom {:?} because it's size ({:?}) is greater than the data_size/2 ({:?})", zoom.0, zoom.3, data_size/2);
                 continue;
             }
+            let zoom_data_offset = file.tell()?;
+
             let sections_iter = zoom.2.map(|mut section| {
                 section.offset += zoom_data_offset;
                 section
@@ -1275,7 +1275,9 @@ impl BigWigWrite {
             zoom_file.seek(SeekFrom::Start(0))?;
             let mut buf_reader = std::io::BufReader::new(zoom_file);
             std::io::copy(&mut buf_reader, &mut file)?;
-            let zoom_index_offset = file.seek(SeekFrom::Current(0))?;
+            let zoom_index_offset = file.tell()?;
+            //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.0, zoom_data_offset, zoom_index_offset);
+            assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
             let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter);
             BigWigWrite::write_rtreeindex(&mut file, nodes, levels, total_sections)?;
 
@@ -1528,7 +1530,7 @@ impl BigWigWrite {
 
         let mut next_offset = file.seek(SeekFrom::Current(0))?;
         //println!("Levels: {:?}", levels);
-        //println!("Start of index: {}", current_offset);
+        //println!("Start of index: {}", next_offset);
         for level in (0..=levels).rev() {
             if level > 0 {
                 next_offset += index_offsets[level - 1];

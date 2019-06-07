@@ -547,7 +547,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
             vals_iter
         }).collect();
 
-        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters), pool.clone()).unwrap()
+        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters).filter(|x| x.value != 0.0), pool.clone()).unwrap()
     }); // Could be appended with `.collect::<Vec<_>>().into_iter();` to process all chroms in parallel
     // This has a huge overhead of file descriptors though
 
