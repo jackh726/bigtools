@@ -21,8 +21,7 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 
-use crate::bedgraphparser::ChromGroup;
-use crate::chromvalues::{ChromGroups, ChromValues};
+use crate::chromvalues::ChromValues;
 use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
@@ -61,10 +60,10 @@ struct ZoomHeader {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ChromInfo {
-    pub(crate) name: String,
+pub struct ChromInfo {
+    pub name: String,
     id: u32,
-    pub(crate) length: u32,
+    pub length: u32,
 }
 
 #[derive(Debug)]
@@ -93,9 +92,9 @@ pub struct BigWigInfo {
 }
 
 #[derive(Debug)]
-pub(crate) struct Block {
-    pub(crate) offset: u64,
-    pub(crate) size: u64,
+pub struct Block {
+    pub offset: u64,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +166,7 @@ pub struct Summary {
 type TempZoomInfo = (u32 /* resolution */, futures::future::RemoteHandle<std::io::Result<()>> /* Temp file that contains data */, TempFileBuffer, TempFileBuffer /* sections */);
 type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Iterator<Item=Section>> /* sections */);
 
-pub(crate) type ChromGroupRead = (
+pub type ChromGroupRead = (
     Box<Future<Output=io::Result<Summary>> + std::marker::Send + std::marker::Unpin>,
     TempFileBuffer,
     crate::tempfilebuffer::TempFileBuffer,
@@ -201,7 +200,7 @@ struct ZoomRecord {
 #[derive(Clone)]
 pub struct BigWigRead {
     pub path: String,
-    pub(crate) info: BigWigInfo,
+    pub info: BigWigInfo,
 }
 
 impl BigWigRead {
@@ -498,7 +497,7 @@ impl BigWigRead {
         Ok(blocks)
     }
 
-    pub(crate) fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+    pub fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
         let endianness = self.info.header.endianness;
         let fp = File::open(self.path.clone())?;
         let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
@@ -510,7 +509,7 @@ impl BigWigRead {
     }
 
     /// This assumes that the file is currently at the block's start
-    pub(crate) fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: &Block) -> std::io::Result<impl Iterator<Item=Value>> {
+    pub fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: &Block) -> std::io::Result<impl Iterator<Item=Value>> {
         let endianness = self.info.header.endianness;
         let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
         let mut values: Vec<Value> = Vec::new();
@@ -647,43 +646,6 @@ impl BigWigWrite {
     }
 
     const MAX_ZOOM_LEVELS: usize = 10;
-
-    pub fn write<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> io::Result<()> where V : ChromGroups<ChromGroup> + std::marker::Send {        
-        struct ChromGroupReadStreamingIteratorImpl<C: ChromGroups<ChromGroup>> {
-            chrom_groups: C,
-            last_chrom: Option<String>,
-            chrom_ids: IdMap<String>,
-            pool: futures::executor::ThreadPool,
-            options: BigWigWriteOptions,
-        }
-
-        impl<C: ChromGroups<ChromGroup>> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<C> {
-            fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
-                match self.chrom_groups.next()? {
-                    Some((chrom, group)) => {
-                        let last = self.last_chrom.replace(chrom.clone());
-                        if let Some(c) = last {
-                            // TODO: test this correctly fails
-                            // TODO: change these to not panic
-                            assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
-                        }
-                        let chrom_id = self.chrom_ids.get_id(chrom.clone());
-                        Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone()).unwrap()))
-                    },
-                    None => Ok(None),
-                }
-            }
-        }
-
-        let group_iter = ChromGroupReadStreamingIteratorImpl {
-            chrom_groups: vals,
-            last_chrom: None,
-            chrom_ids: IdMap::new(),
-            pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
-            options: self.options.clone(),
-        };
-        self.write_groups(chrom_sizes, group_iter)
-    }
 
     pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> std::io::Result<()> where V : ChromGroupReadStreamingIterator + std::marker::Send {
         let fp = File::create(self.path.clone())?;
@@ -924,7 +886,7 @@ impl BigWigWrite {
         })
     }
 
-    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, mut group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
+    pub fn read_group<I: 'static>(chrom: String, chromId: u32, mut group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
         -> io::Result<ChromGroupRead>
         where I: ChromValues + std::marker::Send {
         let cloned_chrom = chrom.clone();

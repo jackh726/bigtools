@@ -4,14 +4,14 @@ use std::io::{self, Result, Seek, SeekFrom};
 
 use byteordered::ByteOrdered;
 
-use crate::bigwig::BigWigWriteOptions;
-use crate::bigwig::ChromGroupReadStreamingIterator;
-use crate::chromvalues::ChromValues;
-use crate::bigwig::{BigWigRead, BigWigWrite};
-use crate::bigwig::{Value as ValueSection, Value};
-use crate::bigwig::ChromGroupRead;
+use bigwig2::bigwig::BigWigWriteOptions;
+use bigwig2::bigwig::ChromGroupReadStreamingIterator;
+use bigwig2::chromvalues::ChromValues;
+use bigwig2::bigwig::{BigWigRead, BigWigWrite};
+use bigwig2::bigwig::{Value as ValueSection, Value};
+use bigwig2::bigwig::ChromGroupRead;
 
-use crate::idmap::IdMap;
+use bigwig2::idmap::IdMap;
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
@@ -498,9 +498,6 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     }
 
     let mut chrom_ids = IdMap::new();
-
-    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
-
     let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
 
     struct MergingValues<I: Iterator<Item=Value> + std::marker::Send> {

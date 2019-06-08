@@ -1,22 +1,13 @@
-#![feature(async_await, test)]
-
 use std::io::{BufReader, BufRead};
 use std::fs::File;
 
-mod bigwig;
-use bigwig::BigWigRead;
-use bigwig::BigWigWrite;
+extern crate bigwig2;
 
-mod idmap;
-mod tell;
+use bigwig2::bigwig::BigWigRead;
+use bigwig2::bigwig::BigWigWrite;
 
 mod bigwigmerge;
-mod tempfilewrite;
-mod bedgraphreader;
-mod tempfilebuffer;
-mod streaming_linereader;
-mod bedgraphparser;
-mod chromvalues;
+
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();

@@ -1,20 +1,11 @@
-#![feature(async_await, await_macro, test)]
-
 use std::io::{BufReader, BufRead};
 use std::fs::File;
 
-mod bigwig;
-use bigwig::BigWigWrite;
-use bigwig::ValueWithChrom;
+extern crate bigwig2;
 
-mod idmap;
-mod tell;
-mod tempfilewrite;
-mod bedgraphreader;
-mod tempfilebuffer;
-mod streaming_linereader;
-mod bedgraphparser;
-mod chromvalues;
+use bigwig2::bigwig::BigWigWrite;
+use bigwig2::bedgraphparser;
+
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
@@ -49,7 +40,9 @@ fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
     println!("Reading file.");
     let infile = File::open(bg)?;
 
-    let vals_iter = bedgraphparser::BedGraphParser::new(infile);
-    outb.write(chrom_map, vals_iter)?;
+    let vals_iter = bedgraphparser::BedGraphParser::<BufReader<File>>::new(infile);
+    let chsi = bedgraphparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone());
+    outb.write_groups(chrom_map, chsi)?;
+    //outb.write(chrom_map, vals_iter)?;
     Ok(())
 }

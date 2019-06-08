@@ -1,13 +1,7 @@
-#![feature(async_await, await_macro, test)]
+extern crate bigwig2;
 
-mod bigwig;
-use bigwig::BigWigRead;
+use bigwig2::bigwig::BigWigRead;
 
-mod idmap;
-mod tell;
-mod tempfilewrite;
-mod bedgraphreader;
-mod tempfilebuffer;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();

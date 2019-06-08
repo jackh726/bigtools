@@ -1,12 +1,12 @@
 use std::io::{self, BufRead};
 
 #[derive(Debug)]
-pub struct StreamingLineReader<B: BufRead + std::fmt::Debug> {
+pub struct StreamingLineReader<B: BufRead> {
     current_line: String,
     buf_read: B,
 }
 
-impl<B: BufRead + std::fmt::Debug> StreamingLineReader<B> {
+impl<B: BufRead> StreamingLineReader<B> {
     pub fn new(bf: B) -> StreamingLineReader<B> {
         return StreamingLineReader {
             current_line: String::new(),
