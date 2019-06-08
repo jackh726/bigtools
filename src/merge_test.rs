@@ -14,6 +14,9 @@ mod bigwigmerge;
 mod tempfilewrite;
 mod bedgraphreader;
 mod tempfilebuffer;
+mod streaming_linereader;
+mod bedgraphparser;
+mod chromvalues;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
@@ -50,10 +53,11 @@ fn merge_test(b1path: String, b2path: String, chroms: String) -> std::io::Result
     let b1 = BigWigRead::from_file_and_attach(b1path)?;
     let b2 = BigWigRead::from_file_and_attach(b2path)?;
 
-    let all_values = bigwigmerge::get_merged_values(vec![b1, b2])?;
 
     let out = String::from("/home/hueyj/temp/merge_test.bigWig");
     let outb = BigWigWrite::create_file(out)?;
+
+    let all_values = bigwigmerge::get_merged_values(vec![b1, b2], outb.options.clone())?;
 
     let chrom_map = get_chrom_map(File::open(chroms)?);
 

@@ -38,3 +38,7 @@ path = "src/read_test.rs"
 name = "mergetest"
 path = "src/merge_test.rs"
 
+[[bin]]
+name = "bgread"
+path = "src/bgread.rs"
+

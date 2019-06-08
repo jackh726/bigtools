@@ -12,6 +12,9 @@ mod tell;
 mod tempfilewrite;
 mod bedgraphreader;
 mod tempfilebuffer;
+mod streaming_linereader;
+mod bedgraphparser;
+mod chromvalues;
 
 fn main() -> Result<(), std::io::Error> {
     let mut args = std::env::args();
@@ -45,20 +48,8 @@ fn write_test(bg: String, chroms: String, out: String) -> std::io::Result<()> {
 
     println!("Reading file.");
     let infile = File::open(bg)?;
-    //let infile = File::open("/home/hueyj/temp/test.bedGraph")?;
-    let vals_iter = BufReader::new(infile)
-        .lines()
-        .map(|l| {
-            let words = l.expect("Split error");
-            let mut split = words.split_whitespace();
-            ValueWithChrom {
-                chrom: split.next().expect("Missing chrom").to_owned(),
-                start: split.next().expect("Missing start").parse::<u32>().unwrap(),
-                end: split.next().expect("Missing end").parse::<u32>().unwrap(),
-                value: split.next().expect("Missing value").parse::<f32>().unwrap(),
-            }
-        });
 
+    let vals_iter = bedgraphparser::BedGraphParser::new(infile);
     outb.write(chrom_map, vals_iter)?;
     Ok(())
 }

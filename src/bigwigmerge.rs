@@ -4,8 +4,11 @@ use std::io::{self, Result, Seek, SeekFrom};
 
 use byteordered::ByteOrdered;
 
+use crate::bigwig::BigWigWriteOptions;
+use crate::bigwig::ChromGroupReadStreamingIterator;
+use crate::chromvalues::ChromValues;
 use crate::bigwig::{BigWigRead, BigWigWrite};
-use crate::bigwig::Value as ValueSection;
+use crate::bigwig::{Value as ValueSection, Value};
 use crate::bigwig::ChromGroupRead;
 
 use crate::idmap::IdMap;
@@ -469,7 +472,7 @@ fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> 
     }
 }
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=ChromGroupRead> + std::marker::Send> {
+pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) -> Result<impl ChromGroupReadStreamingIterator + std::marker::Send> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
@@ -499,6 +502,98 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
     let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
 
     let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
+
+    struct MergingValues<I: Iterator<Item=Value> + std::marker::Send> {
+        iter: std::iter::Peekable<I>,
+    }
+
+    impl<I: Iterator<Item=Value> + std::marker::Send> ChromValues for MergingValues<I> {
+        fn next(&mut self) -> io::Result<Option<Value>> {
+            Ok(self.iter.next())
+        }
+
+        fn peek(&mut self) -> Option<&Value> {
+            self.iter.peek()
+        }
+    }
+
+    struct ChromGroupReadStreamingIteratorImpl {
+        pool: futures::executor::ThreadPool,
+        options: BigWigWriteOptions,
+        iter: Box<Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + std::marker::Send>,
+    }
+
+    impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
+        fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
+            let next = self.iter.next();
+            match next {
+                Some(((chrom, (size, bws)), chrom_id)) => {
+                    let current_chrom = chrom.clone();
+
+                    // Owned version of BigWigRead::get_interval
+                    // TODO: how to please the borrow checker
+                    // This doesn't work:
+                    // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
+
+                    let iters: Vec<_> = bws.into_iter().map(move |b| {
+                        let blocks = b.get_overlapping_blocks(&chrom, 1, size).unwrap();
+
+                        let endianness = b.info.header.endianness;
+                        let fp = File::open(b.path.clone()).unwrap();
+                        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
+
+                        if blocks.len() > 0 {
+                            file.seek(SeekFrom::Start(blocks[0].offset)).unwrap();
+                        }
+                        let mut iter = blocks.into_iter().peekable();
+                        
+                        let block_iter = std::iter::from_fn(move || {
+                            let next = iter.next();
+                            let peek = iter.peek();
+                            let next_offset = match peek {
+                                None => None,
+                                Some(peek) => Some(peek.offset),
+                            };
+                            match next {
+                                None => None,
+                                Some(next) => Some((next, next_offset))
+                            }
+                        });
+                        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
+                            // TODO: Could minimize this by chunking block reads
+                            let vals = b.get_block_values(&mut file, &block).unwrap();
+                            match next_offset {
+                                None => (),
+                                Some(next_offset) => {
+                                    if next_offset != block.offset + block.size {
+                                        file.seek(SeekFrom::Start(next_offset)).unwrap();
+                                    }
+                                }
+                            }
+                            vals
+                        });
+                        vals_iter
+                    }).collect();
+
+                    let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
+                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone()).unwrap()))
+                },
+                None => {
+                    return Ok(None)       
+                },
+            }
+        }
+    }
+
+    let group_iter = ChromGroupReadStreamingIteratorImpl {
+        pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
+        options: options,
+        iter: Box::new(chrom_sizes.into_iter().zip(chrom_ids)),
+    };
+
+    Ok(group_iter)
+
+/*
     let all_values = chrom_sizes.into_iter().zip(chrom_ids).map(move |((chrom, (size, bws)), chrom_id)| {
         let current_chrom = chrom.clone();
 
@@ -547,11 +642,11 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>) -> Result<impl Iterator<Item=
             vals_iter
         }).collect();
 
-        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters).filter(|x| x.value != 0.0), pool.clone()).unwrap()
+        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters).filter(|x| x.value != 0.0), pool.clone(), options.clone()).unwrap()
     }); // Could be appended with `.collect::<Vec<_>>().into_iter();` to process all chroms in parallel
     // This has a huge overhead of file descriptors though
-
     Ok(all_values)
+*/
 }
 
 #[cfg(test)]

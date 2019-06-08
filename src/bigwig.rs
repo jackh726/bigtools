@@ -21,6 +21,8 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 
+use crate::bedgraphparser::ChromGroup;
+use crate::chromvalues::{ChromGroups, ChromValues};
 use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
@@ -173,6 +175,10 @@ pub(crate) type ChromGroupRead = (
     Vec<TempZoomInfo>,
     (String, u32)
 );
+
+pub trait ChromGroupReadStreamingIterator {
+    fn next(&mut self) -> io::Result<Option<ChromGroupRead>>;
+}
 
 struct BedGraphSectionItem {
     start: u32,
@@ -642,31 +648,44 @@ impl BigWigWrite {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> io::Result<()> where V : std::iter::Iterator<Item=ValueWithChrom> + std::marker::Send {
-        let chrom_vals_iter = crate::bedgraphreader::BedGraphReader::new(vals);
-        
-        let mut chrom_ids = IdMap::new();
-        let mut last_chrom: Option<String> = None;
+    pub fn write<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> io::Result<()> where V : ChromGroups<ChromGroup> + std::marker::Send {        
+        struct ChromGroupReadStreamingIteratorImpl<C: ChromGroups<ChromGroup>> {
+            chrom_groups: C,
+            last_chrom: Option<String>,
+            chrom_ids: IdMap<String>,
+            pool: futures::executor::ThreadPool,
+            options: BigWigWriteOptions,
+        }
 
-        let pool = futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool.");
-
-        let options = self.options.clone();
-        let group_iter = chrom_vals_iter.map(move |(chrom, group)| {
-            let last = last_chrom.replace(chrom.clone());
-            if let Some(c) = last {
-                // TODO: test this correctly fails
-                // TODO: change these to not panic
-                assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
+        impl<C: ChromGroups<ChromGroup>> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<C> {
+            fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
+                match self.chrom_groups.next()? {
+                    Some((chrom, group)) => {
+                        let last = self.last_chrom.replace(chrom.clone());
+                        if let Some(c) = last {
+                            // TODO: test this correctly fails
+                            // TODO: change these to not panic
+                            assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
+                        }
+                        let chrom_id = self.chrom_ids.get_id(chrom.clone());
+                        Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone()).unwrap()))
+                    },
+                    None => Ok(None),
+                }
             }
+        }
 
-            let chrom_id = chrom_ids.get_id(chrom.clone());
-            BigWigWrite::read_group(chrom, chrom_id, group, pool.clone(), options.clone()).unwrap()
-        });
-
+        let group_iter = ChromGroupReadStreamingIteratorImpl {
+            chrom_groups: vals,
+            last_chrom: None,
+            chrom_ids: IdMap::new(),
+            pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
+            options: self.options.clone(),
+        };
         self.write_groups(chrom_sizes, group_iter)
     }
 
-    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> std::io::Result<()> where V : std::iter::Iterator<Item=ChromGroupRead> + std::marker::Send {
+    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> std::io::Result<()> where V : ChromGroupReadStreamingIterator + std::marker::Send {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -905,9 +924,9 @@ impl BigWigWrite {
         })
     }
 
-    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
+    pub(crate) fn read_group<I: 'static>(chrom: String, chromId: u32, mut group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
         -> io::Result<ChromGroupRead>
-        where I: Iterator<Item=Value> + std::marker::Send {
+        where I: ChromValues + std::marker::Send {
         let cloned_chrom = chrom.clone();
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
@@ -983,8 +1002,6 @@ impl BigWigWrite {
         let read_file = async move || -> std::io::Result<Summary> {
             let mut summary: Option<Summary> = None;
 
-            let mut peekable_vals = group.peekable();
-
             let mut state_val = BedGraphSection {
                 items: Vec::with_capacity(options.items_per_slot as usize),
                 zoom_items: (0..num_zooms).map(|_| ZoomItem {
@@ -992,7 +1009,7 @@ impl BigWigWrite {
                     records: Vec::with_capacity(options.items_per_slot as usize)
                 }).collect(),
             };
-            while let Some(current_val) = peekable_vals.next() {
+            while let Some(current_val) = group.next()? {
                 // TODO: test this correctly fails
                 // TODO: change these to not panic
                 assert!(current_val.start <= current_val.end);
@@ -1088,7 +1105,7 @@ impl BigWigWrite {
                     }
                 }
 
-                match peekable_vals.peek() {
+                match group.peek() {
                     None => (),
                     Some(next_val) => {
                         assert!(
@@ -1175,12 +1192,12 @@ impl BigWigWrite {
 
     fn write_vals<V: 'static>(
         &self,
-        vals_iter: V,
+        mut vals_iter: V,
         file: BufWriter<File>
     ) -> std::io::Result<(
         impl futures::Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
         impl Iterator<Item=Section>,
-        )> where V : std::iter::Iterator<Item=ChromGroupRead> + std::marker::Send {
+        )> where V : ChromGroupReadStreamingIterator + std::marker::Send {
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
@@ -1201,7 +1218,7 @@ impl BigWigWrite {
 
             let mut chrom_ids = IdMap::new();
             let mut raw_file = file.into_inner().unwrap();
-            for (summary_future, sections_idx_file, mut sections_buf, sections_future, zoom_infos, (chrom, chrom_id)) in vals_iter {
+            while let Some((summary_future, sections_idx_file, mut sections_buf, sections_future, zoom_infos, (chrom, chrom_id))) = vals_iter.next()? {
                 let real_id = chrom_ids.get_id(chrom);
                 assert_eq!(real_id, chrom_id);
                 sections_buf.switch(raw_file)?;
