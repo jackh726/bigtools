@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use parking_lot::{Condvar, Mutex};
 
+// This struct provides a way to buffer data in a file, instead of memory.
 #[derive(Debug)]
 pub struct TempFileWrite {
     closed: bool,

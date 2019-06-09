@@ -1,14 +1,14 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
-use std::io::{self, Seek, SeekFrom};
-use std::io::BufWriter;
-use std::io::prelude::*;
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter};
 use std::fs::File;
 use std::vec::Vec;
 
-use futures::future::{Future, FutureExt};
+use futures::future::{Future, FutureExt, RemoteHandle};
 use futures::channel::mpsc::{channel, Receiver};
+use futures::executor::{block_on, LocalPool, ThreadPool};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::task::SpawnExt;
@@ -24,7 +24,7 @@ use flate2::read::ZlibDecoder;
 use crate::chromvalues::ChromValues;
 use crate::idmap::IdMap;
 use crate::tell::Tell;
-use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use crate::tempfilebuffer::TempFileBuffer;
 use crate::tempfilewrite::TempFileWrite;
 
 const BIGWIG_MAGIC_LTH: u32 = 0x888F_FC26;
@@ -163,26 +163,20 @@ pub struct Summary {
     sum_squares: f64,
 }
 
-type TempZoomInfo = (u32 /* resolution */, futures::future::RemoteHandle<std::io::Result<()>> /* Temp file that contains data */, TempFileBuffer, TempFileBuffer /* sections */);
+type TempZoomInfo = (u32 /* resolution */, RemoteHandle<io::Result<()>> /* Temp file that contains data */, TempFileBuffer, TempFileBuffer /* sections */);
 type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Iterator<Item=Section>> /* sections */);
 
 pub type ChromGroupRead = (
-    Box<Future<Output=io::Result<Summary>> + std::marker::Send + std::marker::Unpin>,
+    Box<Future<Output=io::Result<Summary>> + Send + Unpin>,
     TempFileBuffer,
-    crate::tempfilebuffer::TempFileBuffer,
-    Box<Future<Output=io::Result<()>> + std::marker::Send + std::marker::Unpin>,
+    TempFileBuffer,
+    Box<Future<Output=io::Result<()>> + Send + Unpin>,
     Vec<TempZoomInfo>,
     (String, u32)
 );
 
 pub trait ChromGroupReadStreamingIterator {
     fn next(&mut self) -> io::Result<Option<ChromGroupRead>>;
-}
-
-struct BedGraphSectionItem {
-    start: u32,
-    end: u32,
-    val: f32,
 }
 
 #[derive(Debug)]
@@ -204,9 +198,9 @@ pub struct BigWigRead {
 }
 
 impl BigWigRead {
-    pub fn from_file_and_attach(path: String) -> std::io::Result<Self> {
+    pub fn from_file_and_attach(path: String) -> io::Result<Self> {
         let fp = File::open(path.clone())?;
-        let file = std::io::BufReader::new(fp);
+        let file = BufReader::new(fp);
         let info = BigWigRead::read_info(file)?;
         Ok(BigWigRead {
             path,
@@ -219,9 +213,9 @@ impl BigWigRead {
     }
 
     #[allow(clippy::all)]
-    pub fn test_read_zoom(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<()> {
+    pub fn test_read_zoom(&self, chrom_name: &str, start: u32, end: u32) -> io::Result<()> {
         let fp = File::open(self.path.clone())?;
-        let file = std::io::BufReader::new(fp);
+        let file = BufReader::new(fp);
 
         if self.info.zoom_headers.is_empty() {
             println!("No zooms. Skipping test read.");
@@ -272,7 +266,7 @@ impl BigWigRead {
         Ok(())
     }
 
-    fn read_info(file: std::io::BufReader<File>) -> std::io::Result<BigWigInfo> {
+    fn read_info(file: BufReader<File>) -> io::Result<BigWigInfo> {
         let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
         let magic = file.read_u32()?;
@@ -344,7 +338,7 @@ impl BigWigRead {
         Ok(info)
     }
 
-    fn read_zoom_headers(file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, header: &BBIHeader) -> std::io::Result<Vec<ZoomHeader>> {
+    fn read_zoom_headers(file: &mut ByteOrdered<BufReader<File>, Endianness>, header: &BBIHeader) -> io::Result<Vec<ZoomHeader>> {
         let mut zoom_headers = vec![];
         for _ in 0..header.zoom_levels {
             let reduction_level = file.read_u32()?;
@@ -364,7 +358,7 @@ impl BigWigRead {
         Ok(zoom_headers)
     }
 
-    fn read_chrom_tree_block(f: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> std::io::Result<()> {
+    fn read_chrom_tree_block(f: &mut ByteOrdered<BufReader<File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> io::Result<()> {
         let isleaf = f.read_u8()?;
         let _reserved = f.read_u8()?;
         let count = f.read_u16()?;
@@ -420,7 +414,7 @@ impl BigWigRead {
         BigWigRead::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWigRead::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
     }
 
-    fn search_overlapping_blocks(mut file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> std::io::Result<()> {
+    fn search_overlapping_blocks(mut file: &mut ByteOrdered<BufReader<File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> io::Result<()> {
         //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
         let isleaf: u8 = file.read_u8()?;
@@ -463,7 +457,7 @@ impl BigWigRead {
         Ok(())
     }
 
-    fn search_cir_tree(&self, mut file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+    fn search_cir_tree(&self, mut file: &mut ByteOrdered<BufReader<File>, Endianness>, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
         let chrom_ix = {
             let chrom_info = &self.info.chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
@@ -497,10 +491,10 @@ impl BigWigRead {
         Ok(blocks)
     }
 
-    pub fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<Vec<Block>> {
+    pub fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
         let endianness = self.info.header.endianness;
         let fp = File::open(self.path.clone())?;
-        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
+        let mut file = ByteOrdered::runtime(BufReader::new(fp), endianness);
 
         let full_index_offset = self.info.header.full_index_offset;
         file.seek(SeekFrom::Start(full_index_offset))?;
@@ -509,7 +503,7 @@ impl BigWigRead {
     }
 
     /// This assumes that the file is currently at the block's start
-    pub fn get_block_values(&self, file: &mut ByteOrdered<std::io::BufReader<File>, Endianness>, block: &Block) -> std::io::Result<impl Iterator<Item=Value>> {
+    pub fn get_block_values(&self, file: &mut ByteOrdered<BufReader<File>, Endianness>, block: &Block) -> io::Result<impl Iterator<Item=Value>> {
         let endianness = self.info.header.endianness;
         let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
         let mut values: Vec<Value> = Vec::new();
@@ -579,12 +573,12 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
-    pub fn get_interval<'a>(&'a self, chrom_name: &str, start: u32, end: u32) -> std::io::Result<impl Iterator<Item=Value> + std::marker::Send + 'a> {
+    pub fn get_interval<'a>(&'a self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=Value> + Send + 'a> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
 
         let endianness = self.info.header.endianness;
         let fp = File::open(self.path.clone())?;
-        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
+        let mut file = ByteOrdered::runtime(BufReader::new(fp), endianness);
 
         if blocks.len() > 0 {
             file.seek(SeekFrom::Start(blocks[0].offset))?;
@@ -634,7 +628,7 @@ pub struct BigWigWrite {
 }
 
 impl BigWigWrite {
-    pub fn create_file(path: String) -> std::io::Result<Self> {
+    pub fn create_file(path: String) -> io::Result<Self> {
         Ok(BigWigWrite {
             path,
             options: BigWigWriteOptions {
@@ -647,7 +641,7 @@ impl BigWigWrite {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> std::io::Result<()> where V : ChromGroupReadStreamingIterator + std::marker::Send {
+    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> io::Result<()> where V : ChromGroupReadStreamingIterator + Send {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -673,7 +667,7 @@ impl BigWigWrite {
             section.offset += pre_data;
             section
         });
-        let (chrom_ids, summary, mut file, zoom_infos) = futures::executor::block_on(chrom_summary_future);
+        let (chrom_ids, summary, mut file, zoom_infos) = block_on(chrom_summary_future);
         let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, &self.options);
         let data_size = file.tell()? - pre_data;
         println!("Data size: {:?}", data_size);
@@ -743,7 +737,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    fn write_blank_headers(file: &mut BufWriter<File>) -> std::io::Result<()> {
+    fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> {
         file.seek(SeekFrom::Start(0))?;
         // Common header
         file.write_all(&[0; 64])?;
@@ -753,7 +747,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> std::io::Result<()> {
+    fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> io::Result<()> {
         let mut chroms: Vec<&String> = chrom_ids.keys().collect();
         chroms.sort();
         //println!("Used chroms {:?}", chroms);
@@ -793,7 +787,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    fn create_section_iter(mut bufreader: ByteOrdered<std::io::BufReader<crate::tempfilewrite::TempFileWriteReader>, Endianness>) -> Box<Iterator<Item=Section>> {
+    fn create_section_iter<R: Read + Send + 'static>(mut bufreader: ByteOrdered<R, Endianness>) -> Box<Iterator<Item=Section>> {
         let section_iter = std::iter::from_fn(move || {
             let next_read = bufreader.read_u32();
             if let Err(_) = next_read {
@@ -812,11 +806,11 @@ impl BigWigWrite {
                 size,
             })
         });
-        let res: Box<Iterator<Item=Section> + std::marker::Send> = Box::new(section_iter);
+        let res: Box<Iterator<Item=Section> + Send> = Box::new(section_iter);
         res
     }
 
-    async fn write_section(compress: bool, items_in_section: Vec<BedGraphSectionItem>, chromId: u32) -> std::io::Result<SectionData> {
+    async fn write_section(compress: bool, items_in_section: Vec<Value>, chromId: u32) -> io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -833,7 +827,7 @@ impl BigWigWrite {
         for item in items_in_section.iter() {
             bytes.write_u32::<NativeEndian>(item.start)?;
             bytes.write_u32::<NativeEndian>(item.end)?;
-            bytes.write_f32::<NativeEndian>(item.val)?;   
+            bytes.write_f32::<NativeEndian>(item.value)?;   
         }
 
         let out_bytes = if compress {
@@ -852,7 +846,7 @@ impl BigWigWrite {
         })
     }
 
-    async fn write_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> std::io::Result<SectionData> {
+    async fn write_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> io::Result<SectionData> {
         let mut bytes: Vec<u8> = vec![];
 
         let start = items_in_section[0].start;
@@ -886,9 +880,9 @@ impl BigWigWrite {
         })
     }
 
-    pub fn read_group<I: 'static>(chrom: String, chromId: u32, mut group: I, mut pool: futures::executor::ThreadPool, options: BigWigWriteOptions)
+    pub fn read_group<I: 'static>(chrom: String, chromId: u32, mut group: I, mut pool: ThreadPool, options: BigWigWriteOptions)
         -> io::Result<ChromGroupRead>
-        where I: ChromValues + std::marker::Send {
+        where I: ChromValues + Send {
         let cloned_chrom = chrom.clone();
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
@@ -896,17 +890,17 @@ impl BigWigWrite {
 
         let (mut ftx, frx) = channel::<_>(100);
 
-        async fn create_do_write<W: Write>(mut file: BufWriter<W>, mut bufwriter: ByteOrdered<BufWriter<TempFileBufferWriter>, Endianness>, mut frx: Receiver<impl futures::Future<Output=std::io::Result<SectionData>>>) -> std::io::Result<()> {
+        async fn create_do_write<W: Write, SF: Write>(mut data_file: W, mut section_file: ByteOrdered<SF, Endianness>, mut frx: Receiver<impl Future<Output=io::Result<SectionData>>>) -> io::Result<()> {
             let mut current_offset = 0;
             while let Some(section_raw) = frx.next().await {
                 let section: SectionData = section_raw.await?;
                 let size = section.data.len() as u64;
-                file.write_all(&section.data)?;
-                bufwriter.write_u32(section.chrom)?;
-                bufwriter.write_u32(section.start)?;
-                bufwriter.write_u32(section.end)?;
-                bufwriter.write_u64(current_offset)?;
-                bufwriter.write_u64(size)?;
+                data_file.write_all(&section.data)?;
+                section_file.write_u32(section.chrom)?;
+                section_file.write_u32(section.start)?;
+                section_file.write_u32(section.end)?;
+                section_file.write_u64(current_offset)?;
+                section_file.write_u64(size)?;
                 current_offset += size;
             }
             Ok(())
@@ -923,11 +917,11 @@ impl BigWigWrite {
             (sections_future, buf, section_but)
         };
 
-        let process_zooms = move |zoom_channel: Receiver<_>, size: u32| -> std::io::Result<_> {
+        let process_zooms = move |zoom_channel: Receiver<_>, size: u32| -> io::Result<_> {
             let (section_but, writer) = TempFileBuffer::new()?;
-            let bufwriter = ByteOrdered::runtime(std::io::BufWriter::new(writer), Endianness::native());
+            let bufwriter = ByteOrdered::runtime(BufWriter::new(writer), Endianness::native());
 
-            let (buf, write) = crate::tempfilebuffer::TempFileBuffer::new()?;
+            let (buf, write) = TempFileBuffer::new()?;
             let file = BufWriter::new(write);
 
             let file_future = create_do_write(file, bufwriter, zoom_channel);
@@ -935,33 +929,24 @@ impl BigWigWrite {
             Ok((size, file_future, buf, section_but))
         };
 
-        let (zooms_futures, mut zooms_channels): (Vec<_>, Vec<_>) = zoom_sizes.iter().map(|size| {
+        let processed_zooms: Result<Vec<_>, _> = zoom_sizes.iter().map(|size| -> io::Result<_> {
             let (ftx, frx) = channel::<_>(100);
-            let f = process_zooms(frx, *size);
-            (f, ftx)
-        }).unzip();
+            let f = process_zooms(frx, *size)?;
+            Ok((f, ftx))
+        }).collect();
+        let (zooms_futures, mut zooms_channels): (Vec<_>, Vec<_>) = processed_zooms?.into_iter().unzip();
 
-        struct LiveZoomInfo {
-            chrom: String,
-            start: u32,
-            end: u32,
-            valid_count: u32,
-            min_value: f32,
-            max_value: f32,
-            sum: f32,
-            sum_squares: f32,
-        }
-
-        struct ZoomItem {
-            live_info: Option<LiveZoomInfo>,
-            records: Vec<ZoomRecord>,
-        }
-        struct BedGraphSection {
-            items: Vec<BedGraphSectionItem>,
-            zoom_items: Vec<ZoomItem>
-        }
         
-        let read_file = async move || -> std::io::Result<Summary> {
+        let read_file = async move || -> io::Result<Summary> {
+            struct ZoomItem {
+                live_info: Option<ZoomRecord>,
+                records: Vec<ZoomRecord>,
+            }
+            struct BedGraphSection {
+                items: Vec<Value>,
+                zoom_items: Vec<ZoomItem>
+            }
+
             let mut summary: Option<Summary> = None;
 
             let mut state_val = BedGraphSection {
@@ -975,6 +960,39 @@ impl BigWigWrite {
                 // TODO: test this correctly fails
                 // TODO: change these to not panic
                 assert!(current_val.start <= current_val.end);
+                match group.peek() {
+                    None => (),
+                    Some(next_val) => {
+                        assert!(
+                            current_val.end <= next_val.start,
+                            "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
+                            chrom,
+                            current_val.start,
+                            current_val.end,
+                            next_val.start,
+                            next_val.end,
+                        );
+                    }
+                }
+
+                match &mut summary {
+                    None => {
+                        summary = Some(Summary {
+                            bases_covered: u64::from(current_val.end - current_val.start),
+                            min_val: f64::from(current_val.value),
+                            max_val: f64::from(current_val.value),
+                            sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
+                            sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
+                        })
+                    },
+                    Some(summary) => {
+                        summary.bases_covered += u64::from(current_val.end - current_val.start);
+                        summary.min_val = summary.min_val.min(f64::from(current_val.value));
+                        summary.max_val = summary.max_val.max(f64::from(current_val.value));
+                        summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
+                        summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
+                    }
+                }
 
                 for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
                     let mut add_start = current_val.start;
@@ -984,8 +1002,8 @@ impl BigWigWrite {
                         }
                         match &mut zoom_item.live_info {
                             None => {
-                                zoom_item.live_info = Some(LiveZoomInfo {
-                                    chrom: chrom.clone(),
+                                zoom_item.live_info = Some(ZoomRecord {
+                                    chrom: chromId,
                                     start: add_start,
                                     end: add_start,
                                     valid_count: 0,
@@ -1037,53 +1055,14 @@ impl BigWigWrite {
                         }
                     }
                 }
-                state_val.items.push(BedGraphSectionItem {
-                    start: current_val.start,
-                    end: current_val.end,
-                    val: current_val.value,
-                });
+                state_val.items.push(current_val);
                 if state_val.items.len() >= options.items_per_slot as usize {
                     let items = std::mem::replace(&mut state_val.items, vec![]);
                     let handle = pool.spawn_with_handle(BigWigWrite::write_section(options.compress, items, chromId)).expect("Couldn't spawn.");
                     ftx.send(handle.boxed()).await.expect("Couldn't send");
                 }
-
-                match &mut summary {
-                    None => {
-                        summary = Some(Summary {
-                            bases_covered: u64::from(current_val.end - current_val.start),
-                            min_val: f64::from(current_val.value),
-                            max_val: f64::from(current_val.value),
-                            sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
-                            sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
-                        })
-                    },
-                    Some(summary) => {
-                        summary.bases_covered += u64::from(current_val.end - current_val.start);
-                        summary.min_val = summary.min_val.min(f64::from(current_val.value));
-                        summary.max_val = summary.max_val.max(f64::from(current_val.value));
-                        summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
-                        summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
-                    }
-                }
-
-                match group.peek() {
-                    None => (),
-                    Some(next_val) => {
-                        assert!(
-                            current_val.end <= next_val.start,
-                            "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
-                            chrom,
-                            current_val.start,
-                            current_val.end,
-                            next_val.start,
-                            next_val.end,
-                        );
-                    }
-                }
             }
 
-            let lastchrom = chrom.clone();
             if !state_val.items.is_empty() {
                 let handle = pool.spawn_with_handle(BigWigWrite::write_section(options.compress, state_val.items, chromId)).expect("Couldn't spawn.");
                 ftx.send(handle.boxed()).await.expect("Couldn't send");
@@ -1091,7 +1070,7 @@ impl BigWigWrite {
 
             for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
                 if let Some(zoom2) = zoom_item.live_info {
-                    assert!(lastchrom == zoom2.chrom);
+                    assert!(chromId == zoom2.chrom);
                     zoom_item.records.push(ZoomRecord {
                         chrom: chromId,
                         start: zoom2.start,
@@ -1124,30 +1103,24 @@ impl BigWigWrite {
             Ok(summary_complete)
         };
 
-        let f = read_file();
-
-        let (zoom_infos, zoom_remotes): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|handle| {
-            let (size, file_future, buf, section_iter) = handle.unwrap();
+        let (sections_remote, sections_handle) = sections_future.remote_handle();
+        let (zoom_infos, zoom_remotes): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|(size, file_future, buf, section_iter)| {
             let (remote, handle) = file_future.remote_handle();
             ((size, handle, buf, section_iter), remote)
         }).unzip();
 
         std::thread::spawn(move || {
-            let mut pool = futures::executor::LocalPool::new();
+            let mut pool = LocalPool::new();
             for zoom_remote in zoom_remotes {
                 pool.spawner().spawn(zoom_remote).expect("Couldn't spawn future.");
             }
+            pool.spawner().spawn(sections_remote).expect("Couldn't spawn future.");
             pool.run()
         });
 
-        let (sections_remote, sections_handle) = sections_future.remote_handle();
+        let (f_remote, f_handle) = read_file().remote_handle();
         std::thread::spawn(move || {
-            futures::executor::block_on(sections_remote);
-        });
-
-        let (f_remote, f_handle) = f.remote_handle();
-        std::thread::spawn(move || {
-            futures::executor::block_on(f_remote);
+            block_on(f_remote);
         });
         Ok((Box::new(f_handle), section_but, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chromId)))    
     }
@@ -1156,25 +1129,25 @@ impl BigWigWrite {
         &self,
         mut vals_iter: V,
         file: BufWriter<File>
-    ) -> std::io::Result<(
-        impl futures::Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
+    ) -> io::Result<(
+        impl Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
         impl Iterator<Item=Section>,
-        )> where V : ChromGroupReadStreamingIterator + std::marker::Send {
+        )> where V : ChromGroupReadStreamingIterator + Send {
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
         let (mut writer, reader) = TempFileWrite::new()?;
-        let bo_reader = ByteOrdered::runtime(std::io::BufReader::new(reader), Endianness::native());
+        let bo_reader = ByteOrdered::runtime(BufReader::new(reader), Endianness::native());
 
-        let read_file = async move || -> std::io::Result<(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)> {
+        let read_file = async move || -> io::Result<(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)> {
             let mut summary: Option<Summary> = None;
 
 
             let mut zooms: Vec<_> = zoom_sizes.iter().map(|size| {
                 let (writer, reader) = TempFileWrite::new(). unwrap();
-                let bo_reader = ByteOrdered::runtime(std::io::BufReader::new(reader), Endianness::native());
+                let bo_reader = ByteOrdered::runtime(BufReader::new(reader), Endianness::native());
 
-                let (buf, write) = crate::tempfilebuffer::TempFileBuffer::new().unwrap();
+                let (buf, write) = TempFileBuffer::new().unwrap();
                 (size, writer, bo_reader, buf, write)
             }).collect();
 
@@ -1235,7 +1208,7 @@ impl BigWigWrite {
         Ok((f.map(Result::unwrap), BigWigWrite::create_section_iter(bo_reader)))
     }
 
-    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64, options: &BigWigWriteOptions) -> std::io::Result<()> {
+    fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64, options: &BigWigWriteOptions) -> io::Result<()> {
         let mut zoom_count = 0;
         for zoom in zooms {
             let mut zoom_file = zoom.1;
@@ -1252,7 +1225,7 @@ impl BigWigWrite {
             });
 
             zoom_file.seek(SeekFrom::Start(0))?;
-            let mut buf_reader = std::io::BufReader::new(zoom_file);
+            let mut buf_reader = BufReader::new(zoom_file);
             std::io::copy(&mut buf_reader, &mut file)?;
             let zoom_index_offset = file.tell()?;
             //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.0, zoom_data_offset, zoom_index_offset);
@@ -1374,14 +1347,14 @@ impl BigWigWrite {
         (nodes, levels, total_sections)
     }
 
-    fn write_rtreeindex(file: &mut BufWriter<File>, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64, options: &BigWigWriteOptions) -> std::io::Result<()> {
+    fn write_rtreeindex(file: &mut BufWriter<File>, nodes: RTreeNodeList<RTreeNode>, levels: usize, section_count: u64, options: &BigWigWriteOptions) -> io::Result<()> {
         const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
         const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
         const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
 
         let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
-        fn calculate_offsets(mut index_offsets: &mut Vec<u64>, trees: &RTreeNodeList<RTreeNode>, level: usize) -> std::io::Result<()> {
+        fn calculate_offsets(mut index_offsets: &mut Vec<u64>, trees: &RTreeNodeList<RTreeNode>, level: usize) -> io::Result<()> {
             if level == 0 {
                 return Ok(())
             }
@@ -1415,7 +1388,7 @@ impl BigWigWrite {
         calculate_offsets(&mut index_offsets, &nodes, levels)?;
         //println!("index Offsets: {:?}", index_offsets);
 
-        fn write_tree(mut file: &mut BufWriter<File>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64, options: &BigWigWriteOptions) -> std::io::Result<u64> {
+        fn write_tree(mut file: &mut BufWriter<File>, trees: &RTreeNodeList<RTreeNode>, curr_level: usize, dest_level: usize, childnode_offset: u64, options: &BigWigWriteOptions) -> io::Result<u64> {
             let NON_LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * options.block_size as u64;
             let LEAFNODE_FULL_BLOCK_SIZE: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * options.block_size as u64;
             assert!(curr_level >= dest_level);

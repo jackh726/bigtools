@@ -9,6 +9,10 @@ enum BufferState {
     Real(Option<File>),
 }
 
+/// This struct provides a way to "buffer" data in a temporary file
+/// until the "real" file is ready to be written.
+/// This is useful if you have parallel generation of data that needs
+/// to be written to a file, but you don't know the size of each part.
 #[derive(Debug)]
 pub struct TempFileBuffer {
     state: Arc<Mutex<BufferState>>,
