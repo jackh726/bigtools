@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 
 use byteordered::ByteOrdered;
 
@@ -15,10 +15,11 @@ use bigwig2::idmap::IdMap;
 
 use bigwig2::utils::merge_sections_many;
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) -> io::Result<impl ChromGroupReadStreamingIterator + std::marker::Send> {
+pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) -> io::Result<(impl ChromGroupReadStreamingIterator + std::marker::Send, HashMap<String, u32>)> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
+    let mut chrom_map = HashMap::new();
     for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
         if chrom_sizes.get(&chrom).is_some() {
             continue;
@@ -38,6 +39,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
         }
 
         chrom_sizes.insert(chrom.clone(), (size, bws));
+        chrom_map.insert(chrom.clone(), size);
     }
 
     let mut chrom_ids = IdMap::new();
@@ -131,7 +133,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
         iter: Box::new(chrom_sizes.into_iter().zip(chrom_ids)),
     };
 
-    Ok(group_iter)
+    Ok((group_iter, chrom_map))
 }
 
 fn main() -> io::Result<()> {
@@ -139,7 +141,6 @@ fn main() -> io::Result<()> {
     args.next();
     let b1path = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
     let b2path = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
-    let chroms = args.next().unwrap_or_else(|| "/home/hueyj/temp/hg38.chrom.sizes".to_string());
     println!("Args: {:} {:}", b1path, b2path);
 
     let b1 = BigWigRead::from_file_and_attach(b1path)?;
@@ -148,17 +149,7 @@ fn main() -> io::Result<()> {
     let out = String::from("/home/hueyj/temp/merge_test.bigWig");
     let outb = BigWigWrite::create_file(out)?;
 
-    let all_values = get_merged_values(vec![b1, b2], outb.options.clone())?;
-
-    let chrom_map = BufReader::new(File::open(chroms)?)
-        .lines()
-        .filter(|l| match l { Ok(s) => !s.is_empty(), _ => true })
-        .map(|l| {
-            let words = l.expect("Split error");
-            let mut split = words.split_whitespace();
-            (split.next().expect("Missing chrom").to_owned(), split.next().expect("Missing size").parse::<u32>().unwrap())
-        })
-        .collect();
+    let (all_values, chrom_map) = get_merged_values(vec![b1, b2], outb.options.clone())?;
 
     outb.write_groups(chrom_map, all_values)?;
 
