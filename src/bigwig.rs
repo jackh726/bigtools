@@ -660,9 +660,13 @@ impl BigWigWrite {
         }
 
         let pre_data = file.tell()?;
+        let mut current_offset = pre_data;
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos) = block_on(self.write_vals(vals, file)?)?;
         let sections_iter = raw_sections_iter.map(|mut section| {
-            section.offset += pre_data;
+            // TODO: this assumes that all the data is contiguous
+            // This will fail if we ever space the sections in any way
+            section.offset = current_offset;
+            current_offset += section.size;
             section
         });
         let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, &self.options);
@@ -670,7 +674,6 @@ impl BigWigWrite {
         println!("Data size: {:?}", data_size);
         println!("Sections: {:?}", total_sections);
         println!("Summary: {:?}", summary);
-        println!("Zooms: {:?}", zoom_infos.len());
 
         // Since the chrom tree is read before the index, we put this before the full data index
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
@@ -686,7 +689,8 @@ impl BigWigWrite {
         BigWigWrite::write_zooms(&mut file, zoom_infos, &mut zoom_entries, data_size, &self.options)?;
 
         //println!("Zoom entries: {:?}", zoom_entries);
-        let num_zooms = DEFAULT_ZOOM_SIZES.len() as u16;
+        let num_zooms = zoom_entries.len() as u16;
+        println!("Zooms: {:?}", num_zooms);
 
         // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
         // In most cases, I think this is the true max size (unless there is only one section and its less than ITEMS_PER_SLOT in size)
@@ -1182,8 +1186,11 @@ impl BigWigWrite {
             }
             let zoom_data_offset = file.tell()?;
 
+            let mut current_offset = zoom_data_offset;
             let sections_iter = zoom.2.map(|mut section| {
-                section.offset += zoom_data_offset;
+                // TODO: assumes contiguous, see note for primary data
+                section.offset = current_offset;
+                current_offset += section.size;
                 section
             });
 

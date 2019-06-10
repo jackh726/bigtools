@@ -74,7 +74,7 @@ impl<B: BufRead> BedGraphParserState<B> {
                     None => {},
                 }
             },
-            None => {},
+            None => self.curr_chrom = None,
         }
 
         let l = self.bedgraph.read()?;
@@ -102,7 +102,7 @@ impl<B: BufRead> BedGraphParserState<B> {
                 }
             },
             None => {
-                self.curr_chrom = None;
+                //self.curr_chrom = None;
             },
         }
         if self.curr_val.is_none() && self.next_val.is_some() {

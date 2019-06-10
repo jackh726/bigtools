@@ -23,9 +23,11 @@ fn read_test(bw: String) -> std::io::Result<()> {
     println!("BigWigInfo: {:?}", b.info);
 
     //let interval = b.get_interval("chr1", 09000000u32, 10010000u32)?;
-    let interval = b.get_interval("chr17", 10_000_000u32, 10_010_000u32)?;
+    //let interval = b.get_interval("chr17", 10_000_000u32, 10_010_000u32)?;
     //let interval = b.get_interval("chr17", 60000u32, 62000u32)?;
-    println!("Interval result: {:?}", interval.collect::<Vec<_>>().len());
+    let interval = b.get_interval("chr18", 0, 10000000)?;
+    println!("Interval result: {:?}", interval.collect::<Vec<_>>());
+    //println!("Interval result: {:?}", interval.collect::<Vec<_>>().len());
 
     b.test_read_zoom("chr17", 0, 83257441)?;
     //b.test_read_zoom("chr17", 10_000_000u32, 10_010_000u32)?;
