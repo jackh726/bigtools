@@ -3,7 +3,6 @@
 pub mod bigwig;
 pub mod idmap;
 pub mod tell;
-pub mod tempfilewrite;
 pub mod tempfilebuffer;
 pub mod chromvalues;
 

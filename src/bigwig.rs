@@ -21,11 +21,14 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 
+use serde::{Serialize, Deserialize};
+
+use hopper;
+
 use crate::chromvalues::ChromValues;
 use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::TempFileBuffer;
-use crate::tempfilewrite::TempFileWrite;
 
 const BIGWIG_MAGIC_LTH: u32 = 0x888F_FC26;
 const BIGWIG_MAGIC_HTL: u32 = 0x26FC_8F88;
@@ -145,13 +148,13 @@ struct SectionData {
     data: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Section {
-    offset: u64,
-    size: u64,
     chrom: u32,
     start: u32,
     end: u32,
+    offset: u64,
+    size: u64,
 }
 
 #[derive(Debug)]
@@ -163,14 +166,14 @@ pub struct Summary {
     sum_squares: f64,
 }
 
-type TempZoomInfo = (u32 /* resolution */, RemoteHandle<io::Result<()>> /* Temp file that contains data */, TempFileBuffer, TempFileBuffer /* sections */);
+type TempZoomInfo = (u32 /* resolution */, RemoteHandle<io::Result<usize>> /* Temp file that contains data */, TempFileBuffer, hopper::Receiver<Section> /* sections */);
 type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Iterator<Item=Section>> /* sections */);
 
 pub type ChromGroupRead = (
     Box<Future<Output=io::Result<Summary>> + Send + Unpin>,
+    hopper::Receiver<Section>,
     TempFileBuffer,
-    TempFileBuffer,
-    Box<Future<Output=io::Result<()>> + Send + Unpin>,
+    Box<Future<Output=io::Result<usize>> + Send + Unpin>,
     Vec<TempZoomInfo>,
     (String, u32)
 );
@@ -662,12 +665,11 @@ impl BigWigWrite {
         }
 
         let pre_data = file.tell()?;
-        let (chrom_summary_future, raw_sections_iter) = self.write_vals(vals, file)?;
+        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos) = block_on(self.write_vals(vals, file)?);
         let sections_iter = raw_sections_iter.map(|mut section| {
             section.offset += pre_data;
             section
         });
-        let (chrom_ids, summary, mut file, zoom_infos) = block_on(chrom_summary_future);
         let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, &self.options);
         let data_size = file.tell()? - pre_data;
         println!("Data size: {:?}", data_size);
@@ -890,43 +892,43 @@ impl BigWigWrite {
 
         let (mut ftx, frx) = channel::<_>(100);
 
-        async fn create_do_write<W: Write, SF: Write>(mut data_file: W, mut section_file: ByteOrdered<SF, Endianness>, mut frx: Receiver<impl Future<Output=io::Result<SectionData>>>) -> io::Result<()> {
+        async fn create_do_write<W: Write>(mut data_file: W, mut section_sender: hopper::Sender<Section>, mut frx: Receiver<impl Future<Output=io::Result<SectionData>>>) -> io::Result<usize> {
             let mut current_offset = 0;
+            let mut total = 0;
             while let Some(section_raw) = frx.next().await {
                 let section: SectionData = section_raw.await?;
+                total += 1;
                 let size = section.data.len() as u64;
                 data_file.write_all(&section.data)?;
-                section_file.write_u32(section.chrom)?;
-                section_file.write_u32(section.start)?;
-                section_file.write_u32(section.end)?;
-                section_file.write_u64(current_offset)?;
-                section_file.write_u64(size)?;
+                section_sender.send(Section {
+                    chrom: section.chrom,
+                    start: section.start,
+                    end: section.end,
+                    offset: current_offset,
+                    size: size,
+                }).unwrap();
                 current_offset += size;
             }
-            Ok(())
+            Ok(total)
         };
 
-        let (sections_future, buf, section_but) = {
-            let (section_but, writer) = TempFileBuffer::new()?;
-            let bufwriter = ByteOrdered::runtime(BufWriter::new(writer), Endianness::native());
-
+        let (sections_future, buf, section_receiver) = {
             let (buf, write) = TempFileBuffer::new()?;
             let file = BufWriter::new(write);
 
-            let sections_future = create_do_write(file, bufwriter, frx);
-            (sections_future, buf, section_but)
+            let (section_sender, section_receiver) = hopper::channel::<Section>("sections", tempfile::tempdir()?.path()).unwrap();
+            let sections_future = create_do_write(file, section_sender, frx);
+            (sections_future, buf, section_receiver)
         };
 
         let process_zooms = move |zoom_channel: Receiver<_>, size: u32| -> io::Result<_> {
-            let (section_but, writer) = TempFileBuffer::new()?;
-            let bufwriter = ByteOrdered::runtime(BufWriter::new(writer), Endianness::native());
-
             let (buf, write) = TempFileBuffer::new()?;
             let file = BufWriter::new(write);
 
-            let file_future = create_do_write(file, bufwriter, zoom_channel);
+            let (section_sender, section_receiver) = hopper::channel::<Section>(&format!("zoom_{}", size)[..], tempfile::tempdir()?.path()).unwrap();
+            let file_future = create_do_write(file, section_sender, zoom_channel);
 
-            Ok((size, file_future, buf, section_but))
+            Ok((size, file_future, buf, section_receiver))
         };
 
         let processed_zooms: Result<Vec<_>, _> = zoom_sizes.iter().map(|size| -> io::Result<_> {
@@ -1122,53 +1124,50 @@ impl BigWigWrite {
         std::thread::spawn(move || {
             block_on(f_remote);
         });
-        Ok((Box::new(f_handle), section_but, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chromId)))    
+        Ok((Box::new(f_handle), section_receiver, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chromId)))    
     }
 
     fn write_vals<V: 'static>(
         &self,
         mut vals_iter: V,
         file: BufWriter<File>
-    ) -> io::Result<(
-        impl Future<Output=(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)>,
-        impl Iterator<Item=Section>,
-        )> where V : ChromGroupReadStreamingIterator + Send {
+    ) -> io::Result<impl Future<Output=(IdMap<String>, Summary, BufWriter<File>, Box<Iterator<Item=Section>>, Vec<ZoomInfo>)>> where V : ChromGroupReadStreamingIterator + Send {
 
         let zoom_sizes: Vec<u32> = vec![10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
-        let (mut writer, reader) = TempFileWrite::new()?;
-        let bo_reader = ByteOrdered::runtime(BufReader::new(reader), Endianness::native());
+        let mut section_iter: Box<Iterator<Item=Section>> = Box::new(std::iter::empty());
 
-        let read_file = async move || -> io::Result<(IdMap<String>, Summary, BufWriter<File>, Vec<ZoomInfo>)> {
+        let read_file = async move || -> io::Result<(IdMap<String>, Summary, BufWriter<File>, Box<Iterator<Item=Section>>, Vec<ZoomInfo>)> {
             let mut summary: Option<Summary> = None;
 
-
             let mut zooms: Vec<_> = zoom_sizes.iter().map(|size| {
-                let (writer, reader) = TempFileWrite::new(). unwrap();
-                let bo_reader = ByteOrdered::runtime(BufReader::new(reader), Endianness::native());
+                let section_iter: Box<Iterator<Item=Section>> = Box::new(std::iter::empty());
 
                 let (buf, write) = TempFileBuffer::new().unwrap();
-                (size, writer, bo_reader, buf, write)
+                (size, section_iter, buf, write)
             }).collect();
 
             let mut chrom_ids = IdMap::new();
             let mut raw_file = file.into_inner().unwrap();
-            while let Some((summary_future, sections_idx_file, mut sections_buf, sections_future, zoom_infos, (chrom, chrom_id))) = vals_iter.next()? {
+            while let Some((summary_future, sections_receiver, mut sections_buf, sections_future, zoom_infos, (chrom, chrom_id))) = vals_iter.next()? {
                 let real_id = chrom_ids.get_id(chrom);
                 assert_eq!(real_id, chrom_id);
                 sections_buf.switch(raw_file)?;
 
                 let chrom_summary = summary_future.await?;
-                sections_future.await?;
-                sections_idx_file.expect_closed_write(&mut writer)?;
+                // For now, we need to take a specific amount on sections_receiver because hopper doesn't return None on Sender drop
+                let num_sections = sections_future.await?;
+                section_iter = Box::new(section_iter.chain(sections_receiver.into_iter().take(num_sections)));
                 raw_file = sections_buf.await_file();
 
-                for (i, (_size, future, buf, zoom_sections_idx_file)) in zoom_infos.into_iter().enumerate() {
+                for (i, (_size, future, buf, zoom_sections_receiver)) in zoom_infos.into_iter().enumerate() {
                     let zoom = &mut zooms[i];
                     // Await this future for its Result
-                    future.await?;
-                    zoom_sections_idx_file.expect_closed_write(&mut zoom.1)?;
-                    buf.expect_closed_write(&mut zoom.4)?;
+                    let num_sections = future.await?;
+                    let mut old = std::mem::replace(&mut zoom.1, Box::new(std::iter::empty()));
+                    old = Box::new(old.chain(zoom_sections_receiver.into_iter().take(num_sections)));
+                    std::mem::replace(&mut zoom.1, old);
+                    buf.expect_closed_write(&mut zoom.3)?;
                 }
 
                 match &mut summary {
@@ -1197,15 +1196,13 @@ impl BigWigWrite {
             };
 
             let zoom_infos: Vec<_> = zooms.into_iter().map(|zoom| {
-                drop(zoom.4);
-                (*zoom.0, zoom.3.await_raw(), BigWigWrite::create_section_iter(zoom.2))
+                drop(zoom.3);
+                (*zoom.0, zoom.2.await_raw(), zoom.1)
             }).collect();
-            Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), zoom_infos))
+            Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), section_iter, zoom_infos))
         };
 
-        let f = read_file();
-
-        Ok((f.map(Result::unwrap), BigWigWrite::create_section_iter(bo_reader)))
+        Ok(read_file().map(Result::unwrap))
     }
 
     fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64, options: &BigWigWriteOptions) -> io::Result<()> {
