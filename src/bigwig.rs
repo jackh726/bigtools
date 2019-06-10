@@ -274,7 +274,7 @@ impl BigWigRead {
         let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
         let magic = file.read_u32()?;
-        println!("Magic {:x?}: ", magic);
+        //println!("Magic {:x?}: ", magic);
         match magic {
             BIGWIG_MAGIC_HTL => {
                 file = file.into_opposite();
@@ -338,7 +338,6 @@ impl BigWigRead {
             chrom_info,
         };
 
-        println!("Info read successfully.");
         Ok(info)
     }
 
