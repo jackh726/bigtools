@@ -1,23 +1,14 @@
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{self, Result, Seek, SeekFrom};
+use crate::bigwig::Value;
 
-use byteordered::ByteOrdered;
-
-use bigwig2::bigwig::BigWigWriteOptions;
-use bigwig2::bigwig::ChromGroupReadStreamingIterator;
-use bigwig2::chromvalues::ChromValues;
-use bigwig2::bigwig::{BigWigRead, BigWigWrite};
-use bigwig2::bigwig::{Value as ValueSection, Value};
-use bigwig2::bigwig::ChromGroupRead;
-
-use bigwig2::idmap::IdMap;
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
 ///  (val, val, val or None, overhang or None) when merging two breaks up one, and may or may not add an overhang (one.start < two.start or one.end > two.end)
 /// The overhang may equal the previous value
-fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<ValueSection>, Option<ValueSection>, Option<ValueSection>) {
+/// 
+/// # Panics
+/// Panics if the two Values do not overlap.
+pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value>, Option<Value>) {
     if one.end <= two.start {
         panic!("No overlap.");
     }
@@ -28,7 +19,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
             // |---|
             // |---|
             (
-                ValueSection {
+                Value {
                     start: one.start,
                     end: one.end,
                     value: one.value + two.value,
@@ -41,14 +32,14 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
             // |--|
             // |---|
             (
-                ValueSection {
+                Value {
                     start: one.start,
                     end: one.end,
                     value: one.value + two.value,
                 },
                 None,
                 None,
-                Some(ValueSection {
+                Some(Value {
                     start: one.end,
                     end: two.end,
                     value: two.value,
@@ -66,12 +57,12 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: two.end,
                         value: one.value + two.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.end,
                         end: one.end,
                         value: one.value,
@@ -89,7 +80,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
             //  |--|
             if two.value == 0.0 {
                 (
-                    ValueSection {
+                    Value {
                         start: one.start,
                         end: one.end,
                         value: one.value,
@@ -100,12 +91,12 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: one.start,
                         end: two.start,
                         value: one.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.start,
                         end: two.end,
                         value: one.value + two.value,
@@ -123,7 +114,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                     one,
                     None,
                     None,
-                    Some(ValueSection {
+                    Some(Value {
                         start: end,
                         end: two.end,
                         value: 0.0,
@@ -131,18 +122,18 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else if one.value == 0.0 {
                 (
-                    ValueSection {
+                    Value {
                         start: one.start,
                         end: two.start,
                         value: 0.0,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.start,
                         end: one.end,
                         value: two.value,
                     }),
                     None,
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.end,
                         end: two.end,
                         value: two.value,
@@ -154,7 +145,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                     one,
                     None,
                     None,
-                    Some(ValueSection {
+                    Some(Value {
                         start: end,
                         end: two.end,
                         value: 0.0,
@@ -162,18 +153,18 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: one.start,
                         end: two.start,
                         value: one.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.start,
                         end: one.end,
                         value: one.value + two.value,
                     }),
                     None,
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.end,
                         end: two.end,
                         value: two.value,
@@ -192,17 +183,17 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: one.start,
                         end: two.start,
                         value: one.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.start,
                         end: two.end,
                         value: one.value + two.value,
                     }),
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.end,
                         end: one.end,
                         value: one.value,
@@ -226,12 +217,12 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: one.start,
                         value: two.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.start,
                         end: one.end,
                         value: one.value + two.value,
@@ -252,18 +243,18 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: one.start,
                         value: two.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.start,
                         end: one.end,
                         value: one.value + two.value,
                     }),
                     None,
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.end,
                         end: two.end,
                         value: two.value,
@@ -275,7 +266,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
             // |---|
             if one.value == 0.0 && two.value == 0.0 {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: one.end,
                         value: 0.0,
@@ -288,7 +279,7 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 let start = two.end;
                 (
                     two,
-                    Some(ValueSection {
+                    Some(Value {
                         start,
                         end: one.end,
                         value: one.value,
@@ -298,12 +289,12 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else if two.value == 0.0 {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: one.start,
                         value: 0.0,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.start,
                         end: one.end,
                         value: one.value,
@@ -313,17 +304,17 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
                 )
             } else {
                 (
-                    ValueSection {
+                    Value {
                         start: two.start,
                         end: one.start,
                         value: two.value,
                     },
-                    Some(ValueSection {
+                    Some(Value {
                         start: one.start,
                         end: two.end,
                         value: one.value + two.value,
                     }),
-                    Some(ValueSection {
+                    Some(Value {
                         start: two.end,
                         end: one.end,
                         value: one.value,
@@ -335,16 +326,16 @@ fn merge_into(one: ValueSection, two: ValueSection) -> (ValueSection, Option<Val
     }
 }
 
-struct ValueSectionIter<I> where I : Iterator<Item=ValueSection> + std::marker::Send {
+struct ValueIter<I> where I : Iterator<Item=Value> + std::marker::Send {
     sections: Vec<I>,
-    queue: std::collections::VecDeque<ValueSection>,
-    buffer: Option<Box<Iterator<Item = ValueSection> + std::marker::Send>>,
+    queue: std::collections::VecDeque<Value>,
+    buffer: Option<Box<Iterator<Item = Value> + std::marker::Send>>,
 }
 
-impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> + std::marker::Send {
-    type Item = ValueSection;
+impl<I> Iterator for ValueIter<I> where I : Iterator<Item=Value> + std::marker::Send {
+    type Item = Value;
 
-    fn next(&mut self) -> Option<ValueSection> {
+    fn next(&mut self) -> Option<Value> {
         if let Some(buf) = &mut self.buffer {
             let next = buf.next();
             match next {
@@ -354,7 +345,7 @@ impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> +
         }
 
         let queue = &mut self.queue;
-        let mut out: Vec<ValueSection> = Vec::new();
+        let mut out: Vec<Value> = Vec::new();
 
         loop {
             //?println!("\nQueue {:?}", queue);
@@ -381,7 +372,7 @@ impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> +
                                 if queued.end <= next_val.start {
                                     continue;
                                 }
-                                let nvq = std::mem::replace(queued, ValueSection { start: 0, end: 0, value: 0.0 });
+                                let nvq = std::mem::replace(queued, Value { start: 0, end: 0, value: 0.0 });
                                 //?println!("Merging {:?} {:?}", nvq, nvo);
                                 let (one, two, three, overhang) = merge_into(nvq, next_val);
                                 //?println!("merge_into {:?} {:?} {:?} {:?}", one, two, three, overhang);
@@ -409,7 +400,7 @@ impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> +
                                             if queued.end <= o.start {
                                                 continue;
                                             }
-                                            let nvq = std::mem::replace(queued, ValueSection { start: 0, end: 0, value: 0.0 });
+                                            let nvq = std::mem::replace(queued, Value { start: 0, end: 0, value: 0.0 });
                                             //?println!("Merging {:?} {:?}", nvq, o);
                                             let (one, two, three, overhang) = merge_into(nvq, o);
                                             //?println!("merge_into {:?} {:?} {:?} {:?}", one, two, three, overhang);
@@ -464,187 +455,14 @@ impl<I> Iterator for ValueSectionIter<I> where I : Iterator<Item=ValueSection> +
     }
 }
 
-fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=ValueSection> + std::marker::Send where I : Iterator<Item=ValueSection> + std::marker::Send {    
-    ValueSectionIter {
+pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=Value> + std::marker::Send where I : Iterator<Item=Value> + std::marker::Send {    
+    ValueIter {
         sections: sections.into_iter().map(Box::new).collect(),
         queue: std::collections::VecDeque::new(),
         buffer: None,
     }
 }
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) -> Result<impl ChromGroupReadStreamingIterator + std::marker::Send> {
-    // Get sizes for each and check that all files (that have the chrom) agree
-    // Check that all chrom sizes match for all files
-    let mut chrom_sizes = BTreeMap::new();
-    for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
-        if chrom_sizes.get(&chrom).is_some() {
-            continue;
-        }
-        let (sizes, bws): (Vec<_>, Vec<_>) = bigwigs.iter().map(|w| {
-            let chroms = w.get_chroms();
-            let res = chroms.iter().find(|v| v.name == chrom);
-            match res {
-                Some(s) => Some((s.length, w.clone())),
-                None => None,
-            }
-        }).filter_map(|x| x).unzip();
-        let size = sizes[0];
-        if !sizes.iter().all(|s| *s == size) {
-            eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-            return Err(io::Error::new(io::ErrorKind::Other, "Invalid input (nonmatching chroms)"));
-        }
-
-        chrom_sizes.insert(chrom.clone(), (size, bws));
-    }
-
-    let mut chrom_ids = IdMap::new();
-    let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
-
-    struct MergingValues<I: Iterator<Item=Value> + std::marker::Send> {
-        iter: std::iter::Peekable<I>,
-    }
-
-    impl<I: Iterator<Item=Value> + std::marker::Send> ChromValues for MergingValues<I> {
-        fn next(&mut self) -> io::Result<Option<Value>> {
-            Ok(self.iter.next())
-        }
-
-        fn peek(&mut self) -> Option<&Value> {
-            self.iter.peek()
-        }
-    }
-
-    struct ChromGroupReadStreamingIteratorImpl {
-        pool: futures::executor::ThreadPool,
-        options: BigWigWriteOptions,
-        iter: Box<Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + std::marker::Send>,
-    }
-
-    impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
-            let next = self.iter.next();
-            match next {
-                Some(((chrom, (size, bws)), chrom_id)) => {
-                    let current_chrom = chrom.clone();
-
-                    // Owned version of BigWigRead::get_interval
-                    // TODO: how to please the borrow checker
-                    // This doesn't work:
-                    // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
-
-                    let iters: Vec<_> = bws.into_iter().map(move |b| {
-                        let blocks = b.get_overlapping_blocks(&chrom, 1, size).unwrap();
-
-                        let endianness = b.info.header.endianness;
-                        let fp = File::open(b.path.clone()).unwrap();
-                        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-
-                        if blocks.len() > 0 {
-                            file.seek(SeekFrom::Start(blocks[0].offset)).unwrap();
-                        }
-                        let mut iter = blocks.into_iter().peekable();
-                        
-                        let block_iter = std::iter::from_fn(move || {
-                            let next = iter.next();
-                            let peek = iter.peek();
-                            let next_offset = match peek {
-                                None => None,
-                                Some(peek) => Some(peek.offset),
-                            };
-                            match next {
-                                None => None,
-                                Some(next) => Some((next, next_offset))
-                            }
-                        });
-                        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-                            // TODO: Could minimize this by chunking block reads
-                            let vals = b.get_block_values(&mut file, &block).unwrap();
-                            match next_offset {
-                                None => (),
-                                Some(next_offset) => {
-                                    if next_offset != block.offset + block.size {
-                                        file.seek(SeekFrom::Start(next_offset)).unwrap();
-                                    }
-                                }
-                            }
-                            vals
-                        });
-                        vals_iter
-                    }).collect();
-
-                    let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
-                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone()).unwrap()))
-                },
-                None => {
-                    return Ok(None)       
-                },
-            }
-        }
-    }
-
-    let group_iter = ChromGroupReadStreamingIteratorImpl {
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
-        options: options,
-        iter: Box::new(chrom_sizes.into_iter().zip(chrom_ids)),
-    };
-
-    Ok(group_iter)
-
-/*
-    let all_values = chrom_sizes.into_iter().zip(chrom_ids).map(move |((chrom, (size, bws)), chrom_id)| {
-        let current_chrom = chrom.clone();
-
-        // Owned version of BigWigRead::get_interval
-        // TODO: how to please the borrow checker
-        // This doesn't work:
-        // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
-
-        let iters: Vec<_> = bws.into_iter().map(move |b| {
-            let blocks = b.get_overlapping_blocks(&chrom, 1, size).unwrap();
-
-            let endianness = b.info.header.endianness;
-            let fp = File::open(b.path.clone()).unwrap();
-            let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-
-            if blocks.len() > 0 {
-                file.seek(SeekFrom::Start(blocks[0].offset)).unwrap();
-            }
-            let mut iter = blocks.into_iter().peekable();
-            
-            let block_iter = std::iter::from_fn(move || {
-                let next = iter.next();
-                let peek = iter.peek();
-                let next_offset = match peek {
-                    None => None,
-                    Some(peek) => Some(peek.offset),
-                };
-                match next {
-                    None => None,
-                    Some(next) => Some((next, next_offset))
-                }
-            });
-            let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-                // TODO: Could minimize this by chunking block reads
-                let vals = b.get_block_values(&mut file, &block).unwrap();
-                match next_offset {
-                    None => (),
-                    Some(next_offset) => {
-                        if next_offset != block.offset + block.size {
-                            file.seek(SeekFrom::Start(next_offset)).unwrap();
-                        }
-                    }
-                }
-                vals
-            });
-            vals_iter
-        }).collect();
-
-        BigWigWrite::read_group(current_chrom, chrom_id, merge_sections_many(iters).filter(|x| x.value != 0.0), pool.clone(), options.clone()).unwrap()
-    }); // Could be appended with `.collect::<Vec<_>>().into_iter();` to process all chroms in parallel
-    // This has a huge overhead of file descriptors though
-    Ok(all_values)
-*/
-}
 
 #[cfg(test)]
 mod tests {
@@ -662,12 +480,12 @@ mod tests {
 
     #[test]
     fn test_merge_into() {
-        let one = ValueSection {
+        let one = Value {
             start: 10,
             end: 20,
             value: 0.3,
         };
-        let two = ValueSection {
+        let two = Value {
             start: 12,
             end: 18,
             value: 0.5,
@@ -691,7 +509,7 @@ mod tests {
         let _sections = generate_sections_seq(50, 150, 1234);
     }
 
-    fn generate_sections_seq(start: u32, end: u32, seed: u64) -> Vec<ValueSection> {
+    fn generate_sections_seq(start: u32, end: u32, seed: u64) -> Vec<Value> {
         use rand::prelude::*;
 
         let mut out = vec![];
@@ -705,7 +523,7 @@ mod tests {
             let skip = 0.max((rng.gen::<f32>() * 10.0).floor() as i32 + -7) as u32;
 
             let curr_end = end.min(curr + size);
-            out.push(ValueSection {
+            out.push(Value {
                 start: curr,
                 end: curr_end,
                 value,

@@ -8,3 +8,5 @@ pub mod chromvalues;
 
 pub mod streaming_linereader;
 pub mod bedgraphparser;
+
+pub mod utils;

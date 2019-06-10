@@ -39,6 +39,3 @@ path = "src/write_test.rs"
 name = "readtest"
 path = "src/read_test.rs"
 
-[[bin]]
-name = "mergetest"
-path = "src/merge_test.rs"

@@ -116,7 +116,7 @@ pub struct BedGraphParser<B: BufRead> {
     state: Arc<AtomicCell<Option<BedGraphParserState<B>>>>,
 }
 
-impl<B: BufRead> BedGraphParser<B> {
+impl BedGraphParser<BufReader<File>> {
     pub fn new(file: File) -> BedGraphParser<BufReader<File>> {
         let bf = BufReader::new(file);
         let state = BedGraphParserState {
