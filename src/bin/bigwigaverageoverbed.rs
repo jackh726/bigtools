@@ -90,13 +90,13 @@ fn write(bedinpath: String, bigwigin: BigWigRead, bedout: File, options: Options
 
 fn main() -> io::Result<()> {
         let matches = App::new("BigWigInfo")
-        .arg(Arg::with_name("bedin")
-                .help("The input bed file")
+        .arg(Arg::with_name("bigwig")
+                .help("The input bigwig file")
                 .index(1)
                 .required(true)
             )
-        .arg(Arg::with_name("bigwig")
-                .help("The input bigwig file")
+        .arg(Arg::with_name("bedin")
+                .help("The input bed file")
                 .index(2)
                 .required(true)
             )
@@ -111,8 +111,8 @@ fn main() -> io::Result<()> {
             )
         .get_matches();
 
-    let bedinpath = matches.value_of("bedin").unwrap().to_owned();
     let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
+    let bedinpath = matches.value_of("bedin").unwrap().to_owned();
     let bedoutpath = matches.value_of("output").unwrap().to_owned();
 
     let simple = matches.is_present("simple");

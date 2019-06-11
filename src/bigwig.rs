@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
+use std::cell::{RefCell, RefMut};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::io::{BufReader, BufWriter};
 use std::fs::File;
@@ -195,10 +196,20 @@ struct ZoomRecord {
     sum_squares: f32,
 }
 
-#[derive(Clone)]
 pub struct BigWigRead {
     pub path: String,
     pub info: BigWigInfo,
+    reader: RefCell<Option<ByteOrdered<BufReader<File>, Endianness>>>,
+}
+
+impl Clone for BigWigRead {
+    fn clone(&self) -> Self {
+        BigWigRead {
+            path: self.path.clone(),
+            info: self.info.clone(),
+            reader: RefCell::new(None),
+        }
+    }
 }
 
 impl BigWigRead {
@@ -206,14 +217,28 @@ impl BigWigRead {
         let fp = File::open(path.clone())?;
         let file = BufReader::new(fp);
         let info = BigWigRead::read_info(file)?;
+
         Ok(BigWigRead {
             path,
             info,
+            reader: RefCell::new(None),
         })
     }
 
     pub fn get_chroms(&self) -> Vec<ChromAndSize> {
         self.info.chrom_info.iter().map(|c| ChromAndSize { name: c.name.clone(), length: c.length }).collect::<Vec<_>>()
+    }
+
+    // TODO: make private when bigwigmerge doesn't need to use this
+    pub fn get_reader<'a>(&'a self) -> io::Result<RefMut<Option<ByteOrdered<BufReader<File>, Endianness>>>> {
+        let mut reader = self.reader.borrow_mut();
+        if let None = *reader {
+            let endianness = self.info.header.endianness;
+            let fp = File::open(self.path.clone())?;
+            let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
+            *reader = Some(file);
+        }
+        Ok(reader)
     }
 
     #[allow(clippy::all)]
@@ -494,10 +519,8 @@ impl BigWigRead {
         Ok(blocks)
     }
 
-    pub fn get_overlapping_blocks(&self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
-        let endianness = self.info.header.endianness;
-        let fp = File::open(self.path.clone())?;
-        let mut file = ByteOrdered::runtime(BufReader::new(fp), endianness);
+    pub fn get_overlapping_blocks(&self, reader: &mut RefMut<Option<ByteOrdered<BufReader<File>, Endianness>>>, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
+        let mut file = reader.as_mut().unwrap();
 
         let full_index_offset = self.info.header.full_index_offset;
         file.seek(SeekFrom::Start(full_index_offset))?;
@@ -506,7 +529,9 @@ impl BigWigRead {
     }
 
     /// This assumes that the file is currently at the block's start
-    pub fn get_block_values(&self, file: &mut ByteOrdered<BufReader<File>, Endianness>, block: &Block) -> io::Result<impl Iterator<Item=Value>> {
+    pub fn get_block_values(&self, reader: &mut RefMut<Option<ByteOrdered<BufReader<File>, Endianness>>>, block: &Block) -> io::Result<impl Iterator<Item=Value>> {
+        let file = reader.as_mut().unwrap();
+
         let endianness = self.info.header.endianness;
         let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
         let mut values: Vec<Value> = Vec::new();
@@ -576,12 +601,11 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
-    pub fn get_interval<'a>(&'a self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send + 'a> {
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+    pub fn get_interval<'a>(&'a self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + 'a> {
+        let mut reader = self.get_reader()?;
+        let blocks = self.get_overlapping_blocks(&mut reader, chrom_name, start, end)?;
 
-        let endianness = self.info.header.endianness;
-        let fp = File::open(self.path.clone())?;
-        let mut file = ByteOrdered::runtime(BufReader::new(fp), endianness);
+        let file = reader.as_mut().unwrap();
 
         if blocks.len() > 0 {
             file.seek(SeekFrom::Start(blocks[0].offset))?;
@@ -594,9 +618,10 @@ impl BigWigRead {
             next.map(|n| (n, peek.map(|p| p.offset)))
         });
         let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-            let mut vals = || -> io::Result<Box<dyn Iterator<Item=io::Result<Value>> + Send + 'a>> {
+            let mut vals = || -> io::Result<Box<dyn Iterator<Item=io::Result<Value>> + 'a>> {
                 // TODO: Could minimize this by chunking block reads
-                let vals = self.get_block_values(&mut file, &block)?;
+                let vals = self.get_block_values(&mut reader, &block)?;
+                let file = reader.as_mut().unwrap();
                 if let Some(next_offset) = next_offset {
                     if next_offset != block.offset + block.size {
                         file.seek(SeekFrom::Start(next_offset))?;
@@ -604,7 +629,7 @@ impl BigWigRead {
                 }
                 Ok(Box::new(vals.map(|v| Ok(v))))
             };
-            let v: Box<dyn Iterator<Item=io::Result<Value>> + Send + 'a> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
+            let v: Box<dyn Iterator<Item=io::Result<Value>> + 'a> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
             v
         }).filter_map(move |mut val| {
             if let Ok(ref mut v) = val {

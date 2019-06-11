@@ -80,7 +80,9 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
                     // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
 
                     let iters: Vec<_> = bws.into_iter().map(move |b| {
-                        let blocks = b.get_overlapping_blocks(&chrom, 1, size).unwrap();
+                        let mut reader = b.get_reader().unwrap();
+                        let blocks = b.get_overlapping_blocks(&mut reader, &chrom, 1, size).unwrap();
+                        drop(reader);
 
                         let endianness = b.info.header.endianness;
                         let fp = File::open(b.path.clone()).unwrap();
@@ -105,7 +107,8 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
                         });
                         let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
                             // TODO: Could minimize this by chunking block reads
-                            let vals = b.get_block_values(&mut file, &block).unwrap();
+                            let mut reader = b.get_reader().unwrap();
+                            let vals = b.get_block_values(&mut reader, &block).unwrap();
                             match next_offset {
                                 None => (),
                                 Some(next_offset) => {
