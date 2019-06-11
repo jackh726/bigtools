@@ -15,6 +15,7 @@ rand = "0.6.5"
 parking_lot = { version = "0.7.1", features = ["nightly"] }
 hopper = "0.4"
 serde = { version = "1.0", features = ["derive"] }
+clap = "2"
 
 
 [profile.release]

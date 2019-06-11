@@ -3,17 +3,33 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
+use clap::{App, Arg};
+
 use bigwig2::bigwig::BigWigWrite;
 use bigwig2::bedgraphparser::{self, BedGraphParser};
 
 fn main() -> io::Result<()> {
-    let mut args = std::env::args();
-    args.next();
-    let bedgraphpath = args.next().expect("Must pass a bedgraph.");
-    let chrom_map = args.next().expect("Must pass a chromosome sizes file.");
-    let bigwigpath = args.next().expect("Must pass a bigwig.");
-    println!("Args: {} {} {}", bedgraphpath, chrom_map, bigwigpath);
+    let matches = App::new("BigWigInfo")
+        .arg(Arg::with_name("bedgraph")
+                .help("the bedgraph to convert to a bigwig")
+                .index(1)
+                .required(true)
+            )
+        .arg(Arg::with_name("chromsizes")
+                .help("A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.")
+                .index(2)
+                .required(true)
+            )
+        .arg(Arg::with_name("output")
+                .help("The output bigwig path")
+                .index(3)
+                .required(true)
+            )
+        .get_matches();
 
+    let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
+    let chrom_map = matches.value_of("chromsizes").unwrap().to_owned();
+    let bigwigpath = matches.value_of("output").unwrap().to_owned();
 
     let outb = BigWigWrite::create_file(bigwigpath)?;
     let chrom_map = BufReader::new(File::open(chrom_map)?)

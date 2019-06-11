@@ -3,6 +3,8 @@
 use std::fs::File;
 use std::io::{self, Write};
 
+use clap::{App, Arg};
+
 use futures::future::FutureExt;
 
 use bigwig2::bigwig::BigWigRead;
@@ -38,11 +40,21 @@ pub fn write_bg(bigwig: BigWigRead, mut out_file: File) -> std::io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let mut args = std::env::args();
-    args.next();
-    let bigwigpath = args.next().expect("Must pass a bigwig.");
-    let bedgraphpath = args.next().expect("Must pass a bedgraph.");
-    println!("Args: {:} {:}", bigwigpath, bedgraphpath);
+    let matches = App::new("BigWigToBedGraph")
+        .arg(Arg::with_name("bigwig")
+                .help("the bigwig to get convert to bedgraph")
+                .index(1)
+                .required(true)
+            )
+        .arg(Arg::with_name("bedgraph")
+                .help("the path of the bedgraph to output to")
+                .index(2)
+                .required(true)
+            )
+        .get_matches();
+
+    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
+    let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
 
     let bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     let bedgraph = File::create(bedgraphpath)?;

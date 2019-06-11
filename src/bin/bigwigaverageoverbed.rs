@@ -3,6 +3,8 @@
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
+use clap::{App, Arg};
+
 use bigwig2::bigwig::BigWigRead;
 use bigwig2::streaming_linereader::StreamingLineReader;
 
@@ -35,12 +37,27 @@ fn write(bedin: File, bigwigin: BigWigRead, bedout: File) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let mut args = std::env::args();
-    args.next();
-    let bedinpath = args.next().expect("Must pass a bed input path.");
-    let bigwigpath = args.next().expect("Must pass a bigwig input file.");
-    let bedoutpath = args.next().expect("Must pass a bed output file.");
-    println!("Args: {} {} {}", bedinpath, bigwigpath, bedoutpath);
+        let matches = App::new("BigWigInfo")
+        .arg(Arg::with_name("bedin")
+                .help("The input bed file")
+                .index(1)
+                .required(true)
+            )
+        .arg(Arg::with_name("bigwig")
+                .help("The input bigwig file")
+                .index(2)
+                .required(true)
+            )
+        .arg(Arg::with_name("output")
+                .help("The output bed file")
+                .index(3)
+                .required(true)
+            )
+        .get_matches();
+
+    let bedinpath = matches.value_of("bedin").unwrap().to_owned();
+    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
+    let bedoutpath = matches.value_of("output").unwrap().to_owned();
 
     let inbed = File::open(bedinpath)?;
     let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;

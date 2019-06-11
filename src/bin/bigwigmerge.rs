@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom};
 
+use clap::{App, Arg};
+
 use byteordered::ByteOrdered;
 
 use bigwig2::bigwig::BigWigWriteOptions;
@@ -137,20 +139,30 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
 }
 
 fn main() -> io::Result<()> {
-    let mut args = std::env::args();
-    args.next();
-    let b1path = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
-    let b2path = args.next().unwrap_or_else(|| "/home/hueyj/temp/final.min.chr17.bigWig".to_string());
-    println!("Args: {:} {:}", b1path, b2path);
+    let matches = App::new("BigWigMerge")
+        .arg(Arg::with_name("output")
+                .help("the path of the merged output bigwig")
+                .index(1)
+                .required(true)
+            )
+        .arg(Arg::with_name("bigwig")
+                .short("b")
+                .help("the path of an input bigwig to merge")
+                .multiple(true)
+                .takes_value(true)
+                .required(true)
+            )
+        .get_matches();
 
-    let b1 = BigWigRead::from_file_and_attach(b1path)?;
-    let b2 = BigWigRead::from_file_and_attach(b2path)?;
+    let output = matches.value_of("output").unwrap().to_owned();
+    let bigwigs = matches
+        .values_of("bigwig")
+        .unwrap()
+        .map(|b| BigWigRead::from_file_and_attach(b.to_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let out = String::from("/home/hueyj/temp/merge_test.bigWig");
-    let outb = BigWigWrite::create_file(out)?;
-
-    let (all_values, chrom_map) = get_merged_values(vec![b1, b2], outb.options.clone())?;
-
+    let outb = BigWigWrite::create_file(output)?;
+    let (all_values, chrom_map) = get_merged_values(bigwigs, outb.options.clone())?;
     outb.write_groups(chrom_map, all_values)?;
 
     //TODO: fails with too many open files
