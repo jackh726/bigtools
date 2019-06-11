@@ -606,6 +606,19 @@ impl BigWigRead {
             };
             let v: Box<dyn Iterator<Item=io::Result<Value>> + Send + 'a> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
             v
+        }).filter_map(move |mut val| {
+            if let Ok(ref mut v) = val {
+                if v.end < start || v.start > end {
+                    return None;
+                }
+                if v.start < start {
+                    v.start = start;
+                }
+                if v.end > end {
+                    v.end = end;
+                }
+            }
+            return Some(val);
         });
 
         Ok(vals_iter)

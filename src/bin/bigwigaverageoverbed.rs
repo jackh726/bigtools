@@ -1,23 +1,57 @@
 #![feature(async_await)]
 
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 use clap::{App, Arg};
 
 use bigwig2::bigwig::BigWigRead;
 use bigwig2::streaming_linereader::StreamingLineReader;
 
-fn write(bedin: File, bigwigin: BigWigRead, bedout: File) -> io::Result<()> {
+struct Options {
+    simple: bool,
+}
+
+fn write(bedinpath: String, bigwigin: BigWigRead, bedout: File, options: Options) -> io::Result<()> {
+    let uniquenames = {
+        if !options.simple {
+            true
+        } else {
+            let reader = BufReader::new(File::open(bedinpath.clone())?); 
+            let mut lines = reader
+                .lines()
+                .take(10)
+                .map(|line| -> io::Result<Option<String>>{
+                    let l = line?;
+                    let mut split = l.splitn(5, "\t");
+                    let chrom = split.next();
+                    let start = split.next();
+                    let end = split.next();
+                    let name = split.next();
+                    if chrom.is_none() || start.is_none() || end.is_none() || name.is_none() {
+                        return Ok(None);
+                    } else {
+                        return Ok(Some(name.unwrap().to_owned()));
+                    }
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            lines.sort();
+            lines.dedup();
+            lines.len() == 10
+        }
+    };
+
+    let bedin = File::open(bedinpath)?;
     let mut bedstream = StreamingLineReader::new(BufReader::new(bedin));
     let mut bedoutwriter = BufWriter::new(bedout);
 
     while let Some(line) = bedstream.read()? {
-        let mut split = line.splitn(4, "\t");
+        let mut split = line.splitn(5, "\t");
         let chrom = split.next().expect("Missing chrom");
         let start = split.next().expect("Missing start").parse::<u32>().unwrap();
         let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-        let rest = split.next().unwrap_or("").trim_end();
+        let name = split.next();
+        let rest = split.next();
         let interval = bigwigin.get_interval(chrom, start, end)?.collect::<Result<Vec<_>, _>>()?;
         let mut bases = 0;
         let mut sum = 0.0;
@@ -26,12 +60,30 @@ fn write(bedin: File, bigwigin: BigWigRead, bedout: File) -> io::Result<()> {
             bases += num_bases;
             sum += f64::from(num_bases) * f64::from(val.value);
         }
+        let size = end - start;
+        let mean0 = sum / f64::from(size);
         let mean = if bases == 0 {
             0.0
         } else {
             sum / f64::from(bases)
         };
-        bedoutwriter.write_fmt(format_args!("{}\t{}\t{}\t{}\t{:.3}\n", chrom, start, end, rest, mean))?;
+        let stats = format!("{}\t{}\t{:.3}\t{:.3}\t{:.3}", size, bases, sum, mean0, mean);
+        if options.simple {
+            if uniquenames {
+                bedoutwriter.write_fmt(format_args!("{}\t{}\n", name.expect("Bad bed format (no name)."), stats))?;
+            } else {
+                bedoutwriter.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom, start, end, stats))?;
+            }
+        } else {
+            let last = match name {
+                Some(name) => match rest {
+                    Some(rest) => format!("{}\t{}", name, rest.trim_end()),
+                    None => format!("{}", name.trim_end()),
+                },
+                None => String::from(""),
+            };
+            bedoutwriter.write_fmt(format_args!("{}\t{}\t{}\t{}\t{}\n", chrom, start, end, last, stats))?;
+        }
     }
     Ok(())
 }
@@ -53,16 +105,24 @@ fn main() -> io::Result<()> {
                 .index(3)
                 .required(true)
             )
+        .arg(Arg::with_name("simple")
+                .short("s")
+                .help("If set, the output bed will either print the name followed by stats (if the fourth column in the first 10 entries), or the chrom,start,end followed by stats. Any other columns in the input bed will be ignored.")
+            )
         .get_matches();
 
     let bedinpath = matches.value_of("bedin").unwrap().to_owned();
     let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
     let bedoutpath = matches.value_of("output").unwrap().to_owned();
 
-    let inbed = File::open(bedinpath)?;
+    let simple = matches.is_present("simple");
+
     let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
-    write(inbed, inbigwig, outbed)?;
+    let options = Options {
+        simple,
+    };
+    write(bedinpath, inbigwig, outbed, options)?;
 
     Ok(())
 }
