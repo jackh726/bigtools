@@ -12,7 +12,7 @@ use bigwig2::tempfilebuffer::TempFileBuffer;
 
 pub fn write_bg(bigwig: BigWigRead, mut out_file: File) -> std::io::Result<()> {
     let chrom_files: Vec<io::Result<(_, TempFileBuffer)>> = bigwig.get_chroms().into_iter().map(|chrom| {
-        let bigwig = bigwig.clone();
+        let mut bigwig = bigwig.clone();
         let (buf, file) = TempFileBuffer::new()?;
         let mut writer = std::io::BufWriter::new(file);
         let file_future = async move || -> io::Result<()> {

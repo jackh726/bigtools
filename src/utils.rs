@@ -1,3 +1,5 @@
+use std::io;
+
 use crate::bigwig::Value;
 
 
@@ -326,13 +328,14 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
     }
 }
 
-struct ValueIter<I> where I : Iterator<Item=Value> + std::marker::Send {
+struct ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
+    error: io::Result<()>,
     sections: Vec<I>,
     queue: std::collections::VecDeque<Value>,
-    buffer: Option<Box<Iterator<Item = Value> + std::marker::Send>>,
+    buffer: Option<Box<Iterator<Item = Value> + Send>>,
 }
 
-impl<I> Iterator for ValueIter<I> where I : Iterator<Item=Value> + std::marker::Send {
+impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
     type Item = Value;
 
     fn next(&mut self) -> Option<Value> {
@@ -351,7 +354,15 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=Value> + std::marker::
             //?println!("\nQueue {:?}", queue);
             let mut earliest_start = None;
             'vals: for section in self.sections.iter_mut() {
-                let val = section.next();
+                let val_result = section.next();
+                let val = match val_result {
+                    Some(Ok(x)) => Some(x),
+                    Some(Err(e)) => {
+                        self.error = Err(e);
+                        None
+                    }
+                    None => None,
+                };
                 match val {
                     None => (),
                     Some(next_val) => {
@@ -455,9 +466,11 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=Value> + std::marker::
     }
 }
 
-pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=Value> + std::marker::Send where I : Iterator<Item=Value> + std::marker::Send {    
+pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=Value> + Send where I : Iterator<Item=io::Result<Value>> + Send {    
     ValueIter {
-        sections: sections.into_iter().map(Box::new).collect(),
+        // TODO: this isn't used right now
+        error: Ok(()),
+        sections: sections,
         queue: std::collections::VecDeque::new(),
         buffer: None,
     }

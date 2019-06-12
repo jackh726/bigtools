@@ -17,7 +17,7 @@ fn main() -> Result<(), std::io::Error> {
 fn read_test(bw: String) -> std::io::Result<()> {
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/ENCFF609KNT.bigWig"))?;
     //let mut b = BigWig::from_file(String::from("/home/hueyj/temp/final.min.chr17.bigWig"))?;
-    let b = BigWigRead::from_file_and_attach(bw)?;
+    let mut b = BigWigRead::from_file_and_attach(bw)?;
     println!("Read path: {:?}", b.path);
 
     println!("BigWigInfo: {:?}", b.info);

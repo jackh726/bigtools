@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
-use std::fs::File;
-use std::io::{self, Seek, SeekFrom};
+use std::io;
 
 use clap::{App, Arg};
-
-use byteordered::ByteOrdered;
 
 use bigwig2::bigwig::BigWigWriteOptions;
 use bigwig2::bigwig::ChromGroupReadStreamingIterator;
@@ -47,11 +44,11 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     let mut chrom_ids = IdMap::new();
     let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
 
-    struct MergingValues<I: Iterator<Item=Value> + std::marker::Send> {
+    struct MergingValues<I: Iterator<Item=Value> + Send> {
         iter: std::iter::Peekable<I>,
     }
 
-    impl<I: Iterator<Item=Value> + std::marker::Send> ChromValues for MergingValues<I> {
+    impl<I: Iterator<Item=Value> + Send> ChromValues for MergingValues<I> {
         fn next(&mut self) -> io::Result<Option<Value>> {
             Ok(self.iter.next())
         }
@@ -64,7 +61,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BigWigWriteOptions,
-        iter: Box<Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + std::marker::Send>,
+        iter: Box<Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + Send>,
     }
 
     impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
@@ -73,55 +70,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
             match next {
                 Some(((chrom, (size, bws)), chrom_id)) => {
                     let current_chrom = chrom.clone();
-
-                    // Owned version of BigWigRead::get_interval
-                    // TODO: how to please the borrow checker
-                    // This doesn't work:
-                    // let iters = bws.iter().map(|b| b.get_interval(&chrom, 1, size)).collect();
-
-                    let iters: Vec<_> = bws.into_iter().map(move |b| {
-                        let mut reader = b.get_reader().unwrap();
-                        let blocks = b.get_overlapping_blocks(&mut reader, &chrom, 1, size).unwrap();
-                        drop(reader);
-
-                        let endianness = b.info.header.endianness;
-                        let fp = File::open(b.path.clone()).unwrap();
-                        let mut file = ByteOrdered::runtime(std::io::BufReader::new(fp), endianness);
-
-                        if blocks.len() > 0 {
-                            file.seek(SeekFrom::Start(blocks[0].offset)).unwrap();
-                        }
-                        let mut iter = blocks.into_iter().peekable();
-                        
-                        let block_iter = std::iter::from_fn(move || {
-                            let next = iter.next();
-                            let peek = iter.peek();
-                            let next_offset = match peek {
-                                None => None,
-                                Some(peek) => Some(peek.offset),
-                            };
-                            match next {
-                                None => None,
-                                Some(next) => Some((next, next_offset))
-                            }
-                        });
-                        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-                            // TODO: Could minimize this by chunking block reads
-                            let mut reader = b.get_reader().unwrap();
-                            let vals = b.get_block_values(&mut reader, &block).unwrap();
-                            match next_offset {
-                                None => (),
-                                Some(next_offset) => {
-                                    if next_offset != block.offset + block.size {
-                                        file.seek(SeekFrom::Start(next_offset)).unwrap();
-                                    }
-                                }
-                            }
-                            vals
-                        });
-                        vals_iter
-                    }).collect();
-
+                    let iters: Vec<_> = bws.into_iter().map(move |b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
                     let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
                     Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone()).unwrap()))
                 },
