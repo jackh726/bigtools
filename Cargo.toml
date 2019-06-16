@@ -13,9 +13,10 @@ tempfile = "3"
 futures-preview = { version = "0.3.0-alpha.16", features = ["nightly", "async-await"] }
 rand = "0.6.5"
 parking_lot = { version = "0.7.1", features = ["nightly"] }
-hopper = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 clap = "2"
+itertools = "0.8.0"
+bincode = "1"
 
 
 [profile.release]
