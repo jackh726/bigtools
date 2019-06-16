@@ -32,12 +32,3 @@ opt-level = 3
 [lib]
 name = "bigwig2"
 path = "src/lib.rs"
-
-[[bin]]
-name = "writetest"
-path = "src/write_test.rs"
-
-[[bin]]
-name = "readtest"
-path = "src/read_test.rs"
-

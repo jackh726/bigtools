@@ -1492,14 +1492,13 @@ impl BigWigWrite {
         }
 
         let mut next_offset = file.seek(SeekFrom::Current(0))?;
-        let mut total_size = 0;
         //println!("Levels: {:?}", levels);
         //println!("Start of index: {}", next_offset);
         for level in (0..=levels).rev() {
             if level > 0 {
                 next_offset += index_offsets[level - 1];
             }
-            total_size += write_tree(file, &nodes, levels, level, next_offset, options)?;
+            write_tree(file, &nodes, levels, level, next_offset, options)?;
             //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
         //println!("Total index size: {:?}", total_size);
