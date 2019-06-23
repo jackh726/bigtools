@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io;
+use std::fs::File;
+use std::io::{self, BufReader, BufRead};
 
 use clap::{App, Arg};
 
@@ -102,16 +103,50 @@ fn main() -> io::Result<()> {
                 .help("the path of an input bigwig to merge")
                 .multiple(true)
                 .takes_value(true)
-                .required(true)
+            )
+        .arg(Arg::with_name("list")
+                .short("l")
+                .help("a line-delimited list of bigwigs")
+                .multiple(true)
+                .takes_value(true)
             )
         .get_matches();
 
     let output = matches.value_of("output").unwrap().to_owned();
-    let bigwigs = matches
-        .values_of("bigwig")
-        .unwrap()
-        .map(|b| BigWigRead::from_file_and_attach(b.to_owned()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut bigwigs: Vec<BigWigRead> = vec![];
+
+    if let Some(bws) = matches.values_of("bigwig") {
+        let results = bws.map(|b| BigWigRead::from_file_and_attach(b.to_owned())).collect::<Result<Vec<_>, _>>();
+        match results {
+            Ok(bws) => bigwigs.extend(bws),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return Ok(());
+            },
+        }
+    }
+    if let Some(lists) = matches.values_of("list") {
+        for list in lists {
+            let list_file = match File::open(list) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Couldn't open file: {:?}", e);
+                    return Ok(())
+                },
+            };
+            let lines = BufReader::new(list_file).lines();
+            for line in lines {
+                let name = line?;
+                match BigWigRead::from_file_and_attach(name.clone()) {
+                    Ok(bw) => bigwigs.push(bw),
+                    Err(e) => {
+                        eprintln!("Error when opening bigwig ({}): {:?}", name, e);
+                        return Ok(())
+                    }
+                }
+            }
+        }
+    }
 
     let outb = BigWigWrite::create_file(output)?;
     let (all_values, chrom_map) = get_merged_values(bigwigs, outb.options.clone())?;

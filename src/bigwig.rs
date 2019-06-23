@@ -334,7 +334,7 @@ impl BigWigRead {
             reserved,
         };
 
-        println!("Header: {:?}", header);
+        //println!("Header: {:?}", header);
 
         let zoom_headers = BigWigRead::read_zoom_headers(&mut file, &header)?;
 
@@ -763,9 +763,9 @@ impl BigWigWrite {
         });
         let (nodes, levels, total_sections) = BigWigWrite::get_rtreeindex(sections_iter, &self.options);
         let data_size = file.tell()? - pre_data;
-        println!("Data size: {:?}", data_size);
-        println!("Sections: {:?}", total_sections);
-        println!("Summary: {:?}", summary);
+        //println!("Data size: {:?}", data_size);
+        //println!("Sections: {:?}", total_sections);
+        //println!("Summary: {:?}", summary);
 
         // Since the chrom tree is read before the index, we put this before the full data index
         // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
@@ -782,7 +782,7 @@ impl BigWigWrite {
 
         //println!("Zoom entries: {:?}", zoom_entries);
         let num_zooms = zoom_entries.len() as u16;
-        println!("Zooms: {:?}", num_zooms);
+        //println!("Zooms: {:?}", num_zooms);
 
         // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
         // In most cases, I think this is the true max size (unless there is only one section and its less than ITEMS_PER_SLOT in size)
@@ -1220,8 +1220,7 @@ impl BigWigWrite {
                 sections_buf.switch(raw_file)?;
 
                 let chrom_summary = summary_future.await?;
-                let num_sections = sections_future.await?;
-                dbg!(num_sections);
+                let _num_sections = sections_future.await?;
                 section_iter = Box::new(section_iter.chain(sections_receiver.into_iter()));
                 raw_file = sections_buf.await_file();
 

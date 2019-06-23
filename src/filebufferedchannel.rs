@@ -283,7 +283,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                             Err(ChannelError::InMemory) => return Err(TryRecvError::Empty),
                             Err(ChannelError::Empty) => return Err(TryRecvError::Empty),
                             Err(ChannelError::Disconnected) => return Err(TryRecvError::Disconnected),
-                            Err(ChannelError::IOError(e)) => return Err(TryRecvError::IOError(e)),
+                        Err(ChannelError::IOError(e)) => return Err(TryRecvError::IOError(e)),
                         }
                     },
                 }
