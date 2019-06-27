@@ -99,7 +99,7 @@ pub struct Block {
     pub size: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Value {
     pub start: u32,
     pub end: u32,
@@ -688,7 +688,7 @@ impl BigWigRead {
             v
         }).filter_map(move |mut val| {
             if let Ok(ref mut v) = val {
-                if v.end < start || v.start > end {
+                if v.end <= start || v.start > end {
                     return None;
                 }
                 if v.start < start {
