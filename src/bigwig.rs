@@ -216,7 +216,13 @@ impl BigWigRead {
     pub fn from_file_and_attach(path: String) -> io::Result<Self> {
         let fp = File::open(path.clone())?;
         let file = BufReader::new(fp);
-        let info = BigWigRead::read_info(file)?;
+        let info = match BigWigRead::read_info(file) {
+            Err(e) => {
+                eprintln!("Error when opening: {}", path.clone());
+                return Err(e);
+            }
+            Ok(info) => info,
+        };
 
         Ok(BigWigRead {
             path,
@@ -297,14 +303,14 @@ impl BigWigRead {
         let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
         let magic = file.read_u32()?;
-        //println!("Magic {:x?}: ", magic);
+        // println!("Magic {:x?}", magic);
         match magic {
             BIGWIG_MAGIC_HTL => {
                 file = file.into_opposite();
                 true
             },
             BIGWIG_MAGIC_LTH => false,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, "File not a big wig"))
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("File not a big wig")))
         };
 
         let version = file.read_u16()?;
