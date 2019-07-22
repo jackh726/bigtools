@@ -19,21 +19,21 @@ fn write(bedinpath: &Path, mut bigwigin: BigWigRead, out: File, options: Options
         if !options.withnames {
             true
         } else {
-            let reader = BufReader::new(File::open(bedinpath.clone())?); 
+            let reader = BufReader::new(File::open(bedinpath)?); 
             let mut lines = reader
                 .lines()
                 .take(10)
                 .map(|line| -> io::Result<Option<String>>{
                     let l = line?;
-                    let mut split = l.splitn(5, "\t");
+                    let mut split = l.splitn(5, '\t');
                     let chrom = split.next();
                     let start = split.next();
                     let end = split.next();
                     let name = split.next();
                     if chrom.is_none() || start.is_none() || end.is_none() || name.is_none() {
-                        return Ok(None);
+                        Ok(None)
                     } else {
-                        return Ok(Some(name.unwrap().to_owned()));
+                        Ok(Some(name.unwrap().to_owned()))
                     }
                 })
                 .collect::<io::Result<Vec<_>>>()?;
@@ -48,7 +48,7 @@ fn write(bedinpath: &Path, mut bigwigin: BigWigRead, out: File, options: Options
     let mut outwriter = BufWriter::new(out);
 
     while let Some(line) = bedstream.read()? {
-        let mut split = line.splitn(5, "\t");
+        let mut split = line.splitn(5, '\t');
         let chrom = split.next().expect("Missing chrom");
         let start = split.next().expect("Missing start").parse::<u32>().unwrap();
         let end = split.next().expect("Missing end").parse::<u32>().unwrap();

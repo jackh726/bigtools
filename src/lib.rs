@@ -1,4 +1,4 @@
-#![feature(async_await, await_macro, test)]
+#![feature(async_await, test)]
 
 pub mod bigwig;
 pub mod idmap;

@@ -19,7 +19,7 @@ def download_test_data():
     if not os.path.exists('./workdir/ENCFF841DHZ.bigWig'):
         urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF841DHZ/@@download/ENCFF841DHZ.bigWig', './workdir/ENCFF841DHZ.bigWig')
     if not os.path.exists('./workdir/ENCFF518WII.bigWig'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF518WII/@@download/ENCFF518WII.bigWig', './workdir/ENCFF841DHZ.bigWig')
+        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF518WII/@@download/ENCFF518WII.bigWig', './workdir/ENCFF518WII.bigWig')
     if not os.path.exists('./workdir/ENCFF646AZP.bed'):
         urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF646AZP/@@download/ENCFF646AZP.bed.gz', './workdir/ENCFF646AZP.bed.gz')
         subprocess.check_call(['gunzip', './workdir/ENCFF646AZP.bed.gz'])
@@ -83,8 +83,8 @@ def time(exeargs_all):
 def compare(bench, ucsc, bigwig2):
     print('Benchmarking {}'.format(bench))
     ucsctime = time(ucsc)
-    bigwig2time = time(bigwig2)
     print("ucsc: {}".format(round(ucsctime,3)))
+    bigwig2time = time(bigwig2)
     print("bigwig2: {}".format(round(bigwig2time,3)))
 
 def bigwigaverageoverbed():

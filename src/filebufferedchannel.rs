@@ -84,7 +84,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                     if let None = serialize_size {
                         serialize_size.replace(bincode::serialized_size(&item).unwrap());
                     }
-                    file.write(&bincode::serialize(&item).unwrap())?;
+                    file.write_all(&bincode::serialize(&item).unwrap())?;
                 }
                 *writeindex = file.tell()?;
                 debug_assert!(buffer.is_empty());

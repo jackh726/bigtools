@@ -397,7 +397,7 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                 match &mut current {
                     None => current = Some((idx as u32 + current_start, idx as u32 + current_start + 1, *i)),
                     Some(c) => {
-                        if c.2 == *i {
+                        if (c.2 - *i).abs() < std::f32::EPSILON {
                             c.1 += 1;
                         } else {
                             if c.2 != 0.0 {

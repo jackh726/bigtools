@@ -245,60 +245,6 @@ impl BigWigRead {
         Ok(())
     }
 
-    #[allow(clippy::all)]
-    pub fn test_read_zoom(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<()> {
-        let fp = File::open(self.path.clone())?;
-        let file = BufReader::new(fp);
-
-        if self.info.zoom_headers.is_empty() {
-            println!("No zooms. Skipping test read.");
-            return Ok(())
-        }
-
-        let uncompress_buf_size = self.info.header.uncompress_buf_size;
-        let index_offset = self.info.zoom_headers[0].index_offset;
-        let endianness = self.info.header.endianness;
-        let mut file = ByteOrdered::runtime(file, endianness);
-        file.seek(SeekFrom::Start(index_offset))?;
-
-        let blocks = self.search_cir_tree(chrom_name, start, end)?;
-
-        println!("Number of zoom blocks: {:?}", blocks.len());
-
-        'blocks: for block in blocks {
-            println!("Block: {:?}", block);
-            file.seek(SeekFrom::Start(block.offset))?;
-
-            let mut raw_data = vec![0u8; block.size as usize];
-            file.read_exact(&mut raw_data)?;
-            let data = if uncompress_buf_size > 0 {
-                let mut uncompressed_block_data = vec![0u8; uncompress_buf_size as usize];
-                let mut d = ZlibDecoder::new(&raw_data[..]);
-                let _ = d.read(&mut uncompressed_block_data)?;
-                uncompressed_block_data
-            } else {
-                raw_data
-            };
-            let itemcount = data.len() / (4 * 8);
-            assert!(data.len() % (4 * 8) == 0);
-            let mut data_mut = ByteOrdered::runtime(&data[..], endianness);
-            for _ in 0..itemcount {
-                let _chrom_id = data_mut.read_u32()?;
-                let _chrom_start = data_mut.read_u32()?;
-                let _chrom_end = data_mut.read_u32()?;
-                let _valid_count = data_mut.read_u32()?;
-                let _min_val = data_mut.read_f32()?;
-                let _max_val = data_mut.read_f32()?;
-                let _sum_data = data_mut.read_f32()?;
-                let _sum_squares = data_mut.read_f32()?;
-                println!("First zoom data: {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}", _chrom_id, _chrom_start, _chrom_end, _valid_count, _min_val, _max_val, _sum_data, _sum_squares);
-                break 'blocks;
-            }
-        }
-
-        Ok(())
-    }
-
     fn read_info(file: BufReader<File>) -> io::Result<BigWigInfo> {
         let mut file = ByteOrdered::runtime(file, Endianness::Little);
 

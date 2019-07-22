@@ -51,6 +51,13 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
 }
 
 #[derive(Debug)]
+enum ChromOpt {
+    None,
+    Same,
+    Diff(String),
+}
+
+#[derive(Debug)]
 pub struct BedGraphParserState<B: BufRead> {
     bedgraph: StreamingLineReader<B>,
     curr_chrom: Option<String>,
@@ -58,52 +65,45 @@ pub struct BedGraphParserState<B: BufRead> {
     // None -> No next value
     // Some(None) -> The next chrom is the same as curr_chrom
     // Some(chrom) -> Chrom is different than curr_chrom
-    next_chrom: Option<Option<String>>,
+    next_chrom: ChromOpt,
     next_val: Option<Value>,
 }
 
 impl<B: BufRead> BedGraphParserState<B> {
     fn advance(&mut self) -> io::Result<()> {
         self.curr_val = self.next_val.take();
-        match self.next_chrom.take() {
-            Some(next_chrom) => {
-                match next_chrom {
-                    Some(real_chrom) => {
-                        self.curr_chrom.replace(real_chrom);
-                    },
-                    None => {},
-                }
+        match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
+            ChromOpt::Diff(real_chrom) => {
+                self.curr_chrom.replace(real_chrom);
             },
-            None => self.curr_chrom = None,
+            ChromOpt::Same => {},
+            ChromOpt::None => {
+                self.curr_chrom = None;
+            },
         }
 
         let l = self.bedgraph.read()?;
-        match l {
-            Some(line) => {
-                let mut split = line.split_whitespace();
-                let chrom = match split.next() {
-                    Some(chrom) => chrom,
-                    None => {
-                        return Ok(());
-                    },
-                };
-                let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-                let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-                let value = split.next().expect("Missing value").parse::<f32>().unwrap();
-                self.next_val.replace(Value { start, end, value });
-                if let Some(curr_chrom) = &self.curr_chrom {
-                    if curr_chrom != chrom {
-                        self.next_chrom.replace(Some(chrom.to_owned()));
-                    } else {
-                        self.next_chrom.replace(None);
-                    }
+        if let Some(line) = l {
+            let mut split = line.split_whitespace();
+            let chrom = match split.next() {
+                Some(chrom) => chrom,
+                None => {
+                    return Ok(());
+                },
+            };
+            let start = split.next().expect("Missing start").parse::<u32>().unwrap();
+            let end = split.next().expect("Missing end").parse::<u32>().unwrap();
+            let value = split.next().expect("Missing value").parse::<f32>().unwrap();
+            self.next_val.replace(Value { start, end, value });
+            if let Some(curr_chrom) = &self.curr_chrom {
+                if curr_chrom != chrom {
+                    self.next_chrom = ChromOpt::Diff(chrom.to_owned());
                 } else {
-                    self.next_chrom.replace(Some(chrom.to_owned()));
+                    self.next_chrom = ChromOpt::Same;
                 }
-            },
-            None => {
-                //self.curr_chrom = None;
-            },
+            } else {
+                self.next_chrom = ChromOpt::Diff(chrom.to_owned());
+            }
         }
         if self.curr_val.is_none() && self.next_val.is_some() {
             self.advance()?;
@@ -122,7 +122,7 @@ impl BedGraphParser<BufReader<File>> {
         let state = BedGraphParserState {
             bedgraph: StreamingLineReader::new(bf),
             curr_chrom: None,
-            next_chrom: None,
+            next_chrom: ChromOpt::None,
             curr_val: None,
             next_val: None,
         };
@@ -136,14 +136,12 @@ impl BedGraphParser<BufReader<File>> {
 impl<B: BufRead> ChromGroups<ChromGroup<B>> for BedGraphParser<B> {
     fn next(&mut self) -> io::Result<Option<(String, ChromGroup<B>)>> {
         let opt_state = self.state.swap(None);
-        if let None = opt_state {
+        if opt_state.is_none() {
             panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         }
         let mut state = opt_state.unwrap();
-        if let Some(next_chrom) = state.next_chrom.as_ref() {
-            if next_chrom.is_none() {
-                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-            }
+        if let ChromOpt::Same = state.next_chrom {
+            panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         }
         state.advance()?;
 
@@ -165,9 +163,9 @@ pub struct ChromGroup<B: BufRead> {
 
 impl<B: BufRead> ChromValues for ChromGroup<B> {
     fn next(&mut self) -> io::Result<Option<Value>> {
-        if let None = self.curr_state {
+        if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
-            if let None = opt_state {
+            if opt_state.is_none() {
                 panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
             }
             self.curr_state = opt_state;
@@ -176,28 +174,24 @@ impl<B: BufRead> ChromValues for ChromGroup<B> {
         if let Some(val) = state.curr_val.take() {
             return Ok(Some(val));
         }
-        if let Some(next_chrom) = state.next_chrom.as_ref() {
-            if next_chrom.is_some() {
-                return Ok(None);
-            }
+        if let ChromOpt::Diff(_) = state.next_chrom {
+            return Ok(None);
         }
         state.advance()?;
         Ok(state.curr_val.take())
     }
 
     fn peek(&mut self) -> Option<&Value> {
-        if let None = self.curr_state {
+        if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
-            if let None = opt_state {
+            if opt_state.is_none() {
                 panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
             }
             self.curr_state = opt_state;
         }
         let state = self.curr_state.as_ref().unwrap();
-        if let Some(next_chrom) = state.next_chrom.as_ref() {
-            if next_chrom.is_some() {
-                return None;
-            }
+        if let ChromOpt::Diff(_) = state.next_chrom {
+            return None;
         }
         return state.next_val.as_ref();
     }

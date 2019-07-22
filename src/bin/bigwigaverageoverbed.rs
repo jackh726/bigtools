@@ -23,7 +23,7 @@ fn write(bedinpath: String, mut bigwigin: BigWigRead, bedout: File, options: Opt
                 .take(10)
                 .map(|line| -> io::Result<Option<String>>{
                     let l = line?;
-                    let mut split = l.splitn(5, "\t");
+                    let mut split = l.splitn(5, '\t');
                     let chrom = split.next();
                     let start = split.next();
                     let end = split.next();
@@ -46,7 +46,7 @@ fn write(bedinpath: String, mut bigwigin: BigWigRead, bedout: File, options: Opt
     let mut bedoutwriter = BufWriter::new(bedout);
 
     while let Some(line) = bedstream.read()? {
-        let mut split = line.splitn(5, "\t");
+        let mut split = line.splitn(5, '\t');
         let chrom = split.next().expect("Missing chrom");
         let start = split.next().expect("Missing start").parse::<u32>().unwrap();
         let end = split.next().expect("Missing end").parse::<u32>().unwrap();
@@ -78,7 +78,7 @@ fn write(bedinpath: String, mut bigwigin: BigWigRead, bedout: File, options: Opt
             let last = match name {
                 Some(name) => match rest {
                     Some(rest) => format!("{}\t{}", name, rest.trim_end()),
-                    None => format!("{}", name.trim_end()),
+                    None => name.trim_end().to_string(),
                 },
                 None => String::from(""),
             };
