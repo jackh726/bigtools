@@ -5,7 +5,7 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 use clap::{App, Arg};
 
-use bigwig2::bigwig::BigWigRead;
+use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
 use bigwig2::streaming_linereader::StreamingLineReader;
 
 struct Options {
@@ -88,7 +88,7 @@ fn write(bedinpath: String, mut bigwigin: BigWigRead, bedout: File, options: Opt
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), BigWigReadAttachError> {
         let matches = App::new("BigWigInfo")
         .arg(Arg::with_name("bigwig")
                 .help("The input bigwig file")

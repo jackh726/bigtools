@@ -7,22 +7,22 @@ use clap::{App, Arg};
 
 use futures::future::FutureExt;
 
-use bigwig2::bigwig::BigWigRead;
-use bigwig2::tempfilebuffer::TempFileBuffer;
+use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError, ChromAndSize};
+use bigwig2::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 pub fn write_bg(bigwig: BigWigRead, mut out_file: File) -> std::io::Result<()> {
     let chrom_files: Vec<io::Result<(_, TempFileBuffer)>> = bigwig.get_chroms().into_iter().map(|chrom| {
-        let mut bigwig = bigwig.clone();
+        let bigwig = bigwig.clone();
         let (buf, file) = TempFileBuffer::new()?;
-        let mut writer = std::io::BufWriter::new(file);
-        let file_future = async move || -> io::Result<()> {
+        let writer = io::BufWriter::new(file);
+        async fn file_future(mut bigwig: BigWigRead, chrom: ChromAndSize, mut writer: io::BufWriter<TempFileBufferWriter>) -> io::Result<()> {
             for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
                 let val = raw_val?;
                 writer.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.value))?;
             }
             Ok(())
         };
-        let (remote, handle) = file_future().remote_handle();
+        let (remote, handle) = file_future(bigwig, chrom, writer).remote_handle();
         std::thread::spawn(move || {
             futures::executor::block_on(remote);
         });
@@ -39,7 +39,7 @@ pub fn write_bg(bigwig: BigWigRead, mut out_file: File) -> std::io::Result<()> {
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigToBedGraph")
         .arg(Arg::with_name("bigwig")
                 .help("the bigwig to get convert to bedgraph")

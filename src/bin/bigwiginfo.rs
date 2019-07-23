@@ -1,10 +1,8 @@
-use std::io;
-
 use clap::{App, Arg};
 
-use bigwig2::bigwig::BigWigRead;
+use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigInfo")
         .arg(Arg::with_name("bigwig")
                 .help("the bigwig to get info for")

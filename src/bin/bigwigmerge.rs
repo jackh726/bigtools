@@ -7,7 +7,7 @@ use clap::{App, Arg};
 use bigwig2::bigwig::BigWigWriteOptions;
 use bigwig2::bigwig::ChromGroupReadStreamingIterator;
 use bigwig2::chromvalues::ChromValues;
-use bigwig2::bigwig::{BigWigRead, BigWigWrite};
+use bigwig2::bigwig::{BigWigRead, BigWigWrite, WriteGroupsError};
 use bigwig2::bigwig::Value;
 use bigwig2::bigwig::ChromGroupRead;
 
@@ -62,18 +62,18 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BigWigWriteOptions,
-        iter: Box<Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + Send>,
+        iter: Box<dyn Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + Send>,
     }
 
     impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
+        fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError> {
             let next = self.iter.next();
             match next {
                 Some(((chrom, (size, bws)), chrom_id)) => {
                     let current_chrom = chrom.clone();
                     let iters: Vec<_> = bws.into_iter().map(move |b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
                     let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
-                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone()).unwrap()))
+                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone())?))
                 },
                 None => {
                     return Ok(None)       
@@ -91,7 +91,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     Ok((group_iter, chrom_map))
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BigWigMerge")
         .arg(Arg::with_name("output")
                 .help("the path of the merged output bigwig")
@@ -120,7 +120,7 @@ fn main() -> io::Result<()> {
         match results {
             Ok(bws) => bigwigs.extend(bws),
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {:?}", e);
                 return Ok(());
             },
         }
@@ -148,7 +148,7 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let outb = BigWigWrite::create_file(output)?;
+    let outb = BigWigWrite::create_file(output);
     let (all_values, chrom_map) = get_merged_values(bigwigs, outb.options.clone())?;
     outb.write_groups(chrom_map, all_values)?;
 

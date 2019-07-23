@@ -331,7 +331,7 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
 struct ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
     error: io::Result<()>,
     sections: Vec<(I, Option<Value>)>,
-    next_sections: Option<Box<Iterator<Item = Value> + Send>>,
+    next_sections: Option<Box<dyn Iterator<Item = Value> + Send>>,
     last_val: Option<Value>,
     next_start: u32,
 }

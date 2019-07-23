@@ -7,6 +7,7 @@ use crate::bigwig::BigWigWriteOptions;
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::ChromGroupReadStreamingIterator;
 use crate::bigwig::Value;
+use crate::bigwig::WriteGroupsError;
 use crate::idmap::IdMap;
 use crate::streaming_linereader::StreamingLineReader;
 use crate::chromvalues::{ChromGroups, ChromValues};
@@ -23,7 +24,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
     }
 
     impl<C: ChromGroups<ChromGroup<BufReader<File>>>> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<C> {
-        fn next(&mut self) -> io::Result<Option<ChromGroupRead>> {
+        fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError> {
             match self.chrom_groups.next()? {
                 Some((chrom, group)) => {
                     let last = self.last_chrom.replace(chrom.clone());
@@ -33,7 +34,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
                         assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
                     }
                     let chrom_id = self.chrom_ids.get_id(chrom.clone());
-                    Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone()).unwrap()))
+                    Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone())?))
                 },
                 None => Ok(None),
             }

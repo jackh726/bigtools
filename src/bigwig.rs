@@ -4,6 +4,7 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::io::{BufReader, BufWriter};
 use std::fs::File;
+use std::pin::Pin;
 use std::vec::Vec;
 
 use futures::future::{Future, FutureExt, RemoteHandle};
@@ -51,7 +52,6 @@ pub struct BBIHeader {
     auto_sql_offset: u64,
     total_summary_offset: u64,
     uncompress_buf_size: u32,
-    reserved: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -78,12 +78,6 @@ impl PartialEq for ChromAndSize {
     fn eq(&self, other: &ChromAndSize) -> bool {
         self.name == other.name
     }
-}
-
-#[derive(Debug)]
-pub struct ChromSize {
-    pub name: String,
-    pub length: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -156,20 +150,20 @@ pub struct Summary {
 }
 
 type TempZoomInfo = (u32 /* resolution */, RemoteHandle<io::Result<usize>> /* Temp file that contains data */, TempFileBuffer, filebufferedchannel::Receiver<Section> /* sections */);
-type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<Iterator<Item=Section>> /* sections */);
+type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, Box<dyn Iterator<Item=Section>> /* sections */);
 const DEFAULT_ZOOM_SIZES: [u32; 11] = [10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
 pub type ChromGroupRead = (
-    Box<Future<Output=io::Result<Summary>> + Send + Unpin>,
+    Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send + Unpin>,
     filebufferedchannel::Receiver<Section>,
     TempFileBuffer,
-    Box<Future<Output=io::Result<usize>> + Send + Unpin>,
+    Box<dyn Future<Output=io::Result<usize>> + Send + Unpin>,
     Vec<TempZoomInfo>,
     (String, u32)
 );
 
 pub trait ChromGroupReadStreamingIterator {
-    fn next(&mut self) -> io::Result<Option<ChromGroupRead>>;
+    fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError>;
 }
 
 #[derive(Debug)]
@@ -212,14 +206,49 @@ impl Clone for BigWigRead {
     }
 }
 
+#[derive(Debug)]
+pub enum BigWigReadAttachError {
+    NotABigWig,
+    InvalidChroms,
+    IoError(io::Error),
+}
+
+impl From<io::Error> for BigWigReadAttachError {
+    fn from(error: io::Error) -> Self {
+        BigWigReadAttachError::IoError(error)
+    }
+}
+
+impl From<BigWigReadInfoError> for BigWigReadAttachError {
+    fn from(error: BigWigReadInfoError) -> Self {
+        return match error {
+            BigWigReadInfoError::NotABigWig => BigWigReadAttachError::NotABigWig,
+            BigWigReadInfoError::InvalidChroms => BigWigReadAttachError::InvalidChroms,
+            BigWigReadInfoError::IoError(e) => BigWigReadAttachError::IoError(e),
+        }
+    }
+}
+
+pub enum BigWigReadInfoError {
+    NotABigWig,
+    InvalidChroms,
+    IoError(io::Error),
+}
+
+impl From<io::Error> for BigWigReadInfoError {
+    fn from(error: io::Error) -> Self {
+        BigWigReadInfoError::IoError(error)
+    }
+}
+
 impl BigWigRead {
-    pub fn from_file_and_attach(path: String) -> io::Result<Self> {
+    pub fn from_file_and_attach(path: String) -> Result<Self, BigWigReadAttachError> {
         let fp = File::open(path.clone())?;
         let file = BufReader::new(fp);
         let info = match BigWigRead::read_info(file) {
             Err(e) => {
                 eprintln!("Error when opening: {}", path.clone());
-                return Err(e);
+                return Err(e.into());
             }
             Ok(info) => info,
         };
@@ -245,21 +274,20 @@ impl BigWigRead {
         Ok(())
     }
 
-    fn read_info(file: BufReader<File>) -> io::Result<BigWigInfo> {
+    fn read_info(file: BufReader<File>) -> Result<BigWigInfo, BigWigReadInfoError> {
         let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
         let magic = file.read_u32()?;
         // println!("Magic {:x?}", magic);
         match magic {
-            BIGWIG_MAGIC_HTL => {
-                file = file.into_opposite();
-                true
-            },
-            BIGWIG_MAGIC_LTH => false,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("File not a big wig")))
+            BIGWIG_MAGIC_HTL => file = file.into_opposite(),
+            BIGWIG_MAGIC_LTH => {},
+            _ => return Err(BigWigReadInfoError::NotABigWig),
         };
 
         let version = file.read_u16()?;
+
+        // TODO: should probably handle versions < 3
         let zoom_levels = file.read_u16()?;
         let chromosome_tree_offset = file.read_u64()?;
         let full_data_offset = file.read_u64()?;
@@ -269,7 +297,7 @@ impl BigWigRead {
         let auto_sql_offset = file.read_u64()?;
         let total_summary_offset = file.read_u64()?;
         let uncompress_buf_size = file.read_u32()?;
-        let reserved = file.read_u64()?;
+        let _reserved = file.read_u64()?;
 
         let header = BBIHeader {
             endianness: file.endianness(),
@@ -283,7 +311,6 @@ impl BigWigRead {
             auto_sql_offset,
             total_summary_offset,
             uncompress_buf_size,
-            reserved,
         };
 
         //println!("Header: {:?}", header);
@@ -299,7 +326,7 @@ impl BigWigRead {
         let item_count = file.read_u64()?;
         let _reserved = file.read_u64()?;
         if magic != CHROM_TREE_MAGIC {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CHROM_TREE_MAGIC does not match."))
+            return Err(BigWigReadInfoError::InvalidChroms);
         }
         //println!("{:x?} {:?} {:?} {:?} {:?} {:?}", magic, _block_size, key_size, val_size, item_count, _reserved);
         assert_eq!(val_size, 8u32); 
@@ -388,6 +415,7 @@ impl BigWigRead {
         }
     }
 
+    #[inline]
     fn overlaps(chromq: u32, chromq_start: u32, chromq_end: u32, chromb1: u32, chromb1_start: u32, chromb2: u32, chromb2_end: u32) -> bool {
         BigWigRead::compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && BigWigRead::compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
     }
@@ -435,9 +463,9 @@ impl BigWigRead {
         Ok(())
     }
 
+    /// This assumes the file is at the cir tree start
     fn search_cir_tree(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
-        self.ensure_reader()?;
-        let mut file = self.reader.as_mut().unwrap();
+        let mut file = self.reader.as_mut().expect("reader must be seeked to cir tree start prior to calling search_cir_tree");
 
         let chrom_ix = {
             let chrom_info = &self.info.chrom_info;
@@ -669,21 +697,33 @@ pub struct BigWigWrite {
     pub options: BigWigWriteOptions,
 }
 
+#[derive(Debug)]
+pub enum WriteGroupsError {
+    InvalidInput(String),
+    IoError(io::Error),
+}
+
+impl From<io::Error> for WriteGroupsError {
+    fn from(error: io::Error) -> Self {
+        WriteGroupsError::IoError(error)
+    }
+}
+
 impl BigWigWrite {
-    pub fn create_file(path: String) -> io::Result<Self> {
-        Ok(BigWigWrite {
+    pub fn create_file(path: String) -> Self {
+        BigWigWrite {
             path,
             options: BigWigWriteOptions {
                 compress: true,
                 items_per_slot: 1024,
                 block_size: 256,
             }
-        })
+        }
     }
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> io::Result<()> where V : ChromGroupReadStreamingIterator + Send {
+    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> Result<(), WriteGroupsError> where V : ChromGroupReadStreamingIterator + Send {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -758,7 +798,7 @@ impl BigWigWrite {
         file.write_u32::<NativeEndian>(uncompress_buf_size)?;
         file.write_u64::<NativeEndian>(0)?;
 
-        assert!(file.seek(SeekFrom::Current(0))? == 64);
+        debug_assert!(file.seek(SeekFrom::Current(0))? == 64);
 
         for zoom_entry in zoom_entries {
             file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
@@ -911,7 +951,7 @@ impl BigWigWrite {
 
         let (mut ftx, frx) = channel::<_>(100);
 
-        async fn create_do_write<W: Write>(mut data_file: W, mut section_sender: filebufferedchannel::Sender<Section>, mut frx: Receiver<impl Future<Output=io::Result<SectionData>>>) -> io::Result<usize> {
+        async fn create_do_write<W: Write>(mut data_file: W, mut section_sender: filebufferedchannel::Sender<Section>, mut frx: Receiver<impl Future<Output=io::Result<SectionData>> + Send >) -> io::Result<usize> {
             let mut current_offset = 0;
             let mut total = 0;
             while let Some(section_raw) = frx.next().await {
@@ -957,8 +997,18 @@ impl BigWigWrite {
         }).collect();
         let (zooms_futures, mut zooms_channels): (Vec<_>, Vec<_>) = processed_zooms?.into_iter().unzip();
 
-        
-        let read_file = async move || -> io::Result<Summary> {
+
+        async fn read_file<I: 'static>(
+            mut zooms_channels: Vec<futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>>,
+            mut ftx: futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>,
+            chromId: u32,
+            options: BigWigWriteOptions,
+            mut pool: ThreadPool,
+            mut group: I,
+            chrom: String,
+            ) -> Result<Summary, WriteGroupsError> 
+            where I: ChromValues + Send {
+            let num_zooms = DEFAULT_ZOOM_SIZES.len();
             struct ZoomItem {
                 live_info: Option<ZoomRecord>,
                 records: Vec<ZoomRecord>,
@@ -980,19 +1030,21 @@ impl BigWigWrite {
             while let Some(current_val) = group.next()? {
                 // TODO: test this correctly fails
                 // TODO: change these to not panic
-                assert!(current_val.start <= current_val.end);
+                if current_val.start > current_val.end {
+                    return Err(WriteGroupsError::InvalidInput(format!("Invalid bed graph: {:?} > {:?}", current_val.start, current_val.end)))
+                }
                 match group.peek() {
                     None => (),
                     Some(next_val) => {
-                        assert!(
-                            current_val.end <= next_val.start,
-                            "Input bedGraph has overlapping values on chromosome {} at {}-{} and {}-{}",
-                            chrom,
-                            current_val.start,
-                            current_val.end,
-                            next_val.start,
-                            next_val.end,
-                        );
+                        if current_val.end > next_val.start {
+                            return Err(WriteGroupsError::InvalidInput(format!(
+                                "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",                             chrom,
+                                current_val.start,
+                                current_val.end,
+                                next_val.start,
+                                next_val.end,
+                            )));
+                        }
                     }
                 }
 
@@ -1091,7 +1143,7 @@ impl BigWigWrite {
 
             for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
                 if let Some(zoom2) = zoom_item.live_info {
-                    assert!(chromId == zoom2.chrom);
+                    debug_assert!(chromId == zoom2.chrom);
                     zoom_item.records.push(ZoomRecord {
                         chrom: chromId,
                         start: zoom2.start,
@@ -1139,7 +1191,7 @@ impl BigWigWrite {
             pool.run()
         });
 
-        let (f_remote, f_handle) = read_file().remote_handle();
+        let (f_remote, f_handle) = read_file(zooms_channels, ftx, chromId, options, pool, group, chrom).remote_handle();
         std::thread::spawn(move || {
             block_on(f_remote);
         });
@@ -1150,11 +1202,11 @@ impl BigWigWrite {
         &self,
         mut vals_iter: V,
         file: BufWriter<File>
-    ) -> io::Result<impl Future<Output=io::Result<(IdMap<String>, Summary, BufWriter<File>, Box<Iterator<Item=Section>>, Vec<ZoomInfo>)>>> where V : ChromGroupReadStreamingIterator + Send {
-        let mut section_iter: Box<Iterator<Item=Section>> = Box::new(std::iter::empty());
+    ) -> io::Result<impl Future<Output=Result<(IdMap<String>, Summary, BufWriter<File>, Box<dyn Iterator<Item=Section>>, Vec<ZoomInfo>), WriteGroupsError>>> where V : ChromGroupReadStreamingIterator + Send {
+        let mut section_iter: Box<dyn Iterator<Item=Section>> = Box::new(std::iter::empty());
 
         let mut zooms: Vec<(u32, Box<dyn Iterator<Item=Section>>, TempFileBuffer, TempFileBufferWriter)> = DEFAULT_ZOOM_SIZES.iter().map(|size| -> io::Result<_> {
-            let section_iter: Box<Iterator<Item=Section>> = Box::new(std::iter::empty());
+            let section_iter: Box<dyn Iterator<Item=Section>> = Box::new(std::iter::empty());
 
             let (buf, write) = TempFileBuffer::new()?;
             Ok((*size, section_iter, buf, write))
@@ -1162,7 +1214,14 @@ impl BigWigWrite {
 
         let mut raw_file = file.into_inner()?;
 
-        let read_file = async move || -> io::Result<(IdMap<String>, Summary, BufWriter<File>, Box<Iterator<Item=Section>>, Vec<ZoomInfo>)> {
+        async fn read_file<V: 'static>(
+            mut raw_file: File,
+            mut section_iter: Box<dyn Iterator<Item=Section>>,
+            mut zooms: Vec<(u32, Box<dyn Iterator<Item=Section>>, TempFileBuffer, TempFileBufferWriter)>,
+            mut vals_iter: V
+        )
+        -> Result<(IdMap<String>, Summary, BufWriter<File>, Box<dyn Iterator<Item=Section>>, Vec<ZoomInfo>), WriteGroupsError>
+        where V : ChromGroupReadStreamingIterator + Send {
             let mut summary: Option<Summary> = None;
 
             let mut chrom_ids = IdMap::new();
@@ -1215,7 +1274,7 @@ impl BigWigWrite {
             Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), section_iter, zoom_infos))
         };
 
-        Ok(read_file())
+        Ok(read_file(raw_file, section_iter, zooms, vals_iter))
     }
 
     fn write_zooms<'a>(mut file: &'a mut BufWriter<File>, zooms: Vec<ZoomInfo>, zoom_entries: &'a mut Vec<ZoomHeader>, data_size: u64, options: &BigWigWriteOptions) -> io::Result<()> {

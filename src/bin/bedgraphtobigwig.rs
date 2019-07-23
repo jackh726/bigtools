@@ -1,14 +1,14 @@
 #![feature(async_await)]
 
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 
 use clap::{App, Arg};
 
-use bigwig2::bigwig::BigWigWrite;
+use bigwig2::bigwig::{BigWigWrite, WriteGroupsError};
 use bigwig2::bedgraphparser::{self, BedGraphParser};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BigWigInfo")
         .arg(Arg::with_name("bedgraph")
                 .help("the bedgraph to convert to a bigwig")
@@ -31,7 +31,7 @@ fn main() -> io::Result<()> {
     let chrom_map = matches.value_of("chromsizes").unwrap().to_owned();
     let bigwigpath = matches.value_of("output").unwrap().to_owned();
 
-    let outb = BigWigWrite::create_file(bigwigpath)?;
+    let outb = BigWigWrite::create_file(bigwigpath);
     let chrom_map = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l { Ok(s) => !s.is_empty(), _ => true })
