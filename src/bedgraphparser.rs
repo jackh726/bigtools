@@ -30,8 +30,9 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
                     let last = self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
                         // TODO: test this correctly fails
-                        // TODO: change these to not panic
-                        assert!(c < chrom, "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.");
+                        if c >= chrom {
+                            return Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                        }
                     }
                     let chrom_id = self.chrom_ids.get_id(chrom.clone());
                     Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone())?))
@@ -45,7 +46,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
         chrom_groups: vals,
         last_chrom: None,
         chrom_ids: IdMap::new(),
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
+        pool: futures::executor::ThreadPoolBuilder::new().pool_size(1).create().expect("Unable to create thread pool."),
         options: options.clone(),
     };
     group_iter

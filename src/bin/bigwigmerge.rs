@@ -83,7 +83,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     }
 
     let group_iter = ChromGroupReadStreamingIteratorImpl {
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(4).create().expect("Unable to create thread pool."),
+        pool: futures::executor::ThreadPoolBuilder::new().pool_size(8).create().expect("Unable to create thread pool."),
         options: options,
         iter: Box::new(chrom_sizes.into_iter().zip(chrom_ids)),
     };

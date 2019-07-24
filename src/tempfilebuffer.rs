@@ -1,10 +1,12 @@
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
 use parking_lot::{Condvar, Mutex};
 use std::sync::{Arc};
+use std::ops::DerefMut;
 
 #[derive(Debug)]
 enum BufferState {
+    NotStarted,
     Temp(Option<File>),
     Real(Option<File>),
 }
@@ -27,8 +29,7 @@ pub struct TempFileBufferWriter {
 
 impl TempFileBuffer {
     pub fn new() -> io::Result<(TempFileBuffer, TempFileBufferWriter)> {
-        let file = tempfile::tempfile()?;
-        let state = Arc::new(Mutex::new(BufferState::Temp(Some(file)))); 
+        let state = Arc::new(Mutex::new(BufferState::NotStarted));
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
         Ok((
             TempFileBuffer { state: state.clone(), closed: closed.clone() },
@@ -48,21 +49,19 @@ impl TempFileBuffer {
 
     pub fn switch(&mut self, mut new_file: File) -> io::Result<()> {
         let mut guard = self.state.lock();
-        use std::ops::DerefMut;
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
+            BufferState::NotStarted => {
+                *guard = BufferState::Real(Some(new_file));
+                Ok(())
+            },
             BufferState::Temp(ref mut file) => {
-                match file {
-                    None => panic!(),
-                    Some(file) => {
-                        use std::io::Seek;
-                        file.seek(io::SeekFrom::Start(0))?;
+                let mut file = file.as_mut().unwrap();
+                file.seek(io::SeekFrom::Start(0))?;
 
-                        std::io::copy(file, &mut new_file)?;
-                        *guard = BufferState::Real(Some(new_file));
-                    }
-                }
+                io::copy(&mut file, &mut new_file)?;
+                *guard = BufferState::Real(Some(new_file));
                 Ok(())
             },
             BufferState::Real(_) => panic!("Already switched!"),
@@ -78,18 +77,11 @@ impl TempFileBuffer {
         }
 
         let mut guard = self.state.lock();
-        use std::ops::DerefMut;
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
-            BufferState::Temp(_) => panic!("Must be called after switch."),
-            BufferState::Real(ref mut file) => {
-                let file = file.take();
-                match file {
-                    None => panic!("Already switched!"),
-                    Some(file) => file,
-                }
-            }
+            BufferState::NotStarted | BufferState::Temp(_) => panic!("Must be called after switch."),
+            BufferState::Real(ref mut file) => file.take().expect("Already switched!"),
         }
     }
 
@@ -102,20 +94,13 @@ impl TempFileBuffer {
         }
 
         let mut guard = self.state.lock();
-        use std::ops::DerefMut;
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
-            BufferState::Temp(ref mut file) => {
-                file.take().unwrap()
-            },
-            BufferState::Real(ref mut file) => {
-                let file = file.take();
-                match file {
-                    None => panic!("Already switched!"),
-                    Some(file) => file,
-                }
-            }
+            // TODO: handle correctly
+            BufferState::NotStarted => tempfile::tempfile().expect("Couldn't create tempfile"),
+            BufferState::Temp(ref mut file) => file.take().unwrap(),
+            BufferState::Real(ref mut file) => file.take().expect("Already switched!"),
         }
     }
 
@@ -128,20 +113,15 @@ impl TempFileBuffer {
         }
 
         let mut guard = self.state.lock();
-        use std::ops::DerefMut;
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
+            BufferState::NotStarted => panic!("No data was written!"),
             BufferState::Temp(ref mut file) => {
-                match file {
-                    None => panic!(),
-                    Some(file) => {
-                        use std::io::Seek;
-                        file.seek(io::SeekFrom::Start(0))?;
+                let mut file = file.as_mut().unwrap();
+                file.seek(io::SeekFrom::Start(0))?;
 
-                        std::io::copy(file, &mut real)?;
-                    }
-                }
+                std::io::copy(&mut file, &mut real)?;
                 Ok(())
             },
             BufferState::Real(_) => panic!("Should only be writing to real file.")
@@ -161,45 +141,28 @@ impl Drop for TempFileBufferWriter {
 
 impl Write for TempFileBufferWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut guard = self.state.lock();
-        use std::ops::DerefMut;
-        let state: &mut BufferState = guard.deref_mut();
-        //println!("Write {:?}", state);
+        loop {
+            let mut guard = self.state.lock();
+            let state: &mut BufferState = guard.deref_mut();
 
-        match state {
-            BufferState::Temp(ref mut file) => {
-                match file {
-                    None => panic!(),
-                    Some(file) => file.write(buf),
-                }
-            },
-            BufferState::Real(ref mut file) => {
-                match file {
-                    Some(file) => file.write(buf),
-                    None => panic!("Should have been dropped by now."),
-                }
-                
+            match state {
+                BufferState::NotStarted => {
+                    *guard = BufferState::Temp(Some(tempfile::tempfile()?));
+                    continue;
+                },
+                BufferState::Temp(ref mut file) => return file.as_mut().unwrap().write(buf),
+                BufferState::Real(ref mut file) => return file.as_mut().unwrap().write(buf),
             }
         }
     }
     fn flush(&mut self) -> io::Result<()> {
         let mut guard = self.state.lock();
-        use std::ops::DerefMut;
         let state: &mut BufferState = guard.deref_mut();
 
         match state {
-            BufferState::Temp(ref mut file) => {
-                match file {
-                    None => panic!(),
-                    Some(file) => file.flush(),
-                }
-            },
-            BufferState::Real(ref mut file) => {
-                match file {
-                    Some(file) => file.flush(),
-                    None => panic!("Should have been dropped by now."),
-                }
-            }
+            BufferState::NotStarted => Ok(()), // No data has been written, nothing to flush
+            BufferState::Temp(ref mut file) => file.as_mut().unwrap().flush(),
+            BufferState::Real(ref mut file) => file.as_mut().unwrap().flush(),
         }
     }
 }
