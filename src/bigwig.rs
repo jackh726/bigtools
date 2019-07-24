@@ -1270,7 +1270,7 @@ impl BigWigWrite {
         let zoom_infos: Vec<_> = zooms.into_iter().map(|zoom| {
             drop(zoom.3);
             let zoom_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(zoom.1.into_iter().flat_map(|s| s));
-            (zoom.0, zoom.2.await_raw(), zoom_iter)
+            (zoom.0, zoom.2.await_file(), zoom_iter)
         }).collect();
         let section_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(section_iter.into_iter().flat_map(|s| s));
         Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), section_iter, zoom_infos))

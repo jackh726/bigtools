@@ -46,7 +46,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
         chrom_groups: vals,
         last_chrom: None,
         chrom_ids: IdMap::new(),
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(1).create().expect("Unable to create thread pool."),
+        pool: futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool."),
         options: options.clone(),
     };
     group_iter
