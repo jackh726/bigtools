@@ -1,5 +1,7 @@
 #![feature(async_await, test)]
 
+mod bigwigread;
+mod bigwigwrite;
 pub mod bigwig;
 pub mod idmap;
 pub mod tell;
