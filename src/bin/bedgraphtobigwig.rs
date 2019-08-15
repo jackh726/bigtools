@@ -1,5 +1,6 @@
 #![feature(async_await)]
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -32,7 +33,7 @@ fn main() -> Result<(), WriteGroupsError> {
     let bigwigpath = matches.value_of("output").unwrap().to_owned();
 
     let outb = BigWigWrite::create_file(bigwigpath);
-    let chrom_map = BufReader::new(File::open(chrom_map)?)
+    let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l { Ok(s) => !s.is_empty(), _ => true })
         .map(|l| {
@@ -43,8 +44,8 @@ fn main() -> Result<(), WriteGroupsError> {
         .collect();
 
     let infile = File::open(bedgraphpath)?;
-    let vals_iter = BedGraphParser::<BufReader<File>>::new(infile);
-    let chsi = bedgraphparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone());
+    let vals_iter = BedGraphParser::from_file(infile);
+    let chsi = bedgraphparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone(), chrom_map.clone());
     outb.write_groups(chrom_map, chsi)?;
 
     Ok(())

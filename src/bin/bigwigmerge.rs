@@ -73,7 +73,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
                     let current_chrom = chrom.clone();
                     let iters: Vec<_> = bws.into_iter().map(move |b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
                     let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
-                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, mergingvalues, self.pool.clone(), self.options.clone())?))
+                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, size, mergingvalues, self.pool.clone(), self.options.clone())?))
                 },
                 None => {
                     return Ok(None)       

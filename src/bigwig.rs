@@ -580,6 +580,23 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
+    /*
+    TODO: in progress
+    struct IntervalIter<'a> {
+        bigwig: &'a mut BigWigRead,
+        known_offset: u64,
+        blocks: Vec<Block>,
+    }
+
+    impl<'a> Iterator for InternalIter<'a> {
+        type Item = io::Result<Value>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            None
+        }
+    }
+    */
+
     // TODO: having problems with figuring out to use get_interval in bigwigmerge
     // This function only differs in three places:
     // 1) No 'a
@@ -730,7 +747,7 @@ impl BigWigWrite {
 
     const MAX_ZOOM_LEVELS: usize = 10;
 
-    pub fn write_groups<V: 'static>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> Result<(), WriteGroupsError> where V : ChromGroupReadStreamingIterator + Send {
+    pub fn write_groups<V>(&self, chrom_sizes: std::collections::HashMap<String, u32>, vals: V) -> Result<(), WriteGroupsError> where V : ChromGroupReadStreamingIterator + Send {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -946,7 +963,7 @@ impl BigWigWrite {
         })
     }
 
-    pub fn read_group<I: 'static>(chrom: String, chromId: u32, group: I, mut pool: ThreadPool, options: BigWigWriteOptions)
+    pub fn read_group<I: 'static>(chrom: String, chromId: u32, chrom_length: u32, group: I, mut pool: ThreadPool, options: BigWigWriteOptions)
         -> io::Result<ChromGroupRead>
         where I: ChromValues + Send {
         let cloned_chrom = chrom.clone();
@@ -1010,6 +1027,7 @@ impl BigWigWrite {
             mut pool: ThreadPool,
             mut group: I,
             chrom: String,
+            chrom_length: u32,
             ) -> Result<Summary, WriteGroupsError> 
             where I: ChromValues + Send {
             let num_zooms = DEFAULT_ZOOM_SIZES.len();
@@ -1032,9 +1050,12 @@ impl BigWigWrite {
                 }).collect(),
             };
             while let Some(current_val) = group.next()? {
-                // TODO: test this correctly fails
+                // TODO: test these correctly fails
                 if current_val.start > current_val.end {
-                    return Err(WriteGroupsError::InvalidInput(format!("Invalid bed graph: {:?} > {:?}", current_val.start, current_val.end)))
+                    return Err(WriteGroupsError::InvalidInput(format!("Invalid bed graph: {} > {}", current_val.start, current_val.end)));
+                }
+                if current_val.start >= chrom_length {
+                    return Err(WriteGroupsError::InvalidInput(format!("Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})", current_val.start, chrom, chrom_length)));
                 }
                 match group.peek() {
                     None => (),
@@ -1189,12 +1210,12 @@ impl BigWigWrite {
             pool.spawn(zoom_remote).expect("Couldn't spawn future.");
         }
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
-        let (f_remote, f_handle) = process_group(zooms_channels, ftx, chromId, options, pool.clone(), group, chrom).remote_handle();
+        let (f_remote, f_handle) = process_group(zooms_channels, ftx, chromId, options, pool.clone(), group, chrom, chrom_length).remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn.");
         Ok((Box::new(f_handle), section_receiver, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chromId)))    
     }
 
-    async fn write_vals<V: 'static>(
+    async fn write_vals<V>(
         mut vals_iter: V,
         file: BufWriter<File>
     )

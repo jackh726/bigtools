@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
@@ -14,16 +15,20 @@ use crate::chromvalues::{ChromGroups, ChromValues};
 
 use crossbeam::atomic::AtomicCell;
 
-pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWriteOptions) -> impl ChromGroupReadStreamingIterator where V : ChromGroups<ChromGroup<BufReader<File>>> + std::marker::Send {
-    struct ChromGroupReadStreamingIteratorImpl<C: ChromGroups<ChromGroup<BufReader<File>>>> {
+pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static>(vals: V, options: BigWigWriteOptions, chrom_map: HashMap<String, u32>)
+    -> impl ChromGroupReadStreamingIterator
+    where V : ChromGroups<ChromGroup<S>> + std::marker::Send {
+    struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<ChromGroup<S>> + std::marker::Send> {
         chrom_groups: C,
         last_chrom: Option<String>,
         chrom_ids: IdMap<String>,
         pool: futures::executor::ThreadPool,
         options: BigWigWriteOptions,
+        chrom_map: HashMap<String, u32>,
+        _s: std::marker::PhantomData<S>,
     }
 
-    impl<C: ChromGroups<ChromGroup<BufReader<File>>>> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<C> {
+    impl<S: StreamingChromValues + std::marker::Send + 'static, C: ChromGroups<ChromGroup<S>> + std::marker::Send> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<S, C> {
         fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError> {
             match self.chrom_groups.next()? {
                 Some((chrom, group)) => {
@@ -34,8 +39,12 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
                             return Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                         }
                     }
+                    let length = match self.chrom_map.get(&chrom) {
+                        Some(length) => *length,
+                        None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                    };
                     let chrom_id = self.chrom_ids.get_id(chrom.clone());
-                    Ok(Some(BigWigWrite::read_group(chrom, chrom_id, group, self.pool.clone(), self.options.clone())?))
+                    Ok(Some(BigWigWrite::read_group(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?))
                 },
                 None => Ok(None),
             }
@@ -48,8 +57,86 @@ pub fn get_chromgroupstreamingiterator<V: 'static>(vals: V, options: BigWigWrite
         chrom_ids: IdMap::new(),
         pool: futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool."),
         options: options.clone(),
+        chrom_map: chrom_map,
+        _s: std::marker::PhantomData,
     };
     group_iter
+}
+
+pub trait StreamingChromValues {
+    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, u32, u32, f32)>>;
+}
+
+pub struct BedGraphStream<B: BufRead> {
+    bedgraph: StreamingLineReader<B>
+}
+
+impl<B: BufRead> StreamingChromValues for BedGraphStream<B> {
+    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, u32, u32, f32)>> {
+        let l = self.bedgraph.read()?;
+        let line = match l {
+            Some(line) => line,
+            None => return Ok(None),
+        };
+        let mut split = line.split_whitespace();
+        let chrom = match split.next() {
+            Some(chrom) => chrom,
+            None => {
+                return Ok(None);
+            },
+        };
+        let start = split.next().expect("Missing start").parse::<u32>().unwrap();
+        let end = split.next().expect("Missing end").parse::<u32>().unwrap();
+        let value = split.next().expect("Missing value").parse::<f32>().unwrap();
+        Ok(Some((chrom, start, end, value)))
+    }
+}
+
+pub struct BedGraphIteratorStream<I: Iterator<Item=io::Result<(String, u32, u32, f32)>>> {
+    iter: I,
+    curr: Option<(String, u32, u32, f32)>,
+}
+
+impl<I: Iterator<Item=io::Result<(String, u32, u32, f32)>>> StreamingChromValues for BedGraphIteratorStream<I> {
+    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, u32, u32, f32)>> {
+        use std::ops::Deref;
+        self.curr = match self.iter.next() {
+            None => return Ok(None),
+            Some(v) => Some(v?),
+        };
+        Ok(self.curr.as_ref().map(|v| (v.0.deref(), v.1, v.2, v.3)))
+    }
+}
+
+pub struct BedGraphParser<S: StreamingChromValues>{
+    state: Arc<AtomicCell<Option<BedGraphParserState<S>>>>,
+}
+
+impl<S: StreamingChromValues> BedGraphParser<S> {
+    pub fn new(stream: S) -> BedGraphParser<S> {
+        let state = BedGraphParserState {
+            stream,
+            curr_chrom: None,
+            next_chrom: ChromOpt::None,
+            curr_val: None,
+            next_val: None,
+        };
+        BedGraphParser {
+            state: Arc::new(AtomicCell::new(Some(state))),
+        }
+    }
+}
+
+impl BedGraphParser<BedGraphStream<BufReader<File>>> {
+    pub fn from_file(file: File) -> BedGraphParser<BedGraphStream<BufReader<File>>> {
+        BedGraphParser::new(BedGraphStream { bedgraph: StreamingLineReader::new(BufReader::new(file)) })
+    }
+}
+
+impl<I: Iterator<Item=io::Result<(String, u32, u32, f32)>>> BedGraphParser<BedGraphIteratorStream<I>> {
+    pub fn from_iter(iter: I) -> BedGraphParser<BedGraphIteratorStream<I>> {
+        BedGraphParser::new(BedGraphIteratorStream { iter, curr: None })
+    }
 }
 
 #[derive(Debug)]
@@ -60,18 +147,15 @@ enum ChromOpt {
 }
 
 #[derive(Debug)]
-pub struct BedGraphParserState<B: BufRead> {
-    bedgraph: StreamingLineReader<B>,
+pub struct BedGraphParserState<S: StreamingChromValues> {
+    stream: S,
     curr_chrom: Option<String>,
     curr_val: Option<Value>,
-    // None -> No next value
-    // Some(None) -> The next chrom is the same as curr_chrom
-    // Some(chrom) -> Chrom is different than curr_chrom
     next_chrom: ChromOpt,
     next_val: Option<Value>,
 }
 
-impl<B: BufRead> BedGraphParserState<B> {
+impl<S: StreamingChromValues> BedGraphParserState<S> {
     fn advance(&mut self) -> io::Result<()> {
         self.curr_val = self.next_val.take();
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
@@ -84,18 +168,7 @@ impl<B: BufRead> BedGraphParserState<B> {
             },
         }
 
-        let l = self.bedgraph.read()?;
-        if let Some(line) = l {
-            let mut split = line.split_whitespace();
-            let chrom = match split.next() {
-                Some(chrom) => chrom,
-                None => {
-                    return Ok(());
-                },
-            };
-            let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-            let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-            let value = split.next().expect("Missing value").parse::<f32>().unwrap();
+        if let Some((chrom, start, end, value)) = self.stream.next()? {
             self.next_val.replace(Value { start, end, value });
             if let Some(curr_chrom) = &self.curr_chrom {
                 if curr_chrom != chrom {
@@ -114,34 +187,9 @@ impl<B: BufRead> BedGraphParserState<B> {
     }
 }
 
-pub struct BedGraphParser<B: BufRead> {
-    state: Arc<AtomicCell<Option<BedGraphParserState<B>>>>,
-}
-
-impl BedGraphParser<BufReader<File>> {
-    pub fn new(file: File) -> BedGraphParser<BufReader<File>> {
-        let bf = BufReader::new(file);
-        let state = BedGraphParserState {
-            bedgraph: StreamingLineReader::new(bf),
-            curr_chrom: None,
-            next_chrom: ChromOpt::None,
-            curr_val: None,
-            next_val: None,
-        };
-        BedGraphParser {
-            state: Arc::new(AtomicCell::new(Some(state))),
-        }
-    }
-
-}
-
-impl<B: BufRead> ChromGroups<ChromGroup<B>> for BedGraphParser<B> {
-    fn next(&mut self) -> io::Result<Option<(String, ChromGroup<B>)>> {
-        let opt_state = self.state.swap(None);
-        if opt_state.is_none() {
-            panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        }
-        let mut state = opt_state.unwrap();
+impl<S: StreamingChromValues> ChromGroups<ChromGroup<S>> for BedGraphParser<S> {
+    fn next(&mut self) -> io::Result<Option<(String, ChromGroup<S>)>> {
+        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if let ChromOpt::Same = state.next_chrom {
             panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         }
@@ -150,20 +198,22 @@ impl<B: BufRead> ChromGroups<ChromGroup<B>> for BedGraphParser<B> {
         let next_chrom = state.curr_chrom.as_ref();
         let ret = match next_chrom {
             None => Ok(None),
-            Some(chrom) => Ok(Some((chrom.to_owned(), ChromGroup { state: self.state.clone(), curr_state: None } ))),
-
+            Some(chrom) => {
+                let group = ChromGroup { state: self.state.clone(), curr_state: None };
+                Ok(Some((chrom.to_owned(), group)))
+            },
         };
         self.state.swap(Some(state));
         ret
     }
 }
 
-pub struct ChromGroup<B: BufRead> {
-    state: Arc<AtomicCell<Option<BedGraphParserState<B>>>>,
-    curr_state: Option<BedGraphParserState<B>>,
+pub struct ChromGroup<S: StreamingChromValues> {
+    state: Arc<AtomicCell<Option<BedGraphParserState<S>>>>,
+    curr_state: Option<BedGraphParserState<S>>,
 }
 
-impl<B: BufRead> ChromValues for ChromGroup<B> {
+impl<S: StreamingChromValues> ChromValues for ChromGroup<S> {
     fn next(&mut self) -> io::Result<Option<Value>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
@@ -199,7 +249,7 @@ impl<B: BufRead> ChromValues for ChromGroup<B> {
     }
 }
 
-impl<B: BufRead> Drop for ChromGroup<B> {
+impl<S: StreamingChromValues> Drop for ChromGroup<S> {
     fn drop(&mut self) {
         if let Some(state) = self.curr_state.take() {
             self.state.swap(Some(state));
