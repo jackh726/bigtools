@@ -145,7 +145,7 @@ impl BigWigRead {
         self.info.chrom_info.iter().map(|c| ChromAndSize { name: c.name.clone(), length: c.length }).collect::<Vec<_>>()
     }
 
-    pub fn ensure_reader<'a>(&'a mut self) -> io::Result<()> {
+    pub fn ensure_reader(&mut self) -> io::Result<()> {
         if self.reader.is_none() {
             let endianness = self.info.header.endianness;
             let fp = File::open(self.path.clone())?;
@@ -153,6 +153,11 @@ impl BigWigRead {
             self.reader.replace(file);
         }
         Ok(())
+    }
+
+    /// Manually close the open file descriptor (if it exists). If any operations are performed after this is called, the file descriptor will be reopened.
+    pub fn close(&mut self) {
+        self.reader.take();
     }
 
     fn read_info(file: BufReader<File>) -> Result<BigWigInfo, BigWigReadInfoError> {

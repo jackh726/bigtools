@@ -10,7 +10,7 @@ byteordered = "0.4.0"
 crossbeam = "0.7.0"
 flate2 = { version = "1.0" }
 tempfile = "3"
-futures-preview = { version = "0.3.0-alpha.16", features = ["nightly", "async-await"] }
+futures-preview = { version = "0.3.0-alpha.18", features = ["nightly", "async-await"] }
 rand = "0.6.5"
 parking_lot = { version = "0.7.1", features = ["nightly"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -58,7 +58,7 @@ type ZoomInfo = (u32 /* resolution */, File /* Temp file that contains data */, 
 const DEFAULT_ZOOM_SIZES: [u32; 11] = [10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
 pub type ChromGroupRead = (
-    Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send + Unpin>,
+    Pin<Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send>>,
     filebufferedchannel::Receiver<Section>,
     TempFileBuffer,
     Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
@@ -113,6 +113,15 @@ pub struct BigWigWrite {
 pub enum WriteGroupsError {
     InvalidInput(String),
     IoError(io::Error),
+}
+
+impl std::fmt::Display for WriteGroupsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(message) => write!(f, "{}", message),
+            Self::IoError(e) => write!(f, "{}", e),
+        }
+    }
 }
 
 impl From<io::Error> for WriteGroupsError {
@@ -357,7 +366,7 @@ impl BigWigWrite {
         })
     }
 
-    async fn process_group<I: 'static>(
+    async fn process_group<I>(
         mut zooms_channels: Vec<futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>>,
         mut ftx: futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>,
         chrom_id: u32,
@@ -604,8 +613,8 @@ impl BigWigWrite {
         }
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
         let (f_remote, f_handle) = BigWigWrite::process_group(zooms_channels, ftx, chrom_id, options, pool.clone(), group, chrom, chrom_length).remote_handle();
-        pool.spawn(f_remote).expect("Couldn't spawn.");
-        Ok((Box::new(f_handle), section_receiver, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chrom_id)))    
+        pool.spawn(f_remote).expect("Couldn't spawn future.");
+        Ok((f_handle.boxed(), section_receiver, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chrom_id)))    
     }
 
     async fn write_vals<V>(
@@ -789,6 +798,96 @@ impl BigWigWrite {
     }
 
 
+    const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
+    const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
+    const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
+
+    fn calculate_offsets(mut index_offsets: &mut Vec<u64>, nodes: &RTreeChildren, level: usize) {
+        match nodes {
+            RTreeChildren::DataSections(_) => (),
+            RTreeChildren::Nodes(children) => {
+                index_offsets[level - 1] += BigWigWrite::NODEHEADER_SIZE;
+                for child in children {
+                    index_offsets[level - 1] += BigWigWrite::NON_LEAFNODE_SIZE;
+                    BigWigWrite::calculate_offsets(&mut index_offsets, &child.children, level - 1);
+                }
+            }
+        }
+    }
+
+    fn write_tree(
+        mut file: &mut BufWriter<File>,
+        nodes: &RTreeChildren,
+        curr_level: usize,
+        dest_level: usize,
+        childnode_offset: u64,
+        options: &BigWigWriteOptions
+    ) -> io::Result<u64> {
+        let non_leafnode_full_block_size: u64 = BigWigWrite::NODEHEADER_SIZE + BigWigWrite::NON_LEAFNODE_SIZE * options.block_size as u64;
+        let leafnode_full_block_size: u64 = BigWigWrite::NODEHEADER_SIZE + BigWigWrite::LEAFNODE_SIZE * options.block_size as u64;
+        debug_assert!(curr_level >= dest_level);
+        let mut total_size = 0;
+        if curr_level != dest_level {
+            let mut next_offset_offset = 0;
+            match nodes {
+                RTreeChildren::DataSections(_) => panic!("Datasections found at level: {:?}", curr_level),
+                RTreeChildren::Nodes(children) => {
+                    for child in children {
+                        next_offset_offset += BigWigWrite::write_tree(&mut file, &child.children, curr_level - 1, dest_level, childnode_offset + next_offset_offset, options)?;
+                    }
+                }
+            }
+            total_size += next_offset_offset;
+            return Ok(total_size)
+        }
+        let isleaf = match nodes {
+            RTreeChildren::DataSections(_) => 1,
+            RTreeChildren::Nodes(_) => 0,
+        };
+
+        //println!("Level: {:?}", curr_level);
+        //println!("Writing {}. Isleaf: {} At: {}", "node", isleaf, file.seek(SeekFrom::Current(0))?);
+        file.write_u8(isleaf)?;
+        file.write_u8(0)?;
+        match &nodes {
+            RTreeChildren::DataSections(sections) => {
+                file.write_u16::<NativeEndian>(sections.len() as u16)?;
+                total_size += 4;
+                for section in sections {
+                    file.write_u32::<NativeEndian>(section.chrom)?;
+                    file.write_u32::<NativeEndian>(section.start)?;
+                    file.write_u32::<NativeEndian>(section.chrom)?;
+                    file.write_u32::<NativeEndian>(section.end)?;
+                    file.write_u64::<NativeEndian>(section.offset)?;
+                    file.write_u64::<NativeEndian>(section.size)?;
+                    total_size += 32;
+                }
+            },
+            RTreeChildren::Nodes(children) => {
+                file.write_u16::<NativeEndian>(children.len() as u16)?;
+                total_size += 4;
+                let full_size = if (curr_level - 1) > 0 {
+                    non_leafnode_full_block_size
+                } else {
+                    leafnode_full_block_size
+                };
+                for (idx, child) in children.iter().enumerate() {
+                    let child_offset: u64 = childnode_offset + idx as u64 * full_size;
+                    file.write_u32::<NativeEndian>(child.start_chrom_idx)?;
+                    file.write_u32::<NativeEndian>(child.start_base)?;
+                    file.write_u32::<NativeEndian>(child.end_chrom_idx)?;
+                    file.write_u32::<NativeEndian>(child.end_base)?;
+                    file.write_u64::<NativeEndian>(child_offset)?;
+                    total_size += 24;
+                }
+            }
+        }
+
+        Ok(total_size)
+    }
+
+
+
     fn write_rtreeindex(
         file: &mut BufWriter<File>,
         nodes: RTreeChildren,
@@ -796,99 +895,10 @@ impl BigWigWrite {
         section_count: u64,
         options: &BigWigWriteOptions
     ) -> io::Result<()> {
-        const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
-        const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
-        const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
-
         let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
-        fn calculate_offsets(mut index_offsets: &mut Vec<u64>, nodes: &RTreeChildren, level: usize) {
-            match nodes {
-                RTreeChildren::DataSections(_) => (),
-                RTreeChildren::Nodes(children) => {
-                    index_offsets[level - 1] += NODEHEADER_SIZE;
-                    for child in children {
-                        index_offsets[level - 1] += NON_LEAFNODE_SIZE;
-                        calculate_offsets(&mut index_offsets, &child.children, level - 1);
-                    }
-                }
-            }
-        }
-
-        calculate_offsets(&mut index_offsets, &nodes, levels);
+        BigWigWrite::calculate_offsets(&mut index_offsets, &nodes, levels);
         //println!("index Offsets: {:?}", index_offsets);
-
-        fn write_tree(
-            mut file: &mut BufWriter<File>,
-            nodes: &RTreeChildren,
-            curr_level: usize,
-            dest_level: usize,
-            childnode_offset: u64,
-            options: &BigWigWriteOptions
-        ) -> io::Result<u64> {
-            let non_leafnode_full_block_size: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * options.block_size as u64;
-            let leafnode_full_block_size: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * options.block_size as u64;
-            debug_assert!(curr_level >= dest_level);
-            let mut total_size = 0;
-            if curr_level != dest_level {
-                let mut next_offset_offset = 0;
-                match nodes {
-                    RTreeChildren::DataSections(_) => panic!("Datasections found at level: {:?}", curr_level),
-                    RTreeChildren::Nodes(children) => {
-                        for child in children {
-                            next_offset_offset += write_tree(&mut file, &child.children, curr_level - 1, dest_level, childnode_offset + next_offset_offset, options)?;
-                        }
-                    }
-                }
-                total_size += next_offset_offset;
-                return Ok(total_size)
-            }
-            let isleaf = match nodes {
-                RTreeChildren::DataSections(_) => 1,
-                RTreeChildren::Nodes(_) => 0,
-            };
-
-            //println!("Level: {:?}", curr_level);
-            //println!("Writing {}. Isleaf: {} At: {}", "node", isleaf, file.seek(SeekFrom::Current(0))?);
-            file.write_u8(isleaf)?;
-            file.write_u8(0)?;
-            match &nodes {
-                RTreeChildren::DataSections(sections) => {
-                    file.write_u16::<NativeEndian>(sections.len() as u16)?;
-                    total_size += 4;
-                    for section in sections {
-                        file.write_u32::<NativeEndian>(section.chrom)?;
-                        file.write_u32::<NativeEndian>(section.start)?;
-                        file.write_u32::<NativeEndian>(section.chrom)?;
-                        file.write_u32::<NativeEndian>(section.end)?;
-                        file.write_u64::<NativeEndian>(section.offset)?;
-                        file.write_u64::<NativeEndian>(section.size)?;
-                        total_size += 32;
-                    }
-                },
-                RTreeChildren::Nodes(children) => {
-                    file.write_u16::<NativeEndian>(children.len() as u16)?;
-                    total_size += 4;
-                    let full_size = if (curr_level - 1) > 0 {
-                        non_leafnode_full_block_size
-                    } else {
-                        leafnode_full_block_size
-                    };
-                    for (idx, child) in children.iter().enumerate() {
-                        let child_offset: u64 = childnode_offset + idx as u64 * full_size;
-                        file.write_u32::<NativeEndian>(child.start_chrom_idx)?;
-                        file.write_u32::<NativeEndian>(child.start_base)?;
-                        file.write_u32::<NativeEndian>(child.end_chrom_idx)?;
-                        file.write_u32::<NativeEndian>(child.end_base)?;
-                        file.write_u64::<NativeEndian>(child_offset)?;
-                        total_size += 24;
-                    }
-                }
-            }
-
-            Ok(total_size)
-        }
-
 
         let end_of_data = file.seek(SeekFrom::Current(0))?;
         {
@@ -922,7 +932,7 @@ impl BigWigWrite {
             if level > 0 {
                 next_offset += index_offsets[level - 1];
             }
-            write_tree(file, &nodes, levels, level, next_offset, options)?;
+            BigWigWrite::write_tree(file, &nodes, levels, level, next_offset, options)?;
             //println!("End of index level {}: {}", level, file.seek(SeekFrom::Current(0))?);
         }
         //println!("Total index size: {:?}", total_size);
