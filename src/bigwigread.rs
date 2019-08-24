@@ -71,6 +71,60 @@ pub struct BigWigInfo {
     chrom_info: Vec<ChromInfo>,
 }
 
+struct IntervalIter<'a> {
+    bigwig: &'a mut BigWigRead,
+    known_offset: u64,
+    blocks: Vec<Block>,
+    current_block: usize,
+    vals: Option<Box<dyn Iterator<Item=Value> + Send + 'a>>,
+}
+
+impl<'a> Iterator for IntervalIter<'a> {
+    type Item = io::Result<Value>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let endianness = self.bigwig.info.header.endianness;
+        let uncompress_buf_size: usize = self.bigwig.info.header.uncompress_buf_size as usize;
+
+        let mut file = self.bigwig.reader.as_mut().unwrap();
+        loop {
+            match &mut self.vals {
+                Some(vals) => {
+                    match vals.next() {
+                        Some(v) => {
+                            return Some(Ok(v));
+                        },
+                        None => {
+                            self.vals = None;
+                            continue;
+                        },
+                    }
+                },
+                None => {
+                    if self.current_block >= self.blocks.len() {
+                        return None;
+                    }
+                    // TODO: Could minimize this by chunking block reads
+                    let current_block = self.blocks.get(self.current_block).unwrap();
+                    if self.known_offset != current_block.offset {
+                        match file.seek(SeekFrom::Start(current_block.offset)) {
+                            Ok(_) => {},
+                            Err(e) => return Some(Err(e)),
+                        }
+                    }
+                    let block_vals = match BigWigRead::get_block_values(&mut file, &current_block, endianness, uncompress_buf_size) {
+                        Ok(vals) => vals,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    self.vals = Some(Box::new(block_vals));
+                    self.known_offset = current_block.offset + current_block.size;
+                    self.current_block += 1;
+                },
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum BigWigReadAttachError {
     NotABigWig,
@@ -465,23 +519,6 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
-    /*
-    TODO: in progress
-    struct IntervalIter<'a> {
-        bigwig: &'a mut BigWigRead,
-        known_offset: u64,
-        blocks: Vec<Block>,
-    }
-
-    impl<'a> Iterator for InternalIter<'a> {
-        type Item = io::Result<Value>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            None
-        }
-    }
-    */
-
     // TODO: having problems with figuring out to use get_interval in bigwigmerge
     // This function only differs in three places:
     // 1) No 'a
@@ -539,7 +576,14 @@ impl BigWigRead {
 
     pub fn get_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send + 'a> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-
+        Ok(IntervalIter {
+            bigwig: self,
+            known_offset: 0,
+            blocks: blocks,
+            current_block: 0,
+            vals: None,
+        })
+/*
         let endianness = self.info.header.endianness;
         let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
 
@@ -585,5 +629,6 @@ impl BigWigRead {
         });
 
         Ok(vals_iter)
+*/
     }
 }
