@@ -1,5 +1,7 @@
 #![feature(async_await, test)]
 
+mod bbiread;
+mod bigbedread;
 mod bigwigread;
 mod bigwigwrite;
 pub mod bigwig;

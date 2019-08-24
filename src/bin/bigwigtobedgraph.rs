@@ -7,7 +7,7 @@ use clap::{App, Arg};
 
 use futures::future::FutureExt;
 
-use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError, ChromAndSize};
+use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize};
 use bigwig2::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 pub fn write_bg(bigwig: BigWigRead, mut out_file: File) -> std::io::Result<()> {

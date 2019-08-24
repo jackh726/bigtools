@@ -7,7 +7,7 @@ use clap::{App, Arg};
 use bigwig2::bigwig::BigWigWriteOptions;
 use bigwig2::bigwig::ChromGroupReadStreamingIterator;
 use bigwig2::chromvalues::ChromValues;
-use bigwig2::bigwig::{BigWigRead, BigWigWrite, WriteGroupsError};
+use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
 use bigwig2::bigwig::Value;
 use bigwig2::bigwig::ChromGroupRead;
 
@@ -20,7 +20,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BigWigWriteOptions) 
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
     let mut chrom_map = HashMap::new();
-    for chrom in bigwigs.iter().flat_map(BigWigRead::get_chroms).map(|c| c.name) {
+    for chrom in bigwigs.iter().flat_map(BBIRead::get_chroms).map(|c| c.name) {
         if chrom_sizes.get(&chrom).is_some() {
             continue;
         }
