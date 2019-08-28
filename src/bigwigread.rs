@@ -8,21 +8,6 @@ use flate2::read::ZlibDecoder;
 
 use crate::bigwig::{Value, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC_LTH, BIGWIG_MAGIC_HTL};
 
-/*
-TODO
-struct BigWigInterval<'a> {
-    bigwig: &'a BigWigRead,
-}
-
-impl<'a> Iterator for BigWigInterval<'a> {
-    type Item = io::Result<Value>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None
-    }
-}
-*/
-
 #[derive(Debug)]
 pub struct Block {
     pub offset: u64,
@@ -71,54 +56,85 @@ pub struct BigWigInfo {
     chrom_info: Vec<ChromInfo>,
 }
 
-struct IntervalIter<'a> {
+fn get_vals(bigwig: &mut BigWigRead, current_block: Block, known_offset: &mut u64) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
+    let endianness = bigwig.info.header.endianness;
+    let uncompress_buf_size: usize = bigwig.info.header.uncompress_buf_size as usize;
+    let mut file = bigwig.reader.as_mut().unwrap();
+
+    // TODO: Could minimize this by chunking block reads
+    if *known_offset != current_block.offset {
+        match file.seek(SeekFrom::Start(current_block.offset)) {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+    }
+    let block_vals = match BigWigRead::get_block_values(&mut file, &current_block, endianness, uncompress_buf_size) {
+        Ok(vals) => vals,
+        Err(e) => return Err(e),
+    };
+    *known_offset = current_block.offset + current_block.size;
+    Ok(Box::new(block_vals))
+}
+
+struct IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
     bigwig: &'a mut BigWigRead,
     known_offset: u64,
-    blocks: Vec<Block>,
-    current_block: usize,
+    blocks: I,
     vals: Option<Box<dyn Iterator<Item=Value> + Send + 'a>>,
 }
 
-impl<'a> Iterator for IntervalIter<'a> {
+impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let endianness = self.bigwig.info.header.endianness;
-        let uncompress_buf_size: usize = self.bigwig.info.header.uncompress_buf_size as usize;
-
-        let mut file = self.bigwig.reader.as_mut().unwrap();
         loop {
             match &mut self.vals {
                 Some(vals) => {
                     match vals.next() {
-                        Some(v) => {
-                            return Some(Ok(v));
-                        },
-                        None => {
-                            self.vals = None;
-                            continue;
-                        },
+                        Some(v) => { return Some(Ok(v)); }
+                        None => { self.vals = None; }
                     }
                 },
                 None => {
-                    if self.current_block >= self.blocks.len() {
-                        return None;
-                    }
                     // TODO: Could minimize this by chunking block reads
-                    let current_block = self.blocks.get(self.current_block).unwrap();
-                    if self.known_offset != current_block.offset {
-                        match file.seek(SeekFrom::Start(current_block.offset)) {
-                            Ok(_) => {},
-                            Err(e) => return Some(Err(e)),
-                        }
+                    let current_block = self.blocks.next()?;
+                    match get_vals(self.bigwig, current_block, &mut self.known_offset) {
+                        Ok(vals) => { self.vals = Some(vals); }
+                        Err(e) => { return Some(Err(e)); }
                     }
-                    let block_vals = match BigWigRead::get_block_values(&mut file, &current_block, endianness, uncompress_buf_size) {
-                        Ok(vals) => vals,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    self.vals = Some(Box::new(block_vals));
-                    self.known_offset = current_block.offset + current_block.size;
-                    self.current_block += 1;
+                },
+            }
+        }
+    }
+}
+
+/// Same as IntervalIter but owned
+struct OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+    bigwig: BigWigRead,
+    known_offset: u64,
+    blocks: I,
+    vals: Option<Box<dyn Iterator<Item=Value> + Send>>,
+}
+
+impl<I> Iterator for OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+    type Item = io::Result<Value>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match &mut self.vals {
+                Some(vals) => {
+                    match vals.next() {
+                        Some(v) => { return Some(Ok(v)); }
+                        None => { self.vals = None; }
+                    }
+                },
+                None => {
+                    // TODO: Could minimize this by chunking block reads
+                    let current_block = self.blocks.next()?;
+                    match get_vals(&mut self.bigwig, current_block, &mut self.known_offset) {
+                        Ok(vals) => { self.vals = Some(vals); }
+                        Err(e) => { return Some(Err(e)); }
+                    }
                 },
             }
         }
@@ -519,59 +535,14 @@ impl BigWigRead {
         Ok(values.into_iter())
     }
 
-    // TODO: having problems with figuring out to use get_interval in bigwigmerge
-    // This function only differs in three places:
-    // 1) No 'a
-    // 2) &'a mut self => mut self
-    // 3) self.reader.as_mut().unwrap() => self.reader.unwrap()
     pub fn get_interval_move(mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-
-        let endianness = self.info.header.endianness;
-        let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
-
-        self.ensure_reader()?;
-        let mut file = self.reader.unwrap();
-
-        if blocks.len() > 0 {
-            file.seek(SeekFrom::Start(blocks[0].offset))?;
-        }
-        let mut iter = blocks.into_iter().peekable();
-        
-        let block_iter = std::iter::from_fn(move || {
-            let next = iter.next();
-            let peek = iter.peek();
-            next.map(|n| (n, peek.map(|p| p.offset)))
-        });
-        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-            let mut vals = || -> io::Result<Box<dyn Iterator<Item=io::Result<Value>> + Send>> {
-                // TODO: Could minimize this by chunking block reads
-                let vals = BigWigRead::get_block_values(&mut file, &block, endianness, uncompress_buf_size)?;
-                if let Some(next_offset) = next_offset {
-                    if next_offset != block.offset + block.size {
-                        file.seek(SeekFrom::Start(next_offset))?;
-                    }
-                }
-                Ok(Box::new(vals.map(|v| Ok(v))))
-            };
-            let v: Box<dyn Iterator<Item=io::Result<Value>> + Send> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
-            v
-        }).filter_map(move |mut val| {
-            if let Ok(ref mut v) = val {
-                if v.end < start || v.start > end {
-                    return None;
-                }
-                if v.start < start {
-                    v.start = start;
-                }
-                if v.end > end {
-                    v.end = end;
-                }
-            }
-            return Some(val);
-        });
-
-        Ok(vals_iter)
+        Ok(OwnedIntervalIter {
+            bigwig: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+        })
     }
 
     pub fn get_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send + 'a> {
@@ -579,56 +550,8 @@ impl BigWigRead {
         Ok(IntervalIter {
             bigwig: self,
             known_offset: 0,
-            blocks: blocks,
-            current_block: 0,
+            blocks: blocks.into_iter(),
             vals: None,
         })
-/*
-        let endianness = self.info.header.endianness;
-        let uncompress_buf_size: usize = self.info.header.uncompress_buf_size as usize;
-
-        self.ensure_reader()?;
-        let file = self.reader.as_mut().unwrap();
-
-        if blocks.len() > 0 {
-            file.seek(SeekFrom::Start(blocks[0].offset))?;
-        }
-        let mut iter = blocks.into_iter().peekable();
-        
-        let block_iter = std::iter::from_fn(move || {
-            let next = iter.next();
-            let peek = iter.peek();
-            next.map(|n| (n, peek.map(|p| p.offset)))
-        });
-        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-            let mut vals = || -> io::Result<Box<dyn Iterator<Item=io::Result<Value>> + Send + 'a>> {
-                // TODO: Could minimize this by chunking block reads
-                let vals = BigWigRead::get_block_values(file, &block, endianness, uncompress_buf_size)?;
-                if let Some(next_offset) = next_offset {
-                    if next_offset != block.offset + block.size {
-                        file.seek(SeekFrom::Start(next_offset))?;
-                    }
-                }
-                Ok(Box::new(vals.map(|v| Ok(v))))
-            };
-            let v: Box<dyn Iterator<Item=io::Result<Value>> + Send + 'a> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
-            v
-        }).filter_map(move |mut val| {
-            if let Ok(ref mut v) = val {
-                if v.end <= start || v.start > end {
-                    return None;
-                }
-                if v.start < start {
-                    v.start = start;
-                }
-                if v.end > end {
-                    v.end = end;
-                }
-            }
-            return Some(val);
-        });
-
-        Ok(vals_iter)
-*/
     }
 }
