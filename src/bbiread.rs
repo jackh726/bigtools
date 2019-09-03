@@ -5,7 +5,7 @@ use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
-use crate::bigwig::{ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC_LTH, BIGWIG_MAGIC_HTL, BIGBED_MAGIC_LTH, BIGBED_MAGIC_HTL};
+use crate::bigwig::{BBIFile, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC_LTH, BIGWIG_MAGIC_HTL, BIGBED_MAGIC_LTH, BIGBED_MAGIC_HTL};
 
 
 #[derive(Debug)]
@@ -67,12 +67,6 @@ impl From<io::Error> for BBIFileReadInfoError {
     fn from(error: io::Error) -> Self {
         BBIFileReadInfoError::IoError(error)
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum BBIFile {
-    BigWig,
-    BigBed,
 }
 
 pub trait BBIRead {

@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
+use crate::bigwig::BBIWriteOptions;
 use crate::bigwig::BigWigWrite;
-use crate::bigwig::BigWigWriteOptions;
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::ChromGroupReadStreamingIterator;
 use crate::bigwig::Value;
@@ -15,7 +15,7 @@ use crate::chromvalues::{ChromGroups, ChromValues};
 
 use crossbeam::atomic::AtomicCell;
 
-pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static>(vals: V, options: BigWigWriteOptions, chrom_map: HashMap<String, u32>)
+pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static>(vals: V, options: BBIWriteOptions, chrom_map: HashMap<String, u32>)
     -> impl ChromGroupReadStreamingIterator
     where V : ChromGroups<ChromGroup<S>> + std::marker::Send {
     struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<ChromGroup<S>> + std::marker::Send> {
@@ -23,7 +23,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
         last_chrom: Option<String>,
         chrom_ids: IdMap<String>,
         pool: futures::executor::ThreadPool,
-        options: BigWigWriteOptions,
+        options: BBIWriteOptions,
         chrom_map: HashMap<String, u32>,
         _s: std::marker::PhantomData<S>,
     }
@@ -268,7 +268,7 @@ mod tests {
     fn test_works() -> io::Result<()> {
         let f = File::open("/home/hueyj/temp/test.bedGraph")?;
         //let f = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
-        let mut bgp = BedGraphParser::new(f);
+        let mut bgp = BedGraphParser::from_file(f);
         while let Some((chrom, mut group)) = bgp.next()? {
             println!("Next chrom: {:?}", chrom);
             while let Some(value) = group.next()? {

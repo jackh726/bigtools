@@ -6,9 +6,61 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 use flate2::read::ZlibDecoder;
 
-use crate::bbiread::{BBIFile, BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
-use crate::bigwig::BedEntry;
+use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
+use crate::bigwig::{BBIFile, BedEntry};
 
+fn get_entries(bigbed: &mut BigBedRead, current_block: Block, known_offset: &mut u64, expected_chrom: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
+    let endianness = bigbed.info.header.endianness;
+    let uncompress_buf_size: usize = bigbed.info.header.uncompress_buf_size as usize;
+    let mut file = bigbed.reader.as_mut().unwrap();
+
+    // TODO: Could minimize this by chunking block reads
+    if *known_offset != current_block.offset {
+        match file.seek(SeekFrom::Start(current_block.offset)) {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+    }
+    let block_vals = match BigBedRead::get_block_entries(&mut file, &current_block, endianness, uncompress_buf_size, expected_chrom) {
+        Ok(vals) => vals,
+        Err(e) => return Err(e),
+    };
+    *known_offset = current_block.offset + current_block.size;
+    Ok(Box::new(block_vals))
+}
+
+struct IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
+    bigbed: &'a mut BigBedRead,
+    known_offset: u64,
+    blocks: I,
+    vals: Option<Box<dyn Iterator<Item=BedEntry> + Send + 'a>>,
+    expected_chrom: u32,
+}
+
+impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
+    type Item = io::Result<BedEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match &mut self.vals {
+                Some(vals) => {
+                    match vals.next() {
+                        Some(v) => { return Some(Ok(v)); }
+                        None => { self.vals = None; }
+                    }
+                },
+                None => {
+                    // TODO: Could minimize this by chunking block reads
+                    let current_block = self.blocks.next()?;
+                    match get_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom) {
+                        Ok(vals) => { self.vals = Some(vals); }
+                        Err(e) => { return Some(Err(e)); }
+                    }
+                },
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum BigBedReadAttachError {
@@ -96,6 +148,7 @@ impl BigBedRead {
         })
     }
 
+    // TODO: remove expected_chrom
     /// This assumes that the file is currently at the block's start
     fn get_block_entries(file: &mut ByteOrdered<BufReader<File>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
         let mut entries: Vec<BedEntry> = Vec::new();
@@ -151,47 +204,13 @@ impl BigBedRead {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self.get_info().chrom_info.iter().find(|&x| x.name == chrom_name).unwrap().id;
-
-        let (endianness, uncompress_buf_size) = {
-            let info = self.get_info();
-            (info.header.endianness, info.header.uncompress_buf_size as usize)
-        };
-
-        let mut file = self.ensure_reader()?;
-
-        if blocks.len() > 0 {
-            file.seek(SeekFrom::Start(blocks[0].offset))?;
-        }
-        let mut iter = blocks.into_iter().peekable();
-        
-        let block_iter = std::iter::from_fn(move || {
-            let next = iter.next();
-            let peek = iter.peek();
-            next.map(|n| (n, peek.map(|p| p.offset)))
-        });
-        let vals_iter = block_iter.flat_map(move |(block, next_offset)| {
-            let mut vals = || -> io::Result<Box<dyn Iterator<Item=io::Result<BedEntry>> + Send + 'a>> {
-                // TODO: Could minimize this by chunking block reads
-                let vals = BigBedRead::get_block_entries(&mut file, &block, endianness, uncompress_buf_size, chrom_ix)?;
-                if let Some(next_offset) = next_offset {
-                    if next_offset != block.offset + block.size {
-                        file.seek(SeekFrom::Start(next_offset))?;
-                    }
-                }
-                Ok(Box::new(vals.map(|v| Ok(v))))
-            };
-            let v: Box<dyn Iterator<Item=io::Result<BedEntry>> + Send + 'a> = vals().unwrap_or_else(|e| Box::new(std::iter::once(Err(e))));
-            v
-        }).filter_map(move |mut val| {
-            if let Ok(ref mut v) = val {
-                if v.end < start || v.start >= end {
-                    return None;
-                }
-            }
-            return Some(val);
-        });
-
-        Ok(vals_iter)
+        Ok(IntervalIter {
+            bigbed: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+            expected_chrom: chrom_ix,
+        })
     }
 
 }

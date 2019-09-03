@@ -27,9 +27,17 @@ pub struct BedEntry {
     pub rest: String,
 }
 
+#[derive(Clone, Debug)]
+pub enum BBIFile {
+    BigWig,
+    BigBed,
+}
+
 pub use crate::bbiread::*;
+pub use crate::bbiwrite::*;
 
 pub use crate::bigwigread::*;
 pub use crate::bigwigwrite::*;
 
 pub use crate::bigbedread::*;
+pub use crate::bigbedwrite::*;

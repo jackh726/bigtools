@@ -6,8 +6,8 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 use flate2::read::ZlibDecoder;
 
-use crate::bbiread::{BBIFile, BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
-use crate::bigwig::Value;
+use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
+use crate::bigwig::{BBIFile, Value};
 
 
 fn get_vals(bigwig: &mut BigWigRead, current_block: Block, known_offset: &mut u64) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
