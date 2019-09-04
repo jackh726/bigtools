@@ -4,6 +4,8 @@ use std::io::{self, BufReader, BufRead};
 
 use clap::{App, Arg};
 
+use futures::future::Either;
+
 use bigwig2::bigwig::BBIWriteOptions;
 use bigwig2::bigwig::ChromGroupReadStreamingIterator;
 use bigwig2::chromvalues::ChromValues;
@@ -42,9 +44,6 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BBIWriteOptions) -> 
         chrom_map.insert(chrom.clone(), size);
     }
 
-    let mut chrom_ids = IdMap::new();
-    let chrom_ids = chrom_sizes.iter().map(|(c, _)| chrom_ids.get_id(c.clone())).collect::<Vec<_>>().into_iter();
-
     struct MergingValues<I: Iterator<Item=Value> + Send> {
         iter: std::iter::Peekable<I>,
     }
@@ -62,21 +61,27 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BBIWriteOptions) -> 
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
-        iter: Box<dyn Iterator<Item=((String, (u32, Vec<BigWigRead>)), u32)> + Send>,
+        iter: Box<dyn Iterator<Item=(String, (u32, Vec<BigWigRead>))> + Send>,
+        chrom_ids: Option<IdMap<String>>,
     }
 
     impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError> {
+        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
             let next = self.iter.next();
             match next {
-                Some(((chrom, (size, bws)), chrom_id)) => {
+                Some((chrom, (size, bws))) => {
+                    let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(chrom.clone());
                     let current_chrom = chrom.clone();
                     let iters: Vec<_> = bws.into_iter().map(move |b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
                     let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
-                    Ok(Some(BigWigWrite::read_group(current_chrom, chrom_id, size, mergingvalues, self.pool.clone(), self.options.clone())?))
+                    let group = BigWigWrite::read_group(current_chrom, chrom_id, size, mergingvalues, self.pool.clone(), self.options.clone())?;
+                    Ok(Some(Either::Left(group)))
                 },
                 None => {
-                    return Ok(None)       
+                    match self.chrom_ids.take() {
+                        Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
+                        None => Ok(None),
+                    }
                 },
             }
         }
@@ -85,7 +90,8 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BBIWriteOptions) -> 
     let group_iter = ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPoolBuilder::new().pool_size(8).create().expect("Unable to create thread pool."),
         options: options,
-        iter: Box::new(chrom_sizes.into_iter().zip(chrom_ids)),
+        iter: Box::new(chrom_sizes.into_iter()),
+        chrom_ids: Some(IdMap::new()),
     };
 
     Ok((group_iter, chrom_map))

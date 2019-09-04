@@ -3,6 +3,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
+use futures::future::Either;
+
 use crate::bigwig::BBIWriteOptions;
 use crate::bigwig::BigWigWrite;
 use crate::bigwig::ChromGroupRead;
@@ -21,7 +23,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
     struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<ChromGroup<S>> + std::marker::Send> {
         chrom_groups: C,
         last_chrom: Option<String>,
-        chrom_ids: IdMap<String>,
+        chrom_ids: Option<IdMap<String>>,
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
         chrom_map: HashMap<String, u32>,
@@ -29,9 +31,10 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
     }
 
     impl<S: StreamingChromValues + std::marker::Send + 'static, C: ChromGroups<ChromGroup<S>> + std::marker::Send> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<S, C> {
-        fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError> {
+    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
             match self.chrom_groups.next()? {
                 Some((chrom, group)) => {
+                    let chrom_ids = self.chrom_ids.as_mut().unwrap();
                     let last = self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
                         // TODO: test this correctly fails
@@ -43,10 +46,16 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
                         Some(length) => *length,
                         None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                     };
-                    let chrom_id = self.chrom_ids.get_id(chrom.clone());
-                    Ok(Some(BigWigWrite::read_group(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?))
+                    let chrom_id = chrom_ids.get_id(chrom.clone());
+                    let group = BigWigWrite::read_group(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?;
+                    Ok(Some(Either::Left(group)))
                 },
-                None => Ok(None),
+                None => {
+                    match self.chrom_ids.take() {
+                        Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
+                        None => Ok(None),
+                    }
+                }
             }
         }
     }
@@ -54,7 +63,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
     let group_iter = ChromGroupReadStreamingIteratorImpl {
         chrom_groups: vals,
         last_chrom: None,
-        chrom_ids: IdMap::new(),
+        chrom_ids: Some(IdMap::new()),
         pool: futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool."),
         options: options.clone(),
         chrom_map: chrom_map,

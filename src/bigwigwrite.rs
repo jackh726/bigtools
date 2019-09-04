@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::vec::Vec;
 
 use futures::try_join;
-use futures::future::{Future, FutureExt, RemoteHandle};
+use futures::future::{Either, Future, FutureExt, RemoteHandle};
 use futures::channel::mpsc::{channel, Receiver};
 use futures::executor::{block_on, ThreadPool};
 use futures::sink::SinkExt;
@@ -53,11 +53,10 @@ pub type ChromGroupRead = (
     TempFileBuffer,
     Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
     Vec<TempZoomInfo>,
-    (String, u32)
 );
 
 pub trait ChromGroupReadStreamingIterator {
-    fn next(&mut self) -> Result<Option<ChromGroupRead>, WriteGroupsError>;
+    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap<String>>>, WriteGroupsError>;
 }
 
 pub struct BigWigWrite {
@@ -402,10 +401,27 @@ impl BigWigWrite {
         Ok(total)
     }
 
+    /// This converts a ChromValues (streaming iterator) to a ChromGroupRead.
+    /// This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
+    /// This is heavily multi-threaded using Futures. A brief summary:
+    /// - All reading from the ChromValues is done in a single future (process_group). This futures in charge of keeping track of sections (and zoom data).
+    ///   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
+    ///   This is the most CPU-intensive part of the entire write.
+    /// - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
+    ///   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
+    ///   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
+    ///   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
+    ///   All of this is done for zoom sections too.
+    ///
+    /// The returned ChromGroupRead contains:
+    /// - The first future. This is important to be awaited for summary data and any errors.
+    /// - The `FileBufferedChannel` with section offset data, for the index.
+    /// - The `TempFileBuffer` to get the written section data
+    /// - The second future. This is important to be awaited for any errors and the total number of sections wrriten.
+    /// - A Vec of essentially the last three items, but for each zoom.
     pub fn read_group<I: 'static>(chrom: String, chrom_id: u32, chrom_length: u32, group: I, mut pool: ThreadPool, options: BBIWriteOptions)
         -> io::Result<ChromGroupRead>
         where I: ChromValues + Send {
-        let cloned_chrom = chrom.clone();
 
         let (ftx, frx) = channel::<_>(100);
 
@@ -445,7 +461,7 @@ impl BigWigWrite {
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
         let (f_remote, f_handle) = BigWigWrite::process_group(zooms_channels, ftx, chrom_id, options, pool.clone(), group, chrom, chrom_length).remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
-        Ok((f_handle.boxed(), section_receiver, buf, Box::new(sections_handle), zoom_infos, (cloned_chrom, chrom_id)))    
+        Ok((f_handle.boxed(), section_receiver, buf, Box::new(sections_handle), zoom_infos))
     }
 
     async fn write_vals<V>(
@@ -473,45 +489,44 @@ impl BigWigWrite {
 
         let mut summary: Option<Summary> = None;
 
-        let mut chrom_ids = IdMap::new();
-        while let Some((summary_future, sections_receiver, mut sections_buf, sections_future, zoom_infos, (chrom, chrom_id))) = vals_iter.next()? {
-            // We previously needed the chrom ids for the indices (read_group)
-            // However, we still want the full map in order to write the full chrom tree
-            // TODO: think about if this is the best way to do this (it's not) and alternatives
-            // (maybe add a method to ChromGroupReadStreamingIterator `dissolve`)
-            let real_id = chrom_ids.get_id(chrom);
-            assert_eq!(real_id, chrom_id, "The chrom id passed from vals_iter does not match the expected chrom id.");
+        let chrom_ids = loop {
+            let next = vals_iter.next()?;
+            match next {
+                Some(Either::Left((summary_future, sections_receiver, mut sections_buf, sections_future, zoom_infos))) => {
+                    // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
+                    // Switch that processing output to the real file
+                    sections_buf.switch(raw_file)?;
+                    // Await these futures to drive them to completion
+                    let (chrom_summary, _num_sections) = try_join!(summary_future, sections_future)?;
+                    section_iter.push(Box::new(sections_receiver.into_iter()));
+                    raw_file = sections_buf.await_file();
 
-            // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
-            // Switch that processing output to the real file
-            sections_buf.switch(raw_file)?;
-            // Await these futures to drive them to completion
-            let (chrom_summary, _num_sections) = try_join!(summary_future, sections_future)?;
-            section_iter.push(Box::new(sections_receiver.into_iter()));
-            raw_file = sections_buf.await_file();
+                    for (i, (_size, future, buf, zoom_sections_receiver)) in zoom_infos.into_iter().enumerate() {
+                        let zoom = &mut zooms[i];
+                        assert_eq!(zoom.0, _size);
+                        let num_sections = future.await?;
+                        // TODO: do we need to `take` here?
+                        zoom.1.push(Box::new(zoom_sections_receiver.into_iter().take(num_sections)));
+                        buf.expect_closed_write(&mut zoom.3)?;
+                    }
 
-            for (i, (_size, future, buf, zoom_sections_receiver)) in zoom_infos.into_iter().enumerate() {
-                let zoom = &mut zooms[i];
-                assert_eq!(zoom.0, _size);
-                let num_sections = future.await?;
-                // TODO: do we need to `take` here?
-                zoom.1.push(Box::new(zoom_sections_receiver.into_iter().take(num_sections)));
-                buf.expect_closed_write(&mut zoom.3)?;
-            }
-
-            match &mut summary {
-                None => {
-                    summary = Some(chrom_summary)
+                    match &mut summary {
+                        None => {
+                            summary = Some(chrom_summary)
+                        },
+                        Some(summary) => {
+                            summary.bases_covered += chrom_summary.bases_covered;
+                            summary.min_val = summary.min_val.min(chrom_summary.min_val);
+                            summary.max_val = summary.max_val.max(chrom_summary.max_val);
+                            summary.sum += chrom_summary.sum;
+                            summary.sum_squares += chrom_summary.sum_squares;
+                        }
+                    }
                 },
-                Some(summary) => {
-                    summary.bases_covered += chrom_summary.bases_covered;
-                    summary.min_val = summary.min_val.min(chrom_summary.min_val);
-                    summary.max_val = summary.max_val.max(chrom_summary.max_val);
-                    summary.sum += chrom_summary.sum;
-                    summary.sum_squares += chrom_summary.sum_squares;
-                }
+                Some(Either::Right(chrom_ids)) => break chrom_ids,
+                None => unreachable!(),
             }
-        }
+        };
 
         let summary_complete = summary.unwrap_or(Summary {
             bases_covered: 0,

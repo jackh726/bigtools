@@ -5,6 +5,8 @@ use std::sync::{Arc};
 
 use crossbeam::atomic::AtomicCell;
 
+// TODO: Change TempFileBuffer to memory buffer if under a certain threshold
+
 #[derive(Debug)]
 enum BufferState {
     NotStarted,
