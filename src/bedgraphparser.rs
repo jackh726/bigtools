@@ -47,7 +47,7 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
                         None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                     };
                     let chrom_id = chrom_ids.get_id(chrom.clone());
-                    let group = BigWigWrite::read_group(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?;
+                    let group = BigWigWrite::begin_processing_chrom(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?;
                     Ok(Some(Either::Left(group)))
                 },
                 None => {

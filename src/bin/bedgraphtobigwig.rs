@@ -10,7 +10,7 @@ use bigwig2::bigwig::{BigWigWrite, WriteGroupsError};
 use bigwig2::bedgraphparser::{self, BedGraphParser};
 
 fn main() -> Result<(), WriteGroupsError> {
-    let matches = App::new("BigWigInfo")
+    let matches = App::new("BedGraphToBigWig")
         .arg(Arg::with_name("bedgraph")
                 .help("the bedgraph to convert to a bigwig")
                 .index(1)

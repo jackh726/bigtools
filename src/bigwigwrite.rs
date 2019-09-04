@@ -44,13 +44,13 @@ pub struct Summary {
     sum_squares: f64,
 }
 
-type TempZoomInfo = (u32 /* resolution */, RemoteHandle<Result<usize, WriteGroupsError>> /* Temp file that contains data */, TempFileBuffer, filebufferedchannel::Receiver<Section> /* sections */);
+type TempZoomInfo = (u32 /* resolution */, RemoteHandle<Result<usize, WriteGroupsError>> /* Temp file that contains data */, TempFileBuffer<TempFileBufferWriter<File>>, filebufferedchannel::Receiver<Section> /* sections */);
 const DEFAULT_ZOOM_SIZES: [u32; 11] = [10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
 
 pub type ChromGroupRead = (
     Pin<Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send>>,
     filebufferedchannel::Receiver<Section>,
-    TempFileBuffer,
+    TempFileBuffer<File>,
     Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
     Vec<TempZoomInfo>,
 );
@@ -419,46 +419,36 @@ impl BigWigWrite {
     /// - The `TempFileBuffer` to get the written section data
     /// - The second future. This is important to be awaited for any errors and the total number of sections wrriten.
     /// - A Vec of essentially the last three items, but for each zoom.
-    pub fn read_group<I: 'static>(chrom: String, chrom_id: u32, chrom_length: u32, group: I, mut pool: ThreadPool, options: BBIWriteOptions)
+    /// 
+    /// The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
+    pub fn begin_processing_chrom<I: 'static>(chrom: String, chrom_id: u32, chrom_length: u32, group: I, mut pool: ThreadPool, options: BBIWriteOptions)
         -> io::Result<ChromGroupRead>
         where I: ChromValues + Send {
 
         let (ftx, frx) = channel::<_>(100);
 
-        let (sections_future, buf, section_receiver) = {
+        let (sections_handle, buf, section_receiver) = {
             let (buf, write) = TempFileBuffer::new()?;
             let file = BufWriter::new(write);
 
             let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
-            let sections_future = BigWigWrite::create_do_write(file, section_sender, frx);
-            (sections_future, buf, section_receiver)
+            let (sections_remote, sections_handle) = BigWigWrite::create_do_write(file, section_sender, frx).remote_handle();
+            pool.spawn(sections_remote).expect("Couldn't spawn future.");
+            (sections_handle, buf, section_receiver)
         };
 
-        let processed_zooms: Result<Vec<_>, _> = DEFAULT_ZOOM_SIZES.iter().map(|size| -> io::Result<_> {
+        let processed_zooms: Vec<_> = DEFAULT_ZOOM_SIZES.iter().map(|size| -> io::Result<_> {
             let (ftx, frx) = channel::<_>(100);
-            let f = {
-                let (buf, write) = TempFileBuffer::new()?;
-                let file = BufWriter::new(write);
+            let (buf, write) = TempFileBuffer::new()?;
+            let file = BufWriter::new(write);
 
-                let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
-                let file_future = BigWigWrite::create_do_write(file, section_sender, frx);
+            let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
+            let (remote, handle) = BigWigWrite::create_do_write(file, section_sender, frx).remote_handle();
+            pool.spawn(remote).expect("Couldn't spawn future.");
+            Ok(((*size, handle, buf, section_receiver), ftx))
+        }).collect::<io::Result<_>>()?;
+        let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms.into_iter().unzip();
 
-                (*size, file_future, buf, section_receiver)
-            };
-            Ok((f, ftx))
-        }).collect();
-        let (zooms_futures, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms?.into_iter().unzip();
-
-        let (sections_remote, sections_handle) = sections_future.remote_handle();
-        let (zoom_infos, zoom_remotes): (Vec<_>, Vec<_>) = zooms_futures.into_iter().map(|(size, file_future, buf, section_iter)| {
-            let (remote, handle) = file_future.remote_handle();
-            ((size, handle, buf, section_iter), remote)
-        }).unzip();
-
-        for zoom_remote in zoom_remotes {
-            pool.spawn(zoom_remote).expect("Couldn't spawn future.");
-        }
-        pool.spawn(sections_remote).expect("Couldn't spawn future.");
         let (f_remote, f_handle) = BigWigWrite::process_group(zooms_channels, ftx, chrom_id, options, pool.clone(), group, chrom, chrom_length).remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
         Ok((f_handle.boxed(), section_receiver, buf, Box::new(sections_handle), zoom_infos))
@@ -478,12 +468,13 @@ impl BigWigWrite {
     where V : ChromGroupReadStreamingIterator + Send {
         let mut section_iter: Vec<Box<dyn Iterator<Item=Section>>> = vec![];
 
-        let mut zooms: Vec<(u32, Vec<Box<dyn Iterator<Item=Section>>>, TempFileBuffer, TempFileBufferWriter)> = DEFAULT_ZOOM_SIZES.iter().map(|size| -> io::Result<_> {
+        // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
+        let mut zooms: Vec<(u32, Vec<Box<dyn Iterator<Item=Section>>>, TempFileBuffer<File>, Option<TempFileBufferWriter<File>>)> = DEFAULT_ZOOM_SIZES.iter().map(|size| -> io::Result<_> {
             let section_iter: Vec<Box<dyn Iterator<Item=Section>>> = vec![];
 
-            let (buf, write) = TempFileBuffer::new()?;
-            Ok((*size, section_iter, buf, write))
-        }).collect::<Result<_, _>>()?;
+            let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) = TempFileBuffer::new()?;
+            Ok((*size, section_iter, buf, Some(write)))
+        }).collect::<Result<Vec<(u32, Vec<Box<dyn Iterator<Item=Section>>>, TempFileBuffer<File>, Option<TempFileBufferWriter<File>>)>, _>>()?;
 
         let mut raw_file = file.into_inner()?;
 
@@ -492,22 +483,27 @@ impl BigWigWrite {
         let chrom_ids = loop {
             let next = vals_iter.next()?;
             match next {
-                Some(Either::Left((summary_future, sections_receiver, mut sections_buf, sections_future, zoom_infos))) => {
+                Some(Either::Left((summary_future, sections_receiver, mut sections_buf, sections_future, mut zoom_infos))) => {
                     // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                     // Switch that processing output to the real file
-                    sections_buf.switch(raw_file)?;
+                    sections_buf.switch(raw_file);
+                    for (i, (size, _, buf, _)) in zoom_infos.iter_mut().enumerate() {
+                        let zoom = &mut zooms[i];
+                        let writer = zoom.3.take().unwrap();
+                        assert_eq!(zoom.0, *size);
+                        buf.switch(writer);
+                    }
+                    
                     // Await these futures to drive them to completion
                     let (chrom_summary, _num_sections) = try_join!(summary_future, sections_future)?;
                     section_iter.push(Box::new(sections_receiver.into_iter()));
-                    raw_file = sections_buf.await_file();
+                    raw_file = sections_buf.await_real_file();
 
-                    for (i, (_size, future, buf, zoom_sections_receiver)) in zoom_infos.into_iter().enumerate() {
+                    for (i, (_, future, buf, zoom_sections_receiver)) in zoom_infos.into_iter().enumerate() {
                         let zoom = &mut zooms[i];
-                        assert_eq!(zoom.0, _size);
-                        let num_sections = future.await?;
-                        // TODO: do we need to `take` here?
-                        zoom.1.push(Box::new(zoom_sections_receiver.into_iter().take(num_sections)));
-                        buf.expect_closed_write(&mut zoom.3)?;
+                        let _num_sections = future.await?;
+                        zoom.1.push(Box::new(zoom_sections_receiver.into_iter()));
+                        zoom.3.replace(buf.await_real_file());
                     }
 
                     match &mut summary {
@@ -539,7 +535,8 @@ impl BigWigWrite {
         let zoom_infos: Vec<_> = zooms.into_iter().map(|zoom| {
             drop(zoom.3);
             let zoom_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(zoom.1.into_iter().flat_map(|s| s));
-            (zoom.0, zoom.2.await_file(), zoom_iter)
+            let closed_file = zoom.2.await_temp_file();
+            (zoom.0, closed_file, zoom_iter)
         }).collect();
         let section_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(section_iter.into_iter().flat_map(|s| s));
         Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), section_iter, zoom_infos))
