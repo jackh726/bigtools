@@ -127,12 +127,22 @@ pub struct TempZoomInfo {
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: filebufferedchannel::Receiver<Section>,   
 }
-pub struct ChromGroupRead {
-    pub summary_future: Pin<Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send>>,
+
+pub(crate) struct ChromProcessingInput {
+    pub(crate) zooms_channels: Vec<futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>>,
+    pub(crate) ftx: futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>,
+}
+
+pub struct ChromProcessingOutput {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
     pub data_write_future: Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
     pub zooms: Vec<TempZoomInfo>,
+}
+
+pub struct ChromGroupRead {
+    pub summary_future: Pin<Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send>>,
+    pub processing_output: ChromProcessingOutput,
 }
 
 pub trait ChromGroupReadStreamingIterator {
@@ -512,7 +522,7 @@ pub(crate) async fn write_vals<V>(
 where V : ChromGroupReadStreamingIterator + Send {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (Vec<Box<dyn Iterator<Item=Section>>>, TempFileBuffer<File>, Option<TempFileBufferWriter<File>>);
-    let mut zooms: HashMap<u32, ZoomValue> = options.zoom_sizes.iter().map(|size| -> io::Result<_> {
+    let mut zooms_map: HashMap<u32, ZoomValue> = options.zoom_sizes.iter().map(|size| -> io::Result<_> {
         let section_iter: Vec<Box<dyn Iterator<Item=Section>>> = vec![];
         let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) = TempFileBuffer::new()?;
         let value = (section_iter, buf, Some(write));
@@ -528,26 +538,26 @@ where V : ChromGroupReadStreamingIterator + Send {
         let next = vals_iter.next()?;
         match next {
             Some(Either::Left(read)) => {
-                let ChromGroupRead { summary_future, sections: sections_receiver, data: mut sections_buf, data_write_future: sections_future, zooms: mut zoom_infos } = read;
+                let ChromGroupRead { summary_future, processing_output: ChromProcessingOutput { sections, mut data, data_write_future, mut zooms } } = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
-                sections_buf.switch(raw_file);
-                for TempZoomInfo { resolution: size, data: buf, .. } in zoom_infos.iter_mut() {
-                    let zoom = zooms.get_mut(size).unwrap();
+                data.switch(raw_file);
+                for TempZoomInfo { resolution: size, data: buf, .. } in zooms.iter_mut() {
+                    let zoom = zooms_map.get_mut(size).unwrap();
                     let writer = zoom.2.take().unwrap();
                     buf.switch(writer);
                 }
                 
                 // All the futures are actually just handles, so these are purely for the result
-                let (chrom_summary, _num_sections) = try_join!(summary_future, sections_future)?;
-                section_iter.push(Box::new(sections_receiver.into_iter()));
-                raw_file = sections_buf.await_real_file();
+                let (chrom_summary, _num_sections) = try_join!(summary_future, data_write_future)?;
+                section_iter.push(Box::new(sections.into_iter()));
+                raw_file = data.await_real_file();
 
-                for TempZoomInfo { resolution: size, data_write_future: future, data: buf, sections: zoom_sections_receiver } in zoom_infos.into_iter() {
-                    let zoom = zooms.get_mut(&size).unwrap();
-                    let _num_sections = future.await?;
-                    zoom.0.push(Box::new(zoom_sections_receiver.into_iter()));
-                    zoom.2.replace(buf.await_real_file());
+                for TempZoomInfo { resolution, data_write_future, data, sections } in zooms.into_iter() {
+                    let zoom = zooms_map.get_mut(&resolution).unwrap();
+                    let _num_sections = data_write_future.await?;
+                    zoom.0.push(Box::new(sections.into_iter()));
+                    zoom.2.replace(data.await_real_file());
                 }
 
                 match &mut summary {
@@ -576,7 +586,7 @@ where V : ChromGroupReadStreamingIterator + Send {
         sum_squares: 0.0,
     });
 
-    let zoom_infos: Vec<ZoomInfo> = zooms.into_iter().map(|(size, zoom)| {
+    let zoom_infos: Vec<ZoomInfo> = zooms_map.into_iter().map(|(size, zoom)| {
         drop(zoom.2);
         let zoom_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(zoom.0.into_iter().flat_map(|s| s));
         let closed_file = zoom.1.await_temp_file();
@@ -614,19 +624,10 @@ pub(crate) async fn write_data<W: Write>(
     Ok(total)
 }
 
-pub(crate) struct ChromProcessing {
-    pub(crate) zooms_channels: Vec<futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>>,
-    pub(crate) ftx: futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>,
-    pub(crate) sections: filebufferedchannel::Receiver<Section>,
-    pub(crate) data: TempFileBuffer<File>,
-    pub(crate) data_write_future: Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
-    pub(crate) zooms: Vec<TempZoomInfo>,
-}
-
 pub(crate) fn get_chromprocessing(
     pool: &mut ThreadPool,
     options: &BBIWriteOptions,
-) -> io::Result<ChromProcessing> {
+) -> io::Result<(ChromProcessingInput, ChromProcessingOutput)> {
     let (ftx, frx) = channel::<_>(100);
 
     let (sections_handle, buf, section_receiver) = {
@@ -657,12 +658,16 @@ pub(crate) fn get_chromprocessing(
     }).collect::<io::Result<_>>()?;
     let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms.into_iter().unzip();
 
-    Ok(ChromProcessing {
-        zooms_channels,
-        ftx,
-        sections: section_receiver,
-        data: buf,
-        data_write_future: Box::new(sections_handle),
-        zooms: zoom_infos,
-    })
+    Ok((
+        ChromProcessingInput {
+            zooms_channels,
+            ftx,
+        },
+        ChromProcessingOutput {
+            sections: section_receiver,
+            data: buf,
+            data_write_future: Box::new(sections_handle),
+            zooms: zoom_infos,
+        }
+    ))
 }

@@ -32,7 +32,7 @@ use crate::bbiwrite::{
     WriteGroupsError,
     write_vals,
     get_chromprocessing,
-    ChromProcessing
+    ChromProcessingInput,
 };
 
 pub struct BigWigWrite {
@@ -346,23 +346,19 @@ impl BigWigWrite {
         mut pool: ThreadPool,
         options: BBIWriteOptions,
     ) -> io::Result<ChromGroupRead> where I: ChromValues + Send {
-        let ChromProcessing {
-            zooms_channels,
-            ftx,
-            sections,
-            data,
-            data_write_future,
-            zooms,
-        } = get_chromprocessing(&mut pool, &options)?;
+        let (
+            ChromProcessingInput {
+                zooms_channels,
+                ftx,
+            },
+            processing_output,
+        ) = get_chromprocessing(&mut pool, &options)?;
 
         let (f_remote, f_handle) = BigWigWrite::process_group(zooms_channels, ftx, chrom_id, options, pool.clone(), group, chrom, chrom_length).remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
         let read = ChromGroupRead {
             summary_future: f_handle.boxed(),
-            sections,
-            data,
-            data_write_future,
-            zooms,
+            processing_output,
         };
         Ok(read)
     }
