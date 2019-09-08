@@ -1,13 +1,12 @@
 
 use std::io;
-use crate::bigwig::Value;
 
 
-pub trait ChromGroups<V: ChromValues> {
-    fn next(&mut self) -> io::Result<Option<(String, V)>>;
+pub trait ChromGroups<V, C: ChromValues<V>> {
+    fn next(&mut self) -> io::Result<Option<(String, C)>>;
 }
 
-pub trait ChromValues {
-    fn next(&mut self) -> io::Result<Option<Value>>;
-    fn peek(&mut self) -> Option<&Value>;
+pub trait ChromValues<V> {
+    fn next(&mut self) -> io::Result<Option<V>>;
+    fn peek(&mut self) -> Option<&V>;
 }

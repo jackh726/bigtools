@@ -22,7 +22,7 @@ use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-use crate::bigwig::{CHROM_TREE_MAGIC, CIR_TREE_MAGIC, Value, ZoomHeader};
+use crate::bigwig::{CHROM_TREE_MAGIC, CIR_TREE_MAGIC, ZoomHeader};
 
 
 pub(crate) struct ZoomInfo {
@@ -53,11 +53,17 @@ pub(crate) struct ZoomRecord {
     pub(crate) chrom: u32,
     pub(crate) start: u32,
     pub(crate) end: u32,
-    pub(crate) valid_count: u32,
-    pub(crate) min_value: f32,
-    pub(crate) max_value: f32,
-    pub(crate) sum: f32,
-    pub(crate) sum_squares: f32,
+    pub(crate) summary: Summary,
+}
+
+#[derive(Debug)]
+pub struct Summary {
+    pub(crate) total_items: u64,
+    pub(crate) bases_covered: u64,
+    pub(crate) min_val: f64,
+    pub(crate) max_val: f64,
+    pub(crate) sum: f64,
+    pub(crate) sum_squares: f64,
 }
 
 #[derive(Debug)]
@@ -81,15 +87,6 @@ pub struct BBIWriteOptions {
     pub items_per_slot: u32,
     pub block_size: u32,
     pub zoom_sizes: Vec<u32>,
-}
-
-#[derive(Debug)]
-pub struct Summary {
-    pub(crate) bases_covered: u64,
-    pub(crate) min_val: f64,
-    pub(crate) max_val: f64,
-    pub(crate) sum: f64,
-    pub(crate) sum_squares: f64,
 }
 
 pub(crate) const DEFAULT_ZOOM_SIZES: [u32; 11] = [10, 40, 160, 640, 2_560, 10_240, 40_960, 163_840, 655_360, 2_621_440, 10_485_760];
@@ -204,42 +201,6 @@ pub(crate) fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::col
     Ok(())
 }
 
-pub(crate) async fn encode_section(compress: bool, items_in_section: Vec<Value>, chrom_id: u32) -> io::Result<SectionData> {
-    let mut bytes: Vec<u8> = vec![];
-
-    let start = items_in_section[0].start;
-    let end = items_in_section[items_in_section.len() - 1].end;
-    bytes.write_u32::<NativeEndian>(chrom_id)?;
-    bytes.write_u32::<NativeEndian>(start)?;
-    bytes.write_u32::<NativeEndian>(end)?;
-    bytes.write_u32::<NativeEndian>(0)?;
-    bytes.write_u32::<NativeEndian>(0)?;
-    bytes.write_u8(1)?;
-    bytes.write_u8(0)?;
-    bytes.write_u16::<NativeEndian>(items_in_section.len() as u16)?;
-
-    for item in items_in_section.iter() {
-        bytes.write_u32::<NativeEndian>(item.start)?;
-        bytes.write_u32::<NativeEndian>(item.end)?;
-        bytes.write_f32::<NativeEndian>(item.value)?;   
-    }
-
-    let out_bytes = if compress {
-        let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
-        e.write_all(&bytes)?;
-        e.finish()?
-    } else {
-        bytes
-    };
-
-    Ok(SectionData {
-        chrom: chrom_id,
-        start,
-        end,
-        data: out_bytes,
-    })
-}
-
 pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> io::Result<SectionData> {
     let mut bytes: Vec<u8> = vec![];
 
@@ -251,11 +212,11 @@ pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<Zo
         bytes.write_u32::<NativeEndian>(item.chrom)?;
         bytes.write_u32::<NativeEndian>(item.start)?;
         bytes.write_u32::<NativeEndian>(item.end)?;
-        bytes.write_u32::<NativeEndian>(item.valid_count)?;
-        bytes.write_f32::<NativeEndian>(item.min_value)?;
-        bytes.write_f32::<NativeEndian>(item.max_value)?;
-        bytes.write_f32::<NativeEndian>(item.sum)?;
-        bytes.write_f32::<NativeEndian>(item.sum_squares)?; 
+        bytes.write_u32::<NativeEndian>(item.summary.bases_covered as u32)?;
+        bytes.write_f32::<NativeEndian>(item.summary.min_val as f32)?;
+        bytes.write_f32::<NativeEndian>(item.summary.max_val as f32)?;
+        bytes.write_f32::<NativeEndian>(item.summary.sum as f32)?;
+        bytes.write_f32::<NativeEndian>(item.summary.sum_squares as f32)?; 
     }
 
     let out_bytes = if compress {
@@ -565,6 +526,7 @@ where V : ChromGroupReadStreamingIterator + Send {
                         summary = Some(chrom_summary)
                     },
                     Some(summary) => {
+                        summary.total_items += chrom_summary.total_items;
                         summary.bases_covered += chrom_summary.bases_covered;
                         summary.min_val = summary.min_val.min(chrom_summary.min_val);
                         summary.max_val = summary.max_val.max(chrom_summary.max_val);
@@ -579,6 +541,7 @@ where V : ChromGroupReadStreamingIterator + Send {
     };
 
     let summary_complete = summary.unwrap_or(Summary {
+        total_items: 0,
         bases_covered: 0,
         min_val: 0.0,
         max_val: 0.0,

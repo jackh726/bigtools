@@ -13,10 +13,9 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::chromvalues::ChromValues;
 use crate::tell::Tell;
 
-use crate::bigwig::{Value, BIGWIG_MAGIC_LTH};
+use crate::bigwig::{Value, BIGWIG_MAGIC};
 use crate::bbiwrite::{
     write_blank_headers,
-    encode_section,
     encode_zoom_section,
     write_chrom_tree,
     SectionData,
@@ -107,7 +106,7 @@ impl BigWigWrite {
         };
 
         file.seek(SeekFrom::Start(0))?;
-        file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?; // TODO: should really encode this with NativeEndian, since that is really what we do elsewhere
+        file.write_u32::<NativeEndian>(BIGWIG_MAGIC)?; // TODO: should really encode this with NativeEndian, since that is really what we do elsewhere
         file.write_u16::<NativeEndian>(4)?; // Actually 3, unsure what version 4 actually adds
         file.write_u16::<NativeEndian>(num_zooms)?;
         file.write_u64::<NativeEndian>(chrom_index_start)?;
@@ -137,9 +136,10 @@ impl BigWigWrite {
         file.write_f64::<NativeEndian>(summary.sum_squares)?;
 
 
-        file.write_u32::<NativeEndian>(total_sections as u32)?;
+        file.seek(SeekFrom::Start(full_data_offset))?;
+        file.write_u64::<NativeEndian>(total_sections)?;
         file.seek(SeekFrom::End(0))?;
-        file.write_u32::<NativeEndian>(BIGWIG_MAGIC_LTH)?; // TODO: see above, should encode with NativeEndian
+        file.write_u32::<NativeEndian>(BIGWIG_MAGIC)?; // TODO: see above, should encode with NativeEndian
 
         Ok(())
     }
@@ -154,7 +154,7 @@ impl BigWigWrite {
         chrom: String,
         chrom_length: u32,
         ) -> Result<Summary, WriteGroupsError> 
-        where I: ChromValues + Send {
+        where I: ChromValues<Value> + Send {
         let num_zooms = options.zoom_sizes.len();
         struct ZoomItem {
             live_info: Option<ZoomRecord>,
@@ -174,7 +174,9 @@ impl BigWigWrite {
                 records: Vec::with_capacity(options.items_per_slot as usize)
             }).collect(),
         };
+        let mut total_items = 0;
         while let Some(current_val) = group.next()? {
+            total_items += 1;
             // TODO: test these correctly fails
             if current_val.start > current_val.end {
                 return Err(WriteGroupsError::InvalidInput(format!("Invalid bed graph: {} > {}", current_val.start, current_val.end)));
@@ -198,122 +200,106 @@ impl BigWigWrite {
                 }
             }
 
+            let len = current_val.end - current_val.start;
+            let val = current_val.value as f64;
             match &mut summary {
                 None => {
                     summary = Some(Summary {
-                        bases_covered: u64::from(current_val.end - current_val.start),
-                        min_val: f64::from(current_val.value),
-                        max_val: f64::from(current_val.value),
-                        sum: f64::from(current_val.end - current_val.start) * f64::from(current_val.value),
-                        sum_squares: f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value),
+                        total_items: 0,
+                        bases_covered: u64::from(len),
+                        min_val: val,
+                        max_val: val,
+                        sum: f64::from(len) * val,
+                        sum_squares: f64::from(len) * val * val,
                     })
                 },
                 Some(summary) => {
-                    summary.bases_covered += u64::from(current_val.end - current_val.start);
-                    summary.min_val = summary.min_val.min(f64::from(current_val.value));
-                    summary.max_val = summary.max_val.max(f64::from(current_val.value));
-                    summary.sum += f64::from(current_val.end - current_val.start) * f64::from(current_val.value);
-                    summary.sum_squares += f64::from(current_val.end - current_val.start) * f64::from(current_val.value * current_val.value);
+                    summary.bases_covered += u64::from(len);
+                    summary.min_val = summary.min_val.min(val);
+                    summary.max_val = summary.max_val.max(val);
+                    summary.sum += f64::from(len) * val;
+                    summary.sum_squares += f64::from(len) * val * val;
                 }
             }
 
-            for (i, mut zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+            for (i, zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
                 let mut add_start = current_val.start;
+                let mut loop_i = 0;
                 loop {
-                    if add_start >= current_val.end {
-                        break
+                    loop_i += 1;
+                    // Write section if full or if no next section, some items, and no current zoom record
+                    if (add_start >= current_val.end && zoom_item.live_info.is_none() && group.peek().is_none() && !zoom_item.records.is_empty()) || zoom_item.records.len() == options.items_per_slot as usize {
+                        // If this is the first iteration of the loop, then we haven't added the current value yet...
+                        debug_assert_ne!(loop_i, 1);
+                        let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                        let handle = pool.spawn_with_handle(encode_zoom_section(options.compress, items)).expect("Couldn't spawn.");
+                        zooms_channels[i].send(handle.boxed()).await.expect("Couln't send");
                     }
-                    match &mut zoom_item.live_info {
-                        None => {
-                            zoom_item.live_info = Some(ZoomRecord {
-                                chrom: chrom_id,
-                                start: add_start,
-                                end: add_start,
-                                valid_count: 0,
-                                min_value: current_val.value,
-                                max_value: current_val.value,
-                                sum: 0.0,
-                                sum_squares: 0.0,
-                            });
-                        },
-                        Some(zoom2) => {
-                            let next_end = zoom2.start + (&options.zoom_sizes)[i];
-                            // End of bases that we could add
-                            let add_end = std::cmp::min(next_end, current_val.end);
-                            // If the last zoom ends before this value starts, we don't add anything
-                            if add_end >= add_start {
-                                let added_bases = add_end - add_start;                                
-                                zoom2.end = add_end;
-                                zoom2.valid_count += added_bases;
-                                zoom2.min_value = zoom2.min_value.min(current_val.value);
-                                zoom2.max_value = zoom2.max_value.max(current_val.value);
-                                zoom2.sum += added_bases as f32 * current_val.value;
-                                zoom2.sum_squares += added_bases as f32 * current_val.value * current_val.value;
-                            }
-                            // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                            // or we added to the end of the zoom), then write this zooms to the current section
-                            if add_end == next_end {
-                                zoom_item.records.push(ZoomRecord {
-                                    chrom: chrom_id,
-                                    start: zoom2.start,
-                                    end: zoom2.end,
-                                    valid_count: zoom2.valid_count,
-                                    min_value: zoom2.min_value,
-                                    max_value: zoom2.max_value,
-                                    sum: zoom2.sum,
-                                    sum_squares: zoom2.sum_squares,
-                                });
-                                zoom_item.live_info = None;
-                            }
-                            // Set where we would start for next time
-                            add_start = std::cmp::max(add_end, current_val.start);
-                            // Write section if full
-                            if zoom_item.records.len() == options.items_per_slot as usize {
-                                let items = std::mem::replace(&mut zoom_item.records, vec![]);
-                                let handle = pool.spawn_with_handle(encode_zoom_section(options.compress, items)).expect("Couldn't spawn.");
-                                zooms_channels[i].send(handle.boxed()).await.expect("Couln't send");
+                    if add_start >= current_val.end {
+                        if group.peek().is_none() {
+                            if let Some(zoom2) = zoom_item.live_info.take() {
+                                zoom_item.records.push(zoom2);
+                                continue;
                             }
                         }
+                        break
                     }
+                    let zoom2 = zoom_item.live_info.get_or_insert(ZoomRecord {
+                        chrom: chrom_id,
+                        start: add_start,
+                        end: add_start,
+                        summary: Summary {
+                            total_items: 0,
+                            bases_covered: 0,
+                            min_val: val,
+                            max_val: val,
+                            sum: 0.0,
+                            sum_squares: 0.0,
+                        }
+                    });
+                    // The end of zoom record
+                    let next_end = zoom2.start + (&options.zoom_sizes)[i];
+                    // End of bases that we could add
+                    let add_end = std::cmp::min(next_end, current_val.end);
+                    // If the last zoom ends before this value starts, we don't add anything
+                    if add_end >= add_start {
+                        let added_bases = add_end - add_start;
+                        zoom2.end = add_end;
+                        zoom2.summary.total_items += 1;
+                        zoom2.summary.bases_covered += added_bases as u64;
+                        zoom2.summary.min_val = zoom2.summary.min_val.min(val);
+                        zoom2.summary.max_val = zoom2.summary.max_val.max(val);
+                        zoom2.summary.sum += added_bases as f64 * val;
+                        zoom2.summary.sum_squares += added_bases as f64 * val * val;
+                    }
+                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
+                    // or we added to the end of the zoom), then write this zooms to the current section
+                    if add_end == next_end {
+                        zoom_item.records.push(zoom_item.live_info.take().unwrap());
+                    }
+                    // Set where we would start for next time
+                    add_start = std::cmp::max(add_end, current_val.start);
                 }
+                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
             }
             state_val.items.push(current_val);
-            if state_val.items.len() >= options.items_per_slot as usize {
+            if group.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize {
                 let items = std::mem::replace(&mut state_val.items, vec![]);
                 let handle = pool.spawn_with_handle(encode_section(options.compress, items, chrom_id)).expect("Couldn't spawn.");
                 ftx.send(handle.boxed()).await.expect("Couldn't send");
             }
         }
 
-        if !state_val.items.is_empty() {
-            let handle = pool.spawn_with_handle(encode_section(options.compress, state_val.items, chrom_id)).expect("Couldn't spawn.");
-            ftx.send(handle.boxed()).await.expect("Couldn't send");
+        debug_assert!(state_val.items.is_empty());
+        for zoom_item in state_val.zoom_items.iter_mut() {
+            debug_assert!(zoom_item.live_info.is_none());
+            debug_assert!(zoom_item.records.is_empty());
         }
 
-        for (i, mut zoom_item) in state_val.zoom_items.into_iter().enumerate() {
-            if let Some(zoom2) = zoom_item.live_info {
-                debug_assert!(chrom_id == zoom2.chrom);
-                zoom_item.records.push(ZoomRecord {
-                    chrom: chrom_id,
-                    start: zoom2.start,
-                    end: zoom2.end,
-                    valid_count: zoom2.valid_count,
-                    min_value: zoom2.min_value,
-                    max_value: zoom2.max_value,
-                    sum: zoom2.sum,
-                    sum_squares: zoom2.sum_squares,
-                });
-                zoom_item.live_info = None;
-            }
-            if !zoom_item.records.is_empty() {
-                let items = zoom_item.records;
-                let handle = pool.spawn_with_handle(encode_zoom_section(options.compress, items)).expect("Couldn't spawn.");
-                zooms_channels[i].send(handle.boxed()).await.expect("Couln't send");
-            }
-        }
-
-        let summary_complete = match summary {
+        let mut summary_complete = match summary {
             None => Summary {
+                total_items: 0,
                 bases_covered: 0,
                 min_val: 0.0,
                 max_val: 0.0,
@@ -322,6 +308,7 @@ impl BigWigWrite {
             },
             Some(summary) => summary,
         };
+        summary_complete.total_items = total_items;
         Ok(summary_complete)
     }
 
@@ -345,7 +332,7 @@ impl BigWigWrite {
         group: I,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<ChromGroupRead> where I: ChromValues + Send {
+    ) -> io::Result<ChromGroupRead> where I: ChromValues<Value> + Send {
         let (
             ChromProcessingInput {
                 zooms_channels,
@@ -362,4 +349,43 @@ impl BigWigWrite {
         };
         Ok(read)
     }
+}
+
+async fn encode_section(compress: bool, items_in_section: Vec<Value>, chrom_id: u32) -> io::Result<SectionData> {
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+
+    let mut bytes: Vec<u8> = vec![];
+
+    let start = items_in_section[0].start;
+    let end = items_in_section[items_in_section.len() - 1].end;
+    bytes.write_u32::<NativeEndian>(chrom_id)?;
+    bytes.write_u32::<NativeEndian>(start)?;
+    bytes.write_u32::<NativeEndian>(end)?;
+    bytes.write_u32::<NativeEndian>(0)?;
+    bytes.write_u32::<NativeEndian>(0)?;
+    bytes.write_u8(1)?;
+    bytes.write_u8(0)?;
+    bytes.write_u16::<NativeEndian>(items_in_section.len() as u16)?;
+
+    for item in items_in_section.iter() {
+        bytes.write_u32::<NativeEndian>(item.start)?;
+        bytes.write_u32::<NativeEndian>(item.end)?;
+        bytes.write_f32::<NativeEndian>(item.value)?;   
+    }
+
+    let out_bytes = if compress {
+        let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
+        e.write_all(&bytes)?;
+        e.finish()?
+    } else {
+        bytes
+    };
+
+    Ok(SectionData {
+        chrom: chrom_id,
+        start,
+        end,
+        data: out_bytes,
+    })
 }

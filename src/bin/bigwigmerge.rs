@@ -48,7 +48,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead>, options: BBIWriteOptions) -> 
         iter: std::iter::Peekable<I>,
     }
 
-    impl<I: Iterator<Item=Value> + Send> ChromValues for MergingValues<I> {
+    impl<I: Iterator<Item=Value> + Send> ChromValues<Value> for MergingValues<I> {
         fn next(&mut self) -> io::Result<Option<Value>> {
             Ok(self.iter.next())
         }

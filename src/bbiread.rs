@@ -5,7 +5,7 @@ use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
-use crate::bigwig::{BBIFile, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC_LTH, BIGWIG_MAGIC_HTL, BIGBED_MAGIC_LTH, BIGBED_MAGIC_HTL};
+use crate::bigwig::{BBIFile, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
 
 
 #[derive(Debug)]
@@ -86,18 +86,18 @@ pub trait BBIRead {
         let magic = file.read_u32()?;
         // println!("Magic {:x?}", magic);
         let filetype = match magic {
-            BIGWIG_MAGIC_HTL => {
+            _ if magic == BIGWIG_MAGIC.to_be() => {
                 file = file.into_opposite();
                 BBIFile::BigWig
             },
-            BIGWIG_MAGIC_LTH => {
+            _ if magic == BIGWIG_MAGIC.to_le() => {
                 BBIFile::BigWig
             },
-            BIGBED_MAGIC_HTL => {
+            _ if magic == BIGBED_MAGIC.to_be() => {
                 file = file.into_opposite();
                 BBIFile::BigBed
             },
-            BIGBED_MAGIC_LTH => {
+            _ if magic == BIGBED_MAGIC.to_le() => {
                 BBIFile::BigBed
             },
             _ => return Err(BBIFileReadInfoError::UnknownMagic),
@@ -131,8 +131,6 @@ pub trait BBIRead {
             uncompress_buf_size,
         };
 
-        //println!("Header: {:?}", header);
-
         let zoom_headers = read_zoom_headers(&mut file, &header)?;
 
         // TODO: could instead store this as an Option and only read when needed
@@ -146,7 +144,6 @@ pub trait BBIRead {
         if magic != CHROM_TREE_MAGIC {
             return Err(BBIFileReadInfoError::InvalidChroms);
         }
-        //println!("{:x?} {:?} {:?} {:?} {:?} {:?}", magic, _block_size, key_size, val_size, item_count, _reserved);
         assert_eq!(val_size, 8u32); 
 
         let mut chrom_info = Vec::with_capacity(item_count as usize);

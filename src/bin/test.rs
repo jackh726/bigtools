@@ -1,6 +1,6 @@
 use clap::{App, Arg};
 
-use bigwig2::bigwig::{BigBedRead, BigBedReadAttachError};
+use bigwig2::bigwig::{BBIRead, BigBedRead, BigBedReadAttachError};
 
 fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("Testing")
@@ -19,6 +19,10 @@ fn main() -> Result<(), BigBedReadAttachError> {
 
     let intervals: Vec<_> = bigwig.get_interval("chr1", 12_244_400,12_258_000)?.collect::<Result<_,_>>()?;
     println!("Intervals {:?}", intervals);
+
+    for chrom in bigwig.get_chroms() {
+        println!("{:?}", chrom);
+    }
 
     Ok(())
 }

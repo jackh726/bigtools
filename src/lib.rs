@@ -15,5 +15,6 @@ pub mod filebufferedchannel;
 
 pub mod streaming_linereader;
 pub mod bedgraphparser;
+pub mod bedparser;
 
 pub mod utils;
