@@ -68,7 +68,7 @@ impl BigWigWrite {
         // Even then simply doing "(vals.len() as u32 + ITEMS_PER_SLOT - 1) / ITEMS_PER_SLOT"
         // underestimates because sections are split by chrom too, not just size.
         // Skip for now, and come back when we write real header + summary.
-        file.write_u32::<NativeEndian>(0)?;
+        file.write_u64::<NativeEndian>(0)?;
 
         let pre_data = file.tell()?;
         // Write data to file and return

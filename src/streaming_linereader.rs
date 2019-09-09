@@ -30,25 +30,24 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::{self, BufReader};
+    use std::path::PathBuf;
     extern crate test;
 
     #[test]
     fn test_works() -> io::Result<()> {
-        let f = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        dir.push("resources/test");
+        dir.push("small.bedGraph");
+        let f = File::open(dir)?;
         let bf = BufReader::new(f);
         let mut slr = StreamingLineReader::new(bf);
-        for _i in 0..=1 {
-            let line = slr.read()?;
-            if let Some(l) = line {
-                println!("Line: {:?}", l);
-                let mut split = l.split_whitespace();
-                let chrom = split.next().expect("Missing chrom").to_owned();
-                let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-                let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-                let value = split.next().expect("Missing value").parse::<f32>().unwrap();
-                println!("{:?} {:?} {:?} {:?}", chrom, start, end, value);
-            }
-        }
+        assert_eq!("chr17\t1\t100\t0.5\n", slr.read()?.unwrap());
+        assert_eq!("chr17\t101\t200\t0.5\n", slr.read()?.unwrap());
+        assert_eq!("chr17\t201\t300\t0.5\n", slr.read()?.unwrap());
+        assert_eq!("chr18\t1\t100\t0.5\n", slr.read()?.unwrap());
+        assert_eq!("chr18\t101\t200\t0.5\n", slr.read()?.unwrap());
+        assert_eq!("chr19\t1\t100\t0.5\n", slr.read()?.unwrap());
+        assert!(slr.read()?.is_none());
         Ok(())
     }
 

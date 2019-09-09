@@ -268,21 +268,55 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io;
+    use std::path::PathBuf;
     extern crate test;
 
     #[test]
     fn test_works() -> io::Result<()> {
-        let f = File::open("/home/hueyj/temp/test.bedGraph")?;
-        //let f = File::open("/home/hueyj/temp/final.min.chr17.bedGraph")?;
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        dir.push("resources/test");
+        dir.push("small.bed");
+        let f = File::open(dir)?;
         let mut bgp = BedParser::from_file(f);
-        while let Some((chrom, mut group)) = bgp.next()? {
-            println!("Next chrom: {:?}", chrom);
-            while let Some(value) = group.next()? {
-                println!("Next value: {:?}", value);
-                println!("Peek value: {:?}", group.peek());
-                println!("Peek value: {:?}", group.peek());
-            }
+        {
+            let (chrom, mut group) = bgp.next()?.unwrap();
+            assert_eq!(chrom, "chr17");
+            assert_eq!(BedEntry { start: 1, end: 100, rest: "test1\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.peek().unwrap());
+            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.peek().unwrap());
+
+            assert_eq!(BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(&BedEntry { start: 201, end: 300, rest: "test3\t0".to_string() }, group.peek().unwrap());
+
+            assert_eq!(BedEntry { start: 201, end: 300, rest: "test3\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(None, group.peek());
+
+            assert_eq!(None, group.next()?);
+            assert_eq!(None, group.peek());
         }
+        {
+            let (chrom, mut group) = bgp.next()?.unwrap();
+            assert_eq!(chrom, "chr18");
+            assert_eq!(BedEntry { start: 1, end: 100, rest: "test4\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.peek().unwrap());
+            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.peek().unwrap());
+
+            assert_eq!(BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(None, group.peek());
+
+            assert_eq!(None, group.next()?);
+            assert_eq!(None, group.peek());
+        }
+        {
+            let (chrom, mut group) = bgp.next()?.unwrap();
+            assert_eq!(chrom, "chr19");
+            assert_eq!(BedEntry { start: 1, end: 100, rest: "test6\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(None, group.peek());
+
+            assert_eq!(None, group.next()?);
+            assert_eq!(None, group.peek());
+        }
+        assert!(bgp.next()?.is_none());
         Ok(())
     }
 

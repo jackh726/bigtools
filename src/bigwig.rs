@@ -18,7 +18,7 @@ pub struct Value {
     pub value: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BedEntry {
     pub start: u32,
     pub end: u32,

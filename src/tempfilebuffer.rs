@@ -296,10 +296,7 @@ mod tests {
         let outfile = tempfile::tempfile()?;
         buf.switch(outfile);
 
-        let mut file = match buf.await_file() {
-            ClosedFile::Temp(_) => unreachable!(),
-            ClosedFile::Real(f) => *f,
-        };
+        let mut file = buf.await_real_file();
 
         use std::io::Seek;
         file.seek(io::SeekFrom::Start(0))?;
