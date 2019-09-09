@@ -325,3 +325,16 @@ fn search_overlapping_blocks(mut file: &mut ByteOrdered<BufReader<File>, Endiann
     }
     Ok(())
 }
+
+pub fn get_filetype(path: &String) -> io::Result<Option<BBIFile>> {
+    let mut file = ByteOrdered::runtime(File::open(path)?, Endianness::Little);
+    let magic = file.read_u32()?;
+    let file_type = match magic {
+        _ if magic == BIGWIG_MAGIC.to_be() => Some(BBIFile::BigWig),
+        _ if magic == BIGWIG_MAGIC.to_le() => Some(BBIFile::BigWig),
+        _ if magic == BIGBED_MAGIC.to_be() => Some(BBIFile::BigBed),
+        _ if magic == BIGBED_MAGIC.to_le() => Some(BBIFile::BigBed),
+        _ => None,
+    };
+    Ok(file_type)
+}

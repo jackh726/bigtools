@@ -1,11 +1,11 @@
 #![feature(async_await, test)]
 
-mod bbiread;
-mod bbiwrite;
-mod bigbedread;
-mod bigbedwrite;
-mod bigwigread;
-mod bigwigwrite;
+pub mod bbiread;
+pub mod bbiwrite;
+pub mod bigbedread;
+pub mod bigbedwrite;
+pub mod bigwigread;
+pub mod bigwigwrite;
 pub mod bigwig;
 pub mod idmap;
 pub mod tell;

@@ -62,6 +62,40 @@ impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Sen
     }
 }
 
+/// Same as IntervalIter but owned
+struct OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+    bigbed: BigBedRead,
+    known_offset: u64,
+    blocks: I,
+    vals: Option<Box<dyn Iterator<Item=BedEntry> + Send>>,
+    expected_chrom: u32,
+}
+
+impl<I> Iterator for OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+    type Item = io::Result<BedEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match &mut self.vals {
+                Some(vals) => {
+                    match vals.next() {
+                        Some(v) => { return Some(Ok(v)); }
+                        None => { self.vals = None; }
+                    }
+                },
+                None => {
+                    // TODO: Could minimize this by chunking block reads
+                    let current_block = self.blocks.next()?;
+                    match get_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom) {
+                        Ok(vals) => { self.vals = Some(vals); }
+                        Err(e) => { return Some(Err(e)); }
+                    }
+                },
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum BigBedReadAttachError {
     NotABigBed,
@@ -205,6 +239,19 @@ impl BigBedRead {
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self.get_info().chrom_info.iter().find(|&x| x.name == chrom_name).unwrap().id;
         Ok(IntervalIter {
+            bigbed: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+            expected_chrom: chrom_ix,
+        })
+    }
+
+    pub fn get_interval_move(mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<BedEntry>> + Send> {
+        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        // TODO: this is only for asserting that the chrom is what we expect
+        let chrom_ix = self.get_info().chrom_info.iter().find(|&x| x.name == chrom_name).unwrap().id;
+        Ok(OwnedIntervalIter {
             bigbed: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
