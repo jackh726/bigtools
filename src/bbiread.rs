@@ -5,6 +5,7 @@ use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
+use crate::seekableread::SeekableRead;
 use crate::bigwig::{BBIFile, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
 
 
@@ -69,10 +70,10 @@ impl From<io::Error> for BBIFileReadInfoError {
     }
 }
 
-pub trait BBIRead {
+pub trait BBIRead<R: SeekableRead> {
     fn get_info(&self) -> &BBIFileInfo;
 
-    fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<File>, Endianness>>;
+    fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<R>, Endianness>>;
 
     /// Manually close the open file descriptor (if it exists). If any operations are performed after this is called, the file descriptor will be reopened.
     fn close(&mut self);
@@ -171,7 +172,7 @@ pub trait BBIRead {
             }
         };
 
-        let mut file = self.ensure_reader()?;
+        let file = self.ensure_reader()?;
 
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
@@ -191,7 +192,7 @@ pub trait BBIRead {
 
         //println!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
         let mut blocks: Vec<Block> = vec![];
-        search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
+        search_overlapping_blocks(file, chrom_ix, start, end, &mut blocks)?;
         //println!("overlapping_blocks: {:?}", blocks);
         Ok(blocks)
     }
@@ -283,7 +284,7 @@ fn overlaps(chromq: u32, chromq_start: u32, chromq_end: u32, chromb1: u32, chrom
     compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
 }
 
-fn search_overlapping_blocks(mut file: &mut ByteOrdered<BufReader<File>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> io::Result<()> {
+fn search_overlapping_blocks<R: SeekableRead>(mut file: &mut ByteOrdered<BufReader<R>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> io::Result<()> {
     //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
     let isleaf: u8 = file.read_u8()?;

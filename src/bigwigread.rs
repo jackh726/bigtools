@@ -6,14 +6,15 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 use flate2::read::ZlibDecoder;
 
+use crate::seekableread::SeekableRead;
 use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
 use crate::bigwig::{BBIFile, Value};
 
 
-fn get_vals(bigwig: &mut BigWigRead, current_block: Block, known_offset: &mut u64) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
+fn get_vals<R: SeekableRead + 'static>(bigwig: &mut BigWigRead<R>, current_block: Block, known_offset: &mut u64) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
     let endianness = bigwig.info.header.endianness;
     let uncompress_buf_size: usize = bigwig.info.header.uncompress_buf_size as usize;
-    let mut file = bigwig.reader.as_mut().unwrap();
+    let file = bigwig.reader.as_mut().unwrap();
 
     // TODO: Could minimize this by chunking block reads
     if *known_offset != current_block.offset {
@@ -22,7 +23,7 @@ fn get_vals(bigwig: &mut BigWigRead, current_block: Block, known_offset: &mut u6
             Err(e) => return Err(e),
         }
     }
-    let block_vals = match BigWigRead::get_block_values(&mut file, &current_block, endianness, uncompress_buf_size) {
+    let block_vals = match BigWigRead::get_block_values(file, &current_block, endianness, uncompress_buf_size) {
         Ok(vals) => vals,
         Err(e) => return Err(e),
     };
@@ -30,14 +31,14 @@ fn get_vals(bigwig: &mut BigWigRead, current_block: Block, known_offset: &mut u6
     Ok(Box::new(block_vals))
 }
 
-struct IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
-    bigwig: &'a mut BigWigRead,
+struct IntervalIter<'a, I, R: SeekableRead> where I: Iterator<Item=Block> + Send {
+    bigwig: &'a mut BigWigRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=Value> + Send + 'a>>,
 }
 
-impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
+impl<'a, I, R: SeekableRead + 'static> Iterator for IntervalIter<'a, I, R> where I: Iterator<Item=Block> + Send {
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -63,14 +64,14 @@ impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Sen
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
-    bigwig: BigWigRead,
+struct OwnedIntervalIter<I, R: SeekableRead> where I: Iterator<Item=Block> + Send {
+    bigwig: BigWigRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=Value> + Send>>,
 }
 
-impl<I> Iterator for OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+impl<I, R: SeekableRead + 'static> Iterator for OwnedIntervalIter<I, R> where I: Iterator<Item=Block> + Send {
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -118,13 +119,13 @@ impl From<BBIFileReadInfoError> for BigWigReadAttachError {
     }
 }
 
-pub struct BigWigRead {
+pub struct BigWigRead<R: SeekableRead> {
     pub path: String,
     pub info: BBIFileInfo,
-    reader: Option<ByteOrdered<BufReader<File>, Endianness>>,
+    reader: Option<ByteOrdered<BufReader<R>, Endianness>>,
 }
 
-impl Clone for BigWigRead {
+impl<R: SeekableRead> Clone for BigWigRead<R> {
     fn clone(&self) -> Self {
         BigWigRead {
             path: self.path.clone(),
@@ -134,7 +135,7 @@ impl Clone for BigWigRead {
     }
 }
 
-impl BBIRead for BigWigRead {
+impl BBIRead<File> for BigWigRead<File> {
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -158,7 +159,7 @@ impl BBIRead for BigWigRead {
     }
 }
 
-impl BigWigRead {
+impl BigWigRead<File> {
     pub fn from_file_and_attach(path: String) -> Result<Self, BigWigReadAttachError> {
         let fp = File::open(path.clone())?;
         let file = BufReader::new(fp);
@@ -182,7 +183,7 @@ impl BigWigRead {
     }
 
     /// This assumes that the file is currently at the block's start
-    fn get_block_values(file: &mut ByteOrdered<BufReader<File>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize) -> io::Result<impl Iterator<Item=Value>> {
+    fn get_block_values<R: SeekableRead>(file: &mut ByteOrdered<BufReader<R>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize) -> io::Result<impl Iterator<Item=Value>> {
         let mut values: Vec<Value> = Vec::new();
 
         let mut raw_data = vec![0u8; block.size as usize];

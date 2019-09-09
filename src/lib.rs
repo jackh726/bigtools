@@ -12,9 +12,11 @@ pub mod tell;
 pub mod tempfilebuffer;
 pub mod chromvalues;
 pub mod filebufferedchannel;
+mod seekableread;
 
 pub mod streaming_linereader;
 pub mod bedgraphparser;
 pub mod bedparser;
 
 pub mod utils;
+

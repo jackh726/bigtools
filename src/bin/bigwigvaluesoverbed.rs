@@ -14,7 +14,7 @@ struct Options {
     delimiter: String,
 }
 
-fn write(bedinpath: &Path, mut bigwigin: BigWigRead, out: File, options: Options) -> io::Result<()> {
+fn write(bedinpath: &Path, mut bigwigin: BigWigRead<File>, out: File, options: Options) -> io::Result<()> {
     let uniquenames = {
         if !options.withnames {
             true

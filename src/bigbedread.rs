@@ -6,13 +6,15 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 use flate2::read::ZlibDecoder;
 
+use crate::seekableread::SeekableRead;
 use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize};
 use crate::bigwig::{BBIFile, BedEntry};
 
-fn get_entries(bigbed: &mut BigBedRead, current_block: Block, known_offset: &mut u64, expected_chrom: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
+
+fn get_entries<R: SeekableRead + 'static>(bigbed: &mut BigBedRead<R>, current_block: Block, known_offset: &mut u64, expected_chrom: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
     let endianness = bigbed.info.header.endianness;
     let uncompress_buf_size: usize = bigbed.info.header.uncompress_buf_size as usize;
-    let mut file = bigbed.reader.as_mut().unwrap();
+    let file = bigbed.reader.as_mut().unwrap();
 
     // TODO: Could minimize this by chunking block reads
     if *known_offset != current_block.offset {
@@ -21,7 +23,7 @@ fn get_entries(bigbed: &mut BigBedRead, current_block: Block, known_offset: &mut
             Err(e) => return Err(e),
         }
     }
-    let block_vals = match BigBedRead::get_block_entries(&mut file, &current_block, endianness, uncompress_buf_size, expected_chrom) {
+    let block_vals = match BigBedRead::get_block_entries(file, &current_block, endianness, uncompress_buf_size, expected_chrom) {
         Ok(vals) => vals,
         Err(e) => return Err(e),
     };
@@ -29,15 +31,15 @@ fn get_entries(bigbed: &mut BigBedRead, current_block: Block, known_offset: &mut
     Ok(Box::new(block_vals))
 }
 
-struct IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
-    bigbed: &'a mut BigBedRead,
+struct IntervalIter<'a, I, R: SeekableRead> where I: Iterator<Item=Block> + Send {
+    bigbed: &'a mut BigBedRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=BedEntry> + Send + 'a>>,
     expected_chrom: u32,
 }
 
-impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Send {
+impl<'a, I, R: SeekableRead + 'static> Iterator for IntervalIter<'a, I, R> where I: Iterator<Item=Block> + Send {
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -63,15 +65,15 @@ impl<'a, I> Iterator for IntervalIter<'a, I> where I: Iterator<Item=Block> + Sen
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
-    bigbed: BigBedRead,
+struct OwnedIntervalIter<I, R: SeekableRead> where I: Iterator<Item=Block> + Send {
+    bigbed: BigBedRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=BedEntry> + Send>>,
     expected_chrom: u32,
 }
 
-impl<I> Iterator for OwnedIntervalIter<I> where I: Iterator<Item=Block> + Send {
+impl<I, R: SeekableRead + 'static> Iterator for OwnedIntervalIter<I, R> where I: Iterator<Item=Block> + Send {
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -119,13 +121,13 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
     }
 }
 
-pub struct BigBedRead {
+pub struct BigBedRead<R: SeekableRead> {
     pub path: String,
     pub info: BBIFileInfo,
-    reader: Option<ByteOrdered<BufReader<File>, Endianness>>,
+    reader: Option<ByteOrdered<BufReader<R>, Endianness>>,
 }
 
-impl Clone for BigBedRead {
+impl<R: SeekableRead> Clone for BigBedRead<R> {
     fn clone(&self) -> Self {
         BigBedRead {
             path: self.path.clone(),
@@ -135,7 +137,7 @@ impl Clone for BigBedRead {
     }
 }
 
-impl BBIRead for BigBedRead {
+impl BBIRead<File> for BigBedRead<File> {
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -159,7 +161,7 @@ impl BBIRead for BigBedRead {
     }
 }
 
-impl BigBedRead {
+impl BigBedRead<File> {
     pub fn from_file_and_attach(path: String) -> Result<Self, BigBedReadAttachError> {
         let fp = File::open(path.clone())?;
         let file = BufReader::new(fp);
@@ -184,7 +186,7 @@ impl BigBedRead {
 
     // TODO: remove expected_chrom
     /// This assumes that the file is currently at the block's start
-    fn get_block_entries(file: &mut ByteOrdered<BufReader<File>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
+    fn get_block_entries<R: SeekableRead>(file: &mut ByteOrdered<BufReader<R>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
         let mut entries: Vec<BedEntry> = Vec::new();
 
         let mut raw_data = vec![0u8; block.size as usize];

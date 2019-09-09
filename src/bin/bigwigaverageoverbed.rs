@@ -12,7 +12,7 @@ struct Options {
     simple: bool,
 }
 
-fn write(bedinpath: String, mut bigwigin: BigWigRead, bedout: File, options: Options) -> io::Result<()> {
+fn write(bedinpath: String, mut bigwigin: BigWigRead<File>, bedout: File, options: Options) -> io::Result<()> {
     let uniquenames = {
         if !options.simple {
             true
