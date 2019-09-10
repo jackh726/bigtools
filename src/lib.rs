@@ -13,7 +13,6 @@ pub mod tempfilebuffer;
 pub mod chromvalues;
 pub mod filebufferedchannel;
 pub mod seekableread;
-pub mod remote_file;
 
 pub mod streaming_linereader;
 pub mod bedgraphparser;
@@ -21,3 +20,5 @@ pub mod bedparser;
 
 pub mod utils;
 
+#[cfg(feature = "remote")]
+pub mod remote_file;
