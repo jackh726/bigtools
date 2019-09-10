@@ -6,13 +6,14 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use clap::{App, Arg};
 
 use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigwig2::seekableread::{Reopen, SeekableRead};
 use bigwig2::streaming_linereader::StreamingLineReader;
 
 struct Options {
     simple: bool,
 }
 
-fn write(bedinpath: String, mut bigwigin: BigWigRead<File>, bedout: File, options: Options) -> io::Result<()> {
+fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, mut bigwigin: BigWigRead<R, S>, bedout: File, options: Options) -> io::Result<()> {
     let uniquenames = {
         if !options.simple {
             true

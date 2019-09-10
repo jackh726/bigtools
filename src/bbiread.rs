@@ -80,86 +80,6 @@ pub trait BBIRead<R: SeekableRead> {
 
     fn get_chroms(&self) -> Vec<ChromAndSize>;
 
-
-    fn read_info(file: BufReader<File>) -> Result<BBIFileInfo, BBIFileReadInfoError> {
-        let mut file = ByteOrdered::runtime(file, Endianness::Little);
-
-        let magic = file.read_u32()?;
-        // println!("Magic {:x?}", magic);
-        let filetype = match magic {
-            _ if magic == BIGWIG_MAGIC.to_be() => {
-                file = file.into_opposite();
-                BBIFile::BigWig
-            },
-            _ if magic == BIGWIG_MAGIC.to_le() => {
-                BBIFile::BigWig
-            },
-            _ if magic == BIGBED_MAGIC.to_be() => {
-                file = file.into_opposite();
-                BBIFile::BigBed
-            },
-            _ if magic == BIGBED_MAGIC.to_le() => {
-                BBIFile::BigBed
-            },
-            _ => return Err(BBIFileReadInfoError::UnknownMagic),
-        };
-
-        let version = file.read_u16()?;
-
-        // TODO: should probably handle versions < 3
-        let zoom_levels = file.read_u16()?;
-        let chromosome_tree_offset = file.read_u64()?;
-        let full_data_offset = file.read_u64()?;
-        let full_index_offset = file.read_u64()?;
-        let field_count = file.read_u16()?;
-        let defined_field_count = file.read_u16()?;
-        let auto_sql_offset = file.read_u64()?;
-        let total_summary_offset = file.read_u64()?;
-        let uncompress_buf_size = file.read_u32()?;
-        let _reserved = file.read_u64()?;
-
-        let header = BBIHeader {
-            endianness: file.endianness(),
-            version,
-            zoom_levels,
-            chromosome_tree_offset,
-            full_data_offset,
-            full_index_offset,
-            field_count,
-            defined_field_count,
-            auto_sql_offset,
-            total_summary_offset,
-            uncompress_buf_size,
-        };
-
-        let zoom_headers = read_zoom_headers(&mut file, &header)?;
-
-        // TODO: could instead store this as an Option and only read when needed
-        file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
-        let magic = file.read_u32()?;
-        let _block_size = file.read_u32()?;
-        let key_size = file.read_u32()?;
-        let val_size = file.read_u32()?;
-        let item_count = file.read_u64()?;
-        let _reserved = file.read_u64()?;
-        if magic != CHROM_TREE_MAGIC {
-            return Err(BBIFileReadInfoError::InvalidChroms);
-        }
-        assert_eq!(val_size, 8u32); 
-
-        let mut chrom_info = Vec::with_capacity(item_count as usize);
-        read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
-
-        let info = BBIFileInfo {
-            filetype,
-            header,
-            zoom_headers,
-            chrom_info,
-        };
-
-        Ok(info)
-    }
-
     /// This assumes the file is at the cir tree start
     fn search_cir_tree(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
         let chrom_ix = {
@@ -207,7 +127,86 @@ pub trait BBIRead<R: SeekableRead> {
     }
 }
 
-fn read_zoom_headers(file: &mut ByteOrdered<BufReader<File>, Endianness>, header: &BBIHeader) -> io::Result<Vec<ZoomHeader>> {
+pub(crate) fn read_info<R: SeekableRead>(file: BufReader<R>) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+    let mut file = ByteOrdered::runtime(file, Endianness::Little);
+
+    let magic = file.read_u32()?;
+    // println!("Magic {:x?}", magic);
+    let filetype = match magic {
+        _ if magic == BIGWIG_MAGIC.to_be() => {
+            file = file.into_opposite();
+            BBIFile::BigWig
+        },
+        _ if magic == BIGWIG_MAGIC.to_le() => {
+            BBIFile::BigWig
+        },
+        _ if magic == BIGBED_MAGIC.to_be() => {
+            file = file.into_opposite();
+            BBIFile::BigBed
+        },
+        _ if magic == BIGBED_MAGIC.to_le() => {
+            BBIFile::BigBed
+        },
+        _ => return Err(BBIFileReadInfoError::UnknownMagic),
+    };
+
+    let version = file.read_u16()?;
+
+    // TODO: should probably handle versions < 3
+    let zoom_levels = file.read_u16()?;
+    let chromosome_tree_offset = file.read_u64()?;
+    let full_data_offset = file.read_u64()?;
+    let full_index_offset = file.read_u64()?;
+    let field_count = file.read_u16()?;
+    let defined_field_count = file.read_u16()?;
+    let auto_sql_offset = file.read_u64()?;
+    let total_summary_offset = file.read_u64()?;
+    let uncompress_buf_size = file.read_u32()?;
+    let _reserved = file.read_u64()?;
+
+    let header = BBIHeader {
+        endianness: file.endianness(),
+        version,
+        zoom_levels,
+        chromosome_tree_offset,
+        full_data_offset,
+        full_index_offset,
+        field_count,
+        defined_field_count,
+        auto_sql_offset,
+        total_summary_offset,
+        uncompress_buf_size,
+    };
+
+    let zoom_headers = read_zoom_headers(&mut file, &header)?;
+
+    // TODO: could instead store this as an Option and only read when needed
+    file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
+    let magic = file.read_u32()?;
+    let _block_size = file.read_u32()?;
+    let key_size = file.read_u32()?;
+    let val_size = file.read_u32()?;
+    let item_count = file.read_u64()?;
+    let _reserved = file.read_u64()?;
+    if magic != CHROM_TREE_MAGIC {
+        return Err(BBIFileReadInfoError::InvalidChroms);
+    }
+    assert_eq!(val_size, 8u32); 
+
+    let mut chrom_info = Vec::with_capacity(item_count as usize);
+    read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
+
+    let info = BBIFileInfo {
+        filetype,
+        header,
+        zoom_headers,
+        chrom_info,
+    };
+
+    Ok(info)
+}
+
+fn read_zoom_headers<R: SeekableRead>(file: &mut ByteOrdered<BufReader<R>, Endianness>, header: &BBIHeader) -> io::Result<Vec<ZoomHeader>> {
     let mut zoom_headers = vec![];
     for _ in 0..header.zoom_levels {
         let reduction_level = file.read_u32()?;
@@ -227,7 +226,7 @@ fn read_zoom_headers(file: &mut ByteOrdered<BufReader<File>, Endianness>, header
     Ok(zoom_headers)
 }
 
-fn read_chrom_tree_block(f: &mut ByteOrdered<BufReader<File>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> io::Result<()> {
+fn read_chrom_tree_block<R: SeekableRead>(f: &mut ByteOrdered<BufReader<R>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> io::Result<()> {
     let isleaf = f.read_u8()?;
     let _reserved = f.read_u8()?;
     let count = f.read_u16()?;

@@ -8,14 +8,15 @@ use clap::{App, Arg};
 use futures::future::FutureExt;
 
 use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize};
+use bigwig2::seekableread::{Reopen, SeekableRead};
 use bigwig2::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-pub fn write_bg(bigwig: BigWigRead<File>, mut out_file: File) -> std::io::Result<()> {
+pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bigwig: BigWigRead<R, S>, mut out_file: File) -> std::io::Result<()> {
     let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig.get_chroms().into_iter().map(|chrom| {
         let bigwig = bigwig.clone();
         let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) = TempFileBuffer::new()?;
         let writer = io::BufWriter::new(file);
-        async fn file_future(mut bigwig: BigWigRead<File>, chrom: ChromAndSize, mut writer: io::BufWriter<TempFileBufferWriter<File>>) -> io::Result<()> {
+        async fn file_future<R: Reopen<S> + 'static, S: SeekableRead + 'static>(mut bigwig: BigWigRead<R, S>, chrom: ChromAndSize, mut writer: io::BufWriter<TempFileBufferWriter<File>>) -> io::Result<()> {
             for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
                 let val = raw_val?;
                 writer.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.value))?;

@@ -7,6 +7,7 @@ use std::path::Path;
 use clap::{App, Arg};
 
 use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigwig2::seekableread::{Reopen, SeekableRead};
 use bigwig2::streaming_linereader::StreamingLineReader;
 
 struct Options {
@@ -14,7 +15,7 @@ struct Options {
     delimiter: String,
 }
 
-fn write(bedinpath: &Path, mut bigwigin: BigWigRead<File>, out: File, options: Options) -> io::Result<()> {
+fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mut bigwigin: BigWigRead<R, S>, out: File, options: Options) -> io::Result<()> {
     let uniquenames = {
         if !options.withnames {
             true

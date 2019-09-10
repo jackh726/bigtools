@@ -14,10 +14,11 @@ use bigwig2::bigwig::Value;
 use bigwig2::bigwig::ChromGroupRead;
 
 use bigwig2::idmap::IdMap;
-
+use bigwig2::seekableread::ReopenableFile;
 use bigwig2::utils::merge_sections_many;
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead<File>>, options: BBIWriteOptions) -> io::Result<(impl ChromGroupReadStreamingIterator + std::marker::Send, HashMap<String, u32>)> {
+
+pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options: BBIWriteOptions) -> io::Result<(impl ChromGroupReadStreamingIterator + std::marker::Send, HashMap<String, u32>)> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
@@ -61,7 +62,7 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead<File>>, options: BBIWriteOption
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
-        iter: Box<dyn Iterator<Item=(String, (u32, Vec<BigWigRead<File>>))> + Send>,
+        iter: Box<dyn Iterator<Item=(String, (u32, Vec<BigWigRead<ReopenableFile, File>>))> + Send>,
         chrom_ids: Option<IdMap<String>>,
     }
 
@@ -119,7 +120,7 @@ fn main() -> Result<(), WriteGroupsError> {
         .get_matches();
 
     let output = matches.value_of("output").unwrap().to_owned();
-    let mut bigwigs: Vec<BigWigRead<File>> = vec![];
+    let mut bigwigs: Vec<BigWigRead<ReopenableFile, File>> = vec![];
 
     if let Some(bws) = matches.values_of("bigwig") {
         let results = bws.map(|b| BigWigRead::from_file_and_attach(b.to_owned())).collect::<Result<Vec<_>, _>>();
