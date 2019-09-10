@@ -11,7 +11,7 @@ use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAnd
 use crate::bigwig::{BBIFile, BedEntry};
 
 
-fn get_entries<R: Reopen<S>, S: SeekableRead + 'static>(bigbed: &mut BigBedRead<R, S>, current_block: Block, known_offset: &mut u64, expected_chrom: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
+fn get_entries<R: Reopen<S>, S: SeekableRead + 'static>(bigbed: &mut BigBedRead<R, S>, current_block: Block, known_offset: &mut u64, expected_chrom: u32, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
     let endianness = bigbed.info.header.endianness;
     let uncompress_buf_size: usize = bigbed.info.header.uncompress_buf_size as usize;
     let file = bigbed.reader.as_mut().unwrap();
@@ -23,7 +23,7 @@ fn get_entries<R: Reopen<S>, S: SeekableRead + 'static>(bigbed: &mut BigBedRead<
             Err(e) => return Err(e),
         }
     }
-    let block_vals = match get_block_entries(file, &current_block, endianness, uncompress_buf_size, expected_chrom) {
+    let block_vals = match get_block_entries(file, &current_block, endianness, uncompress_buf_size, expected_chrom, start, end) {
         Ok(vals) => vals,
         Err(e) => return Err(e),
     };
@@ -37,6 +37,8 @@ struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=BedEntry> + Send + 'a>>,
     expected_chrom: u32,
+    start: u32,
+    end: u32,
 }
 
 impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
@@ -54,7 +56,7 @@ impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Itera
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom) {
+                    match get_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -71,6 +73,8 @@ struct OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reope
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=BedEntry> + Send>>,
     expected_chrom: u32,
+    start: u32,
+    end: u32,
 }
 
 impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
@@ -88,7 +92,7 @@ impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom) {
+                    match get_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -163,11 +167,21 @@ impl<R, S> BBIRead<S> for BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead{
 
 impl BigBedRead<ReopenableFile, File> {
     pub fn from_file_and_attach(path: String) -> Result<Self, BigBedReadAttachError> {
-        let fp = File::open(path.clone())?;
+        let reopen = ReopenableFile { path: path.clone() };
+        let b = BigBedRead::from(reopen);
+        if b.is_err() {
+            eprintln!("Error when opening: {}", path);
+        }
+        b
+    }
+}
+
+impl<R,S> BigBedRead<R,S> where R: Reopen<S>, S: SeekableRead {
+    pub fn from(reopen: R) -> Result<Self, BigBedReadAttachError> {
+        let fp = reopen.reopen()?;
         let file = BufReader::new(fp);
         let info = match read_info(file) {
             Err(e) => {
-                eprintln!("Error when opening: {}", path.clone());
                 return Err(e.into());
             }
             Ok(info) => info,
@@ -179,11 +193,10 @@ impl BigBedRead<ReopenableFile, File> {
 
         Ok(BigBedRead {
             info,
-            reopen: ReopenableFile { path },
+            reopen,
             reader: None,
         })
     }
-
 }
 
 impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead {
@@ -197,6 +210,8 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
             blocks: blocks.into_iter(),
             vals: None,
             expected_chrom: chrom_ix,
+            start,
+            end,
         })
     }
 
@@ -210,13 +225,15 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
             blocks: blocks.into_iter(),
             vals: None,
             expected_chrom: chrom_ix,
+            start,
+            end,
         })
     }
 }
 
 // TODO: remove expected_chrom
 /// This assumes that the file is currently at the block's start
-fn get_block_entries<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
+fn get_block_entries<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32, start: u32, end: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
     let mut entries: Vec<BedEntry> = Vec::new();
 
     let mut raw_data = vec![0u8; block.size as usize];
@@ -257,7 +274,9 @@ fn get_block_entries<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endia
                 if entry.start == 0 && entry.end == 0 {
                     break
                 }
-                entries.push(entry)
+                if entry.end >= start && entry.start <= end {
+                    entries.push(entry)
+                }
             },
             Err(_) => break,
         }

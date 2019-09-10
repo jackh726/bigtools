@@ -11,7 +11,7 @@ use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAnd
 use crate::bigwig::{BBIFile, Value};
 
 
-fn get_vals<R: Reopen<S>, S: SeekableRead + 'static>(bigwig: &mut BigWigRead<R, S>, current_block: Block, known_offset: &mut u64) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
+fn get_vals<R: Reopen<S>, S: SeekableRead + 'static>(bigwig: &mut BigWigRead<R, S>, current_block: Block, known_offset: &mut u64, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
     let endianness = bigwig.info.header.endianness;
     let uncompress_buf_size: usize = bigwig.info.header.uncompress_buf_size as usize;
     let file = bigwig.reader.as_mut().unwrap();
@@ -23,7 +23,7 @@ fn get_vals<R: Reopen<S>, S: SeekableRead + 'static>(bigwig: &mut BigWigRead<R, 
             Err(e) => return Err(e),
         }
     }
-    let block_vals = match get_block_values(file, &current_block, endianness, uncompress_buf_size) {
+    let block_vals = match get_block_values(file, &current_block, endianness, uncompress_buf_size, start, end) {
         Ok(vals) => vals,
         Err(e) => return Err(e),
     };
@@ -36,6 +36,8 @@ struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=Value> + Send + 'a>>,
+    start: u32,
+    end: u32,
 }
 
 impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
@@ -53,7 +55,7 @@ impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Itera
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_vals(self.bigwig, current_block, &mut self.known_offset) {
+                    match get_vals(self.bigwig, current_block, &mut self.known_offset, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -69,6 +71,8 @@ struct OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reope
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item=Value> + Send>>,
+    start: u32,
+    end: u32,
 }
 
 impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
@@ -86,7 +90,7 @@ impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_vals(&mut self.bigwig, current_block, &mut self.known_offset) {
+                    match get_vals(&mut self.bigwig, current_block, &mut self.known_offset, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -163,11 +167,21 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
 
 impl BigWigRead<ReopenableFile, File> {
     pub fn from_file_and_attach(path: String) -> Result<Self, BigWigReadAttachError> {
-        let fp = File::open(path.clone())?;
+        let reopen = ReopenableFile { path: path.clone() };
+        let b = BigWigRead::from(reopen);
+        if b.is_err() {
+            eprintln!("Error when opening: {}", path);
+        }
+        b
+    }
+}
+
+impl<R,S> BigWigRead<R,S> where R: Reopen<S>, S: SeekableRead {
+    pub fn from(reopen: R) -> Result<Self, BigWigReadAttachError> {
+        let fp = reopen.reopen()?;
         let file = BufReader::new(fp);
         let info = match read_info(file) {
             Err(e) => {
-                eprintln!("Error when opening: {}", path.clone());
                 return Err(e.into());
             }
             Ok(info) => info,
@@ -179,7 +193,7 @@ impl BigWigRead<ReopenableFile, File> {
 
         Ok(BigWigRead {
             info,
-            reopen: ReopenableFile { path },
+            reopen,
             reader: None,
         })
     }
@@ -193,6 +207,8 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
+            start,
+            end,
         })
     }
 
@@ -203,12 +219,14 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
+            start,
+            end,
         })
     }
 }
 
 /// This assumes that the file is currently at the block's start
-fn get_block_values<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize) -> io::Result<impl Iterator<Item=Value>> {
+fn get_block_values<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, start: u32, end: u32) -> io::Result<impl Iterator<Item=Value>> {
     let mut values: Vec<Value> = Vec::new();
 
     let mut raw_data = vec![0u8; block.size as usize];
@@ -232,44 +250,49 @@ fn get_block_values<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endian
     let _reserved = block_data_mut.read_u8()?;
     let item_count = block_data_mut.read_u16()?;
 
-    let mut start = chrom_start;
+    let mut curr_start = chrom_start;
     for _ in 0..item_count {
-        match section_type {
+        let mut value = match section_type {
             1 => {
                 // bedgraph
                 let chrom_start = block_data_mut.read_u32()?;
                 let chrom_end = block_data_mut.read_u32()?;
                 let value = block_data_mut.read_f32()?;
-                values.push(Value {
+                Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
-                });
+                }
             },
             2 => {
                 // variable step
                 let chrom_start = block_data_mut.read_u32()?;
                 let chrom_end = chrom_start + item_span;
                 let value = block_data_mut.read_f32()?;
-                values.push(Value {
+                Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
-                });
+                }
             },
             3 => {
                 // fixed step
-                let chrom_start = start;
-                start += item_step;
+                let chrom_start = curr_start;
+                curr_start += item_step;
                 let chrom_end = chrom_start + item_span;
                 let value = block_data_mut.read_f32()?;
-                values.push(Value {
+                Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
-                });
+                }
             },
             _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Unknown bigwig section type: {}", section_type)))
+        };
+        if value.end >= start && value.start <= end {
+            value.start = value.start.max(start);
+            value.end = value.end.min(end);
+            values.push(value)
         }
     }
 
