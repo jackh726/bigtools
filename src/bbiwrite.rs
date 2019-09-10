@@ -22,7 +22,7 @@ use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-use crate::bigwig::{CHROM_TREE_MAGIC, CIR_TREE_MAGIC, ZoomHeader};
+use crate::bigwig::{CHROM_TREE_MAGIC, CIR_TREE_MAGIC, ZoomHeader, Summary, ZoomRecord};
 
 
 pub(crate) struct ZoomInfo {
@@ -46,24 +46,6 @@ pub struct Section {
     pub(crate) end: u32,
     pub(crate) offset: u64,
     pub(crate) size: u64,
-}
-
-#[derive(Debug)]
-pub(crate) struct ZoomRecord {
-    pub(crate) chrom: u32,
-    pub(crate) start: u32,
-    pub(crate) end: u32,
-    pub(crate) summary: Summary,
-}
-
-#[derive(Debug)]
-pub struct Summary {
-    pub(crate) total_items: u64,
-    pub(crate) bases_covered: u64,
-    pub(crate) min_val: f64,
-    pub(crate) max_val: f64,
-    pub(crate) sum: f64,
-    pub(crate) sum_squares: f64,
 }
 
 #[derive(Debug)]

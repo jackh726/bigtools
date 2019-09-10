@@ -13,18 +13,16 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::chromvalues::ChromValues;
 use crate::tell::Tell;
 
-use crate::bigwig::{BedEntry, Value, BIGBED_MAGIC};
+use crate::bigwig::{BedEntry, Value, Summary, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
     write_blank_headers,
     encode_zoom_section,
     write_chrom_tree,
     SectionData,
-    ZoomRecord,
     get_rtreeindex,
     write_rtreeindex,
     BBIWriteOptions,
     write_zooms,
-    Summary,
     ChromGroupRead,
     ChromGroupReadStreamingIterator,
     DEFAULT_ZOOM_SIZES,

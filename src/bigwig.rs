@@ -11,6 +11,24 @@ pub(crate) struct ZoomHeader {
     pub(crate) index_offset: u64,
 }
 
+#[derive(Debug)]
+pub struct ZoomRecord {
+    pub chrom: u32,
+    pub start: u32,
+    pub end: u32,
+    pub summary: Summary,
+}
+
+#[derive(Debug)]
+pub struct Summary {
+    pub total_items: u64,
+    pub bases_covered: u64,
+    pub min_val: f64,
+    pub max_val: f64,
+    pub sum: f64,
+    pub sum_squares: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Value {
     pub start: u32,

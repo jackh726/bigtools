@@ -1,12 +1,13 @@
-use std::io::{self, Read, Seek, SeekFrom};
-use std::io::{BufReader};
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::fs::File;
+use std::marker::PhantomData;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use flate2::read::ZlibDecoder;
 
 use crate::seekableread::SeekableRead;
-use crate::bigwig::{BBIFile, ZoomHeader, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
+use crate::bigwig::{BBIFile, ZoomHeader, Summary, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
 
 
 #[derive(Debug)]
@@ -337,4 +338,116 @@ pub fn get_filetype(path: &String) -> io::Result<Option<BBIFile>> {
         _ => None,
     };
     Ok(file_type)
+}
+
+/// Gets the data (uncompressed, if applicable) from a given block
+pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, block: &Block, known_offset: u64) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
+    let (endianness, uncompress_buf_size) = {
+        let info = bbifile.get_info();
+        (info.header.endianness, info.header.uncompress_buf_size as usize)
+    };
+    let file = bbifile.ensure_reader()?;
+
+    // TODO: Could minimize this by chunking block reads
+    if known_offset != block.offset {
+        file.seek(SeekFrom::Start(block.offset))?;
+    }
+
+    let mut raw_data = vec![0u8; block.size as usize];
+    file.read_exact(&mut raw_data)?;
+    let block_data: Vec<u8> = if uncompress_buf_size > 0 {
+        let mut uncompressed_block_data = vec![0u8; uncompress_buf_size];
+        let mut d = ZlibDecoder::new(&raw_data[..]);
+        let _ = d.read(&mut uncompressed_block_data)?;
+        uncompressed_block_data
+    } else {
+        raw_data
+    };
+
+    Ok(ByteOrdered::runtime(Cursor::new(block_data), endianness))
+}
+
+pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, block: Block, known_offset: &mut u64, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=ZoomRecord> + Send>> {
+    let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
+    let len = data_mut.inner_mut().get_mut().len();
+    assert_eq!(len % (4 * 8), 0);
+    let itemcount = len / (4 * 8);
+    let mut records = Vec::with_capacity(itemcount);
+
+    for _ in 0..itemcount {
+        let chrom_id = data_mut.read_u32()?;
+        let chrom_start = data_mut.read_u32()?;
+        let chrom_end = data_mut.read_u32()?;
+        let bases_covered = data_mut.read_u32()? as u64;
+        let min_val = data_mut.read_f32()? as f64;
+        let max_val = data_mut.read_f32()? as f64;
+        let sum = data_mut.read_f32()? as f64;
+        let sum_squares = data_mut.read_f32()? as f64;
+        if chrom_end >= start && chrom_start <= end {
+            records.push(ZoomRecord {
+                chrom: chrom_id,
+                start: chrom_start,
+                end: chrom_end,
+                summary: Summary {
+                    total_items: 0,
+                    bases_covered,
+                    min_val,
+                    max_val,
+                    sum,
+                    sum_squares,
+                }
+            });
+        }
+    }
+
+    *known_offset = block.offset + block.size;
+    Ok(Box::new(records.into_iter()))
+}
+
+pub(crate) struct ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+    bbifile: &'a mut B,
+    known_offset: u64,
+    blocks: I,
+    vals: Option<Box<dyn Iterator<Item=ZoomRecord> + Send + 'a>>,
+    start: u32,
+    end: u32,
+    _phantom: PhantomData<S>,
+}
+
+impl<'a, I, S, B> ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+    pub fn new(bbifile: &'a mut B, blocks: I, start: u32, end: u32) -> Self {
+        ZoomIntervalIter {
+            bbifile,
+            known_offset: 0,
+            blocks,
+            vals: None,
+            start,
+            end,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, I, S, B> Iterator for ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+    type Item = io::Result<ZoomRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match &mut self.vals {
+                Some(vals) => {
+                    match vals.next() {
+                        Some(v) => { return Some(Ok(v)); }
+                        None => { self.vals = None; }
+                    }
+                },
+                None => {
+                    let current_block = self.blocks.next()?;
+                    match get_zoom_block_values(self.bbifile, current_block, &mut self.known_offset, self.start, self.end) {
+                        Ok(vals) => { self.vals = Some(vals); }
+                        Err(e) => { return Some(Err(e)); }
+                    }
+                },
+            }
+        }
+    }
 }

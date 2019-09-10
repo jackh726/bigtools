@@ -4,32 +4,11 @@ use std::fs::File;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
-use flate2::read::ZlibDecoder;
 
 use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
-use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize, read_info};
-use crate::bigwig::{BBIFile, BedEntry};
+use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize, ZoomIntervalIter, read_info, get_block_data};
+use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 
-
-fn get_entries<R: Reopen<S>, S: SeekableRead + 'static>(bigbed: &mut BigBedRead<R, S>, current_block: Block, known_offset: &mut u64, expected_chrom: u32, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
-    let endianness = bigbed.info.header.endianness;
-    let uncompress_buf_size: usize = bigbed.info.header.uncompress_buf_size as usize;
-    let file = bigbed.reader.as_mut().unwrap();
-
-    // TODO: Could minimize this by chunking block reads
-    if *known_offset != current_block.offset {
-        match file.seek(SeekFrom::Start(current_block.offset)) {
-            Ok(_) => {},
-            Err(e) => return Err(e),
-        }
-    }
-    let block_vals = match get_block_entries(file, &current_block, endianness, uncompress_buf_size, expected_chrom, start, end) {
-        Ok(vals) => vals,
-        Err(e) => return Err(e),
-    };
-    *known_offset = current_block.offset + current_block.size;
-    Ok(Box::new(block_vals))
-}
 
 struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
     bigbed: &'a mut BigBedRead<R, S>,
@@ -41,7 +20,7 @@ struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen
     end: u32,
 }
 
-impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -56,7 +35,7 @@ impl<'a, I, R, S: 'static> Iterator for IntervalIter<'a, I, R, S> where I: Itera
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
+                    match get_block_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -77,7 +56,7 @@ struct OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reope
     end: u32,
 }
 
-impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -92,7 +71,7 @@ impl<I, R, S: 'static> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
+                    match get_block_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
                         Ok(vals) => { self.vals = Some(vals); }
                         Err(e) => { return Some(Err(e)); }
                     }
@@ -229,25 +208,27 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
             end,
         })
     }
+
+    pub fn get_zoom_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32, reduction_level: u32) -> io::Result<impl Iterator<Item=io::Result<ZoomRecord>> + Send + 'a> {
+        let zoom_header = match self.info.zoom_headers.iter().find(|h| h.reduction_level == reduction_level) {
+            Some(h) => h,
+            None => {
+                return Err(io::Error::new(io::ErrorKind::Other, "No reduction level found."));
+            }
+        };
+
+        let index_offset = zoom_header.index_offset;
+        let file = self.ensure_reader()?;
+        file.seek(SeekFrom::Start(index_offset))?;
+        let blocks = self.search_cir_tree(chrom_name, start, end)?;
+        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), start, end))
+    }
 }
 
 // TODO: remove expected_chrom
-/// This assumes that the file is currently at the block's start
-fn get_block_entries<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endianness>, block: &Block, endianness: Endianness, uncompress_buf_size: usize, expected_chrom: u32, start: u32, end: u32) -> io::Result<impl Iterator<Item=BedEntry>> {
+fn get_block_entries<R: Reopen<S>, S: SeekableRead>(bigbed: &mut BigBedRead<R, S>, block: Block, known_offset: &mut u64, expected_chrom: u32, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
+    let mut block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
     let mut entries: Vec<BedEntry> = Vec::new();
-
-    let mut raw_data = vec![0u8; block.size as usize];
-    file.read_exact(&mut raw_data)?;
-    let block_data: Vec<u8> = if uncompress_buf_size > 0 {
-        let mut uncompressed_block_data = vec![0u8; uncompress_buf_size];
-        let mut d = ZlibDecoder::new(&raw_data[..]);
-        let _ = d.read(&mut uncompressed_block_data)?;
-        uncompressed_block_data
-    } else {
-        raw_data
-    };
-
-    let mut block_data_mut = ByteOrdered::runtime(&block_data[..], endianness);
 
     let mut read_entry = || -> io::Result<BedEntry> {
         let _chrom_id = block_data_mut.read_u32()?;
@@ -282,5 +263,6 @@ fn get_block_entries<S: SeekableRead>(file: &mut ByteOrdered<BufReader<S>, Endia
         }
     }
 
-    Ok(entries.into_iter())
+    *known_offset = block.offset + block.size;
+    Ok(Box::new(entries.into_iter()))
 }
