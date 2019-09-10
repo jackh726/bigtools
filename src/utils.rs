@@ -529,27 +529,27 @@ impl<I> Iterator for FillValues<I> where I : Iterator<Item=io::Result<Value>> + 
                     let last = self.last_end;
                     self.last_end = next.start;
                     self.last_val.replace(next);
-                    return Some(Ok(Value { start: last, end: self.last_end, value: 0.0 }))
+                    Some(Ok(Value { start: last, end: self.last_end, value: 0.0 }))
                 } else {
                     self.last_end = next.end;
-                    return Some(Ok(next));
+                    Some(Ok(next))
                 }
             },
             Some(_) => {
-                return next;
+                next
             }
             None => {
                 match self.expected_end {
                     None => {
-                        return None;
+                        None
                     },
                     Some(expected_end) => {
                         if self.last_end < expected_end {
                             let last = self.last_end;
                             self.last_end = expected_end;
-                            return Some(Ok(Value { start: last, end: expected_end, value: 0.0 }));
+                            Some(Ok(Value { start: last, end: expected_end, value: 0.0 }))
                         } else {
-                            return None;
+                            None
                         }
                     }
                 }

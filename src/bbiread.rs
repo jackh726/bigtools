@@ -327,7 +327,7 @@ fn search_overlapping_blocks<R: SeekableRead>(mut file: &mut ByteOrdered<BufRead
     Ok(())
 }
 
-pub fn get_filetype(path: &String) -> io::Result<Option<BBIFile>> {
+pub fn get_filetype(path: &str) -> io::Result<Option<BBIFile>> {
     let mut file = ByteOrdered::runtime(File::open(path)?, Endianness::Little);
     let magic = file.read_u32()?;
     let file_type = match magic {
@@ -378,11 +378,11 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(bbifile: &mu
         let chrom_id = data_mut.read_u32()?;
         let chrom_start = data_mut.read_u32()?;
         let chrom_end = data_mut.read_u32()?;
-        let bases_covered = data_mut.read_u32()? as u64;
-        let min_val = data_mut.read_f32()? as f64;
-        let max_val = data_mut.read_f32()? as f64;
-        let sum = data_mut.read_f32()? as f64;
-        let sum_squares = data_mut.read_f32()? as f64;
+        let bases_covered = u64::from(data_mut.read_u32()?);
+        let min_val = f64::from(data_mut.read_f32()?);
+        let max_val = f64::from(data_mut.read_f32()?);
+        let sum = f64::from(data_mut.read_f32()?);
+        let sum_squares = f64::from(data_mut.read_f32()?);
         if chrom_end >= start && chrom_start <= end {
             records.push(ZoomRecord {
                 chrom: chrom_id,

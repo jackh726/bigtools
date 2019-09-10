@@ -94,7 +94,7 @@ impl From<io::Error> for BigWigReadAttachError {
 
 impl From<BBIFileReadInfoError> for BigWigReadAttachError {
     fn from(error: BBIFileReadInfoError) -> Self {
-        return match error {
+        match error {
             BBIFileReadInfoError::UnknownMagic => BigWigReadAttachError::NotABigWig,
             BBIFileReadInfoError::InvalidChroms => BigWigReadAttachError::InvalidChroms,
             BBIFileReadInfoError::IoError(e) => BigWigReadAttachError::IoError(e),

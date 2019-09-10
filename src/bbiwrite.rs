@@ -291,8 +291,8 @@ fn write_tree(
     childnode_offset: u64,
     options: &BBIWriteOptions
 ) -> io::Result<u64> {
-    let non_leafnode_full_block_size: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * options.block_size as u64;
-    let leafnode_full_block_size: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * options.block_size as u64;
+    let non_leafnode_full_block_size: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
+    let leafnode_full_block_size: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * u64::from(options.block_size);
     debug_assert!(curr_level >= dest_level);
     let mut total_size = 0;
     if curr_level != dest_level {
@@ -562,7 +562,7 @@ pub(crate) async fn write_data<W: Write>(
             start: section.start,
             end: section.end,
             offset: current_offset,
-            size: size,
+            size,
         }).expect("Couldn't send section.");
         current_offset += size;
     }

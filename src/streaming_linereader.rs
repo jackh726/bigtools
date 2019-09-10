@@ -8,10 +8,10 @@ pub struct StreamingLineReader<B: BufRead> {
 
 impl<B: BufRead> StreamingLineReader<B> {
     pub fn new(bf: B) -> StreamingLineReader<B> {
-        return StreamingLineReader {
+        StreamingLineReader {
             current_line: String::new(),
             buf_read: bf,
-        };
+        }
     }
 
     pub fn read<'a>(&'a mut self) -> io::Result<Option<&'a str>> {
@@ -20,7 +20,7 @@ impl<B: BufRead> StreamingLineReader<B> {
         if size == 0 {
             return Ok(None);
         }
-        return Ok(Some(&self.current_line));
+        Ok(Some(&self.current_line))
     }
 }
 

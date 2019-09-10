@@ -216,7 +216,7 @@ impl BigBedWrite {
                         let end = o.end;
                         overlap.push_back(Value {
                             start: item_end,
-                            end: end,
+                            end,
                             value: 1.0,
                         });
                         debug_assert_eq!(overlap.back().unwrap().start, item_end);
@@ -240,10 +240,10 @@ impl BigBedWrite {
                 while overlap.front().map(|f| f.start < next_start).unwrap_or(false) {
                     let mut removed = overlap.pop_front().unwrap();
                     let (len, val) = if removed.end <= next_start {
-                        (removed.end - removed.start, removed.value as f64)
+                        (removed.end - removed.start, f64::from(removed.value))
                     } else {
                         let len = next_start - removed.start;
-                        let val = removed.value as f64;
+                        let val = f64::from(removed.value);
                         removed.start = next_start;
                         overlap.push_front(removed);
                         (len, val)
@@ -287,7 +287,7 @@ impl BigBedWrite {
                         let end = o.end;
                         overlap.push_back(Value {
                             start: item_end,
-                            end: end,
+                            end,
                             value: 1.0,
                         });
                         debug_assert_eq!(overlap.back().unwrap().start, item_end);
@@ -310,7 +310,7 @@ impl BigBedWrite {
 
                 while overlap.front().map(|f| f.start < next_start).unwrap_or(false) {
                     let mut removed = overlap.pop_front().unwrap();
-                    let val = removed.value as f64;
+                    let val = f64::from(removed.value);
                     let (removed_start, removed_end) = if removed.end <= next_start {
                         (removed.start, removed.end)
                     } else {
@@ -358,11 +358,11 @@ impl BigBedWrite {
                             let added_bases = add_end - add_start;
                             zoom2.end = add_end;
                             zoom2.summary.total_items += 1; // XXX
-                            zoom2.summary.bases_covered += added_bases as u64;
+                            zoom2.summary.bases_covered += u64::from(added_bases);
                             zoom2.summary.min_val = zoom2.summary.min_val.min(val);
                             zoom2.summary.max_val = zoom2.summary.max_val.max(val);
-                            zoom2.summary.sum += added_bases as f64 * val;
-                            zoom2.summary.sum_squares += added_bases as f64 * val * val;
+                            zoom2.summary.sum += f64::from(added_bases) * val;
+                            zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
                         }
                         // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
                         // or we added to the end of the zoom), then write this zooms to the current section
@@ -464,7 +464,7 @@ async fn encode_section(compress: bool, items_in_section: Vec<BedEntry>, chrom_i
         bytes.write_u32::<NativeEndian>(item.start)?;
         bytes.write_u32::<NativeEndian>(item.end)?;
         bytes.write_all(item.rest.as_bytes())?;
-        bytes.write(&[b'\0'])?;
+        bytes.write_all(&[b'\0'])?;
     }
 
     let out_bytes = if compress {

@@ -17,7 +17,7 @@ pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>) where T: Serialize + 
     let state = Arc::new(Mutex::new(ChannelState::new(size)));
     let (channelsender, channelreceiver) = bounded(size);
     let sender = Sender { state: state.clone(), sender: channelsender };
-    let receiver = Receiver { state: state, receiver: channelreceiver };
+    let receiver = Receiver { state, receiver: channelreceiver };
     (sender, receiver)
 }
 
@@ -70,25 +70,25 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                 self.status = ChannelStateStatus::OnDisk {
                     serialize_size: None,
                     buffered: None,
-                    sender: sender,
+                    sender,
                     buffer: channelreceiver,
                     file: tempfile::tempfile()?,
                     readindex: 0,
                     writeindex: 0,
                 };
-                return Ok(());
+                Ok(())
             },
             ChannelStateStatus::OnDisk { buffer, file, writeindex, serialize_size, .. } => {
                 file.seek(SeekFrom::Start(*writeindex))?;
                 for item in buffer.try_iter() {
-                    if let None = serialize_size {
+                    if serialize_size.is_none() {
                         serialize_size.replace(bincode::serialized_size(&item).unwrap());
                     }
                     file.write_all(&bincode::serialize(&item).unwrap())?;
                 }
                 *writeindex = file.tell()?;
                 debug_assert!(buffer.is_empty());
-                return Ok(());
+                Ok(())
             }
         }
     }
@@ -149,9 +149,9 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                     sent = true;
                 }
                 if !sent {
-                    return Err(ChannelError::Empty);
+                    Err(ChannelError::Empty)
                 } else {
-                    return Ok(());
+                    Ok(())
                 }
             }
         }
@@ -159,10 +159,10 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
 
     fn read_wait(&mut self) -> ChannelResult<()> {
         match self.read() {
-            Ok(_) => return Ok(()),
-            Err(ChannelError::InMemory) => return Err(ChannelError::InMemory),
-            Err(ChannelError::Disconnected) => return Err(ChannelError::Disconnected),
-            Err(ChannelError::IOError(e)) => return Err(ChannelError::IOError(e)),
+            Ok(_) => Ok(()),
+            Err(ChannelError::InMemory) => Err(ChannelError::InMemory),
+            Err(ChannelError::Disconnected) => Err(ChannelError::Disconnected),
+            Err(ChannelError::IOError(e)) => Err(ChannelError::IOError(e)),
             Err(ChannelError::Empty) => {
                 match &mut self.status {
                     ChannelStateStatus::InMemory => unreachable!(),
@@ -181,9 +181,9 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                                         },
                                     }
                                 }
-                                return Ok(())
+                                Ok(())
                             },
-                            Err(RecvError) => return Err(ChannelError::Disconnected),
+                            Err(RecvError) => Err(ChannelError::Disconnected),
                         }
                     }
                 }
@@ -236,27 +236,27 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
     pub fn recv(&mut self) -> Result<T, RecvError> {
         match self.receiver.try_recv() {
             Ok(t) => {
-                return Ok(t)
+                Ok(t)
             },
             Err(e) => {
                 use crossbeam::channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
-                    Disconnected => return Err(RecvError::Disconnected),
+                    Disconnected => Err(RecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
                         match state.read_wait() {
-                            Ok(_) => return Ok(self.receiver.try_recv().expect("Internal error. read_wait() should only return Ok if items were sent to the receiver.")),
+                            Ok(_) => Ok(self.receiver.try_recv().expect("Internal error. read_wait() should only return Ok if items were sent to the receiver.")),
                             Err(ChannelError::InMemory) => {
                                 drop(state);
                                 match self.receiver.recv() {
-                                    Ok(elem) => return Ok(elem),
-                                    Err(crossbeam::channel::RecvError) => return Err(RecvError::Disconnected),
+                                    Ok(elem) => Ok(elem),
+                                    Err(crossbeam::channel::RecvError) => Err(RecvError::Disconnected),
                                 }
                             },
-                            Err(ChannelError::Disconnected) => return Err(RecvError::Disconnected),
-                            Err(ChannelError::IOError(e)) => return Err(RecvError::IOError(e)),
+                            Err(ChannelError::Disconnected) => Err(RecvError::Disconnected),
+                            Err(ChannelError::IOError(e)) => Err(RecvError::IOError(e)),
                             Err(ChannelError::Empty) => unreachable!(),
                         }
                     },
@@ -268,22 +268,22 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         match self.receiver.try_recv() {
             Ok(t) => {
-                return Ok(t)
+                Ok(t)
             },
             Err(e) => {
                 use crossbeam::channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
-                    Disconnected => return Err(TryRecvError::Disconnected),
+                    Disconnected => Err(TryRecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
                         match state.read() {
-                            Ok(_) => return Ok(self.receiver.try_recv().expect("Internal error. read() should only return Ok if items were sent to the receiver.")),
-                            Err(ChannelError::InMemory) => return Err(TryRecvError::Empty),
-                            Err(ChannelError::Empty) => return Err(TryRecvError::Empty),
-                            Err(ChannelError::Disconnected) => return Err(TryRecvError::Disconnected),
-                        Err(ChannelError::IOError(e)) => return Err(TryRecvError::IOError(e)),
+                            Ok(_) => Ok(self.receiver.try_recv().expect("Internal error. read() should only return Ok if items were sent to the receiver.")),
+                            Err(ChannelError::InMemory) => Err(TryRecvError::Empty),
+                            Err(ChannelError::Empty) => Err(TryRecvError::Empty),
+                            Err(ChannelError::Disconnected) => Err(TryRecvError::Disconnected),
+                            Err(ChannelError::IOError(e)) => Err(TryRecvError::IOError(e)),
                         }
                     },
                 }

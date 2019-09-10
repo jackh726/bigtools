@@ -102,17 +102,17 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 // Writer was dropped with temp file having been written
                 closed_file.seek(io::SeekFrom::Start(0)).unwrap();
                 io::copy(&mut closed_file, &mut real_file).unwrap();
-                return ClosedFile::Real(real_file);
+                ClosedFile::Real(real_file)
             },
             (Some(_), Some(ClosedFile::Real(_))) => unreachable!(),
             (Some(real_file), None) => {
                 // Switch was called but no writes have happened
                 // Writer was dropped with no tempfile being created (or written to)
-                return ClosedFile::Real(real_file);
+                ClosedFile::Real(real_file)
             },
             (None, Some(closed)) => {
                 // Switch was not called or called with subsequent writes
-                return closed;
+                closed
             },
             (None, None) => panic!("No data was written."),
         }
@@ -139,17 +139,17 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 // Writer was dropped with temp file having been written
                 closed_file.seek(io::SeekFrom::Start(0)).unwrap();
                 io::copy(&mut closed_file, &mut real_file).unwrap();
-                return real_file;
+                real_file
             },
             (Some(_), Some(ClosedFile::Real(_))) => unreachable!(),
             (Some(real_file), None) => {
                 // Switch was called but no writes have happened
                 // Writer was dropped with no tempfile being created (or written to)
-                return real_file;
+                real_file
             },
             (None, Some(ClosedFile::Temp(_))) => unreachable!(), // Checked self.has_switched
             (None, Some(ClosedFile::Real(real_file))) => {
-                return real_file;
+                real_file
             },
             (None, None) => panic!("No data was written."),
         }
@@ -174,7 +174,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         match closed_file {
             Some(ClosedFile::Real(_)) => unreachable!(),
             Some(ClosedFile::Temp(t)) => {
-                return t;
+                t
             },
             None => panic!("No data was written."),
         }
@@ -205,7 +205,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
             None => panic!("No data was written."),
             
         }
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -227,7 +227,7 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
             },
             BufferState::Real(_) => {},
         }
-        return Ok(())
+        Ok(())
     }
 }
 
@@ -238,11 +238,11 @@ impl<R: Write + Send + 'static> Drop for TempFileBufferWriter<R> {
         match &mut self.buffer_state {
             BufferState::NotStarted => {},
             BufferState::Temp(f) => {
-                let temp = std::mem::replace(f, None);
+                let temp = f.take();
                 self.closed_file.swap(Some(ClosedFile::Temp(temp.unwrap())));
             },
             BufferState::Real(f) => {
-                let real = std::mem::replace(f, None);
+                let real = f.take();
                 self.closed_file.swap(Some(ClosedFile::Real(real.unwrap())));
             },
         }

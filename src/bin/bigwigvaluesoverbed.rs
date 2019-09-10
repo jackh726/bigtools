@@ -27,15 +27,14 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mu
                 .map(|line| -> io::Result<Option<String>>{
                     let l = line?;
                     let mut split = l.splitn(5, '\t');
-                    let chrom = split.next();
-                    let start = split.next();
-                    let end = split.next();
+                    let _chrom = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _start = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _end = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
                     let name = split.next();
-                    if chrom.is_none() || start.is_none() || end.is_none() || name.is_none() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(name.unwrap().to_owned()))
-                    }
+                    Ok(match name {
+                        None => None,
+                        Some(name) => Some(name.to_string()),
+                    })
                 })
                 .collect::<io::Result<Vec<_>>>()?;
             lines.sort();

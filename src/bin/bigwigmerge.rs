@@ -59,10 +59,12 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options
         }
     }
 
+    type IterItem = (String, (u32, Vec<BigWigRead<ReopenableFile, File>>));
+
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
-        iter: Box<dyn Iterator<Item=(String, (u32, Vec<BigWigRead<ReopenableFile, File>>))> + Send>,
+        iter: Box<dyn Iterator<Item=IterItem> + Send>,
         chrom_ids: Option<IdMap<String>>,
     }
 
@@ -90,9 +92,9 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options
 
     let group_iter = ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPoolBuilder::new().pool_size(8).create().expect("Unable to create thread pool."),
-        options: options,
+        options,
         iter: Box::new(chrom_sizes.into_iter()),
-        chrom_ids: Some(IdMap::new()),
+        chrom_ids: Some(IdMap::default()),
     };
 
     Ok((group_iter, chrom_map))

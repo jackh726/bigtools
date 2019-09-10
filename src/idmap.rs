@@ -14,8 +14,8 @@ pub struct IdMap<K : Hash + Eq> {
     state: RwLock<State<K>>,
 }
 
-impl<K : Hash + Eq> IdMap<K> {
-    pub fn new() -> IdMap<K> {
+impl<K: Hash + Eq> Default for IdMap<K> {
+    fn default() -> IdMap<K> {
         IdMap {
             state: RwLock::new(State {
                 map: std::collections::HashMap::new(),
@@ -23,7 +23,9 @@ impl<K : Hash + Eq> IdMap<K> {
             })
         }
     }
+}
 
+impl<K : Hash + Eq> IdMap<K> {
     pub fn get_map(self) -> HashMap<K, u32> {
         let state = self.state.into_inner().expect("Poisoned lock"); 
         state.map
@@ -58,7 +60,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let mut idmap: IdMap<String> = IdMap::new();
+        let mut idmap: IdMap<String> = IdMap::default();
         let zero = idmap.get_id("zero".to_string());
         assert!(zero == 0);
         let one = idmap.get_id("one".to_string());

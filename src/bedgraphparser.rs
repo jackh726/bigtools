@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
+use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
@@ -17,21 +18,21 @@ use crate::chromvalues::{ChromGroups, ChromValues};
 
 use crossbeam::atomic::AtomicCell;
 
-pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static>(vals: V, options: BBIWriteOptions, chrom_map: HashMap<String, u32>)
+pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static, H: BuildHasher>(vals: V, options: BBIWriteOptions, chrom_map: HashMap<String, u32, H>)
     -> impl ChromGroupReadStreamingIterator
     where V : ChromGroups<Value, ChromGroup<S>> + std::marker::Send {
-    struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<Value, ChromGroup<S>> + std::marker::Send> {
+    struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<Value, ChromGroup<S>> + std::marker::Send, H: BuildHasher> {
         chrom_groups: C,
         last_chrom: Option<String>,
         chrom_ids: Option<IdMap<String>>,
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
-        chrom_map: HashMap<String, u32>,
+        chrom_map: HashMap<String, u32, H>,
         _s: std::marker::PhantomData<S>,
     }
 
-    impl<S: StreamingChromValues + std::marker::Send + 'static, C: ChromGroups<Value, ChromGroup<S>> + std::marker::Send> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<S, C> {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
+    impl<S: StreamingChromValues + std::marker::Send + 'static, C: ChromGroups<Value, ChromGroup<S>> + std::marker::Send, H: BuildHasher> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<S, C, H> {
+        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
             match self.chrom_groups.next()? {
                 Some((chrom, group)) => {
                     let chrom_ids = self.chrom_ids.as_mut().unwrap();
@@ -60,16 +61,15 @@ pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std
         }
     }
 
-    let group_iter = ChromGroupReadStreamingIteratorImpl {
+    ChromGroupReadStreamingIteratorImpl {
         chrom_groups: vals,
         last_chrom: None,
-        chrom_ids: Some(IdMap::new()),
+        chrom_ids: Some(IdMap::default()),
         pool: futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool."),
         options: options.clone(),
-        chrom_map: chrom_map,
+        chrom_map,
         _s: std::marker::PhantomData,
-    };
-    group_iter
+    }
 }
 
 pub trait StreamingChromValues {
@@ -254,7 +254,7 @@ impl<S: StreamingChromValues> ChromValues<Value> for ChromGroup<S> {
         if let ChromOpt::Diff(_) = state.next_chrom {
             return None;
         }
-        return state.next_val.as_ref();
+        state.next_val.as_ref()
     }
 }
 

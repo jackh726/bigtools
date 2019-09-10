@@ -96,7 +96,7 @@ impl From<io::Error> for BigBedReadAttachError {
 
 impl From<BBIFileReadInfoError> for BigBedReadAttachError {
     fn from(error: BBIFileReadInfoError) -> Self {
-        return match error {
+        match error {
             BBIFileReadInfoError::UnknownMagic => BigBedReadAttachError::NotABigBed,
             BBIFileReadInfoError::InvalidChroms => BigBedReadAttachError::InvalidChroms,
             BBIFileReadInfoError::IoError(e) => BigBedReadAttachError::IoError(e),
@@ -245,21 +245,16 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(bigbed: &mut BigBedRead<R, S
         Ok(BedEntry {
             start: chrom_start,
             end: chrom_end,
-            rest: rest,
+            rest,
         })
     };
-    loop {
-        match read_entry() {
-            Ok(entry) => {
-                // TODO: the entire section could be terminated by many 0s. Need to identify a better way of filtering out these    
-                if entry.start == 0 && entry.end == 0 {
-                    break
-                }
-                if entry.end >= start && entry.start <= end {
-                    entries.push(entry)
-                }
-            },
-            Err(_) => break,
+    while let Ok(entry) = read_entry() {
+        // TODO: the entire section could be terminated by many 0s. Need to identify a better way of filtering out these    
+        if entry.start == 0 && entry.end == 0 {
+            break
+        }
+        if entry.end >= start && entry.start <= end {
+            entries.push(entry)
         }
     }
 

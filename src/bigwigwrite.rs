@@ -199,7 +199,7 @@ impl BigWigWrite {
             }
 
             let len = current_val.end - current_val.start;
-            let val = current_val.value as f64;
+            let val = f64::from(current_val.value);
             match &mut summary {
                 None => {
                     summary = Some(Summary {
@@ -265,11 +265,11 @@ impl BigWigWrite {
                         let added_bases = add_end - add_start;
                         zoom2.end = add_end;
                         zoom2.summary.total_items += 1;
-                        zoom2.summary.bases_covered += added_bases as u64;
+                        zoom2.summary.bases_covered += u64::from(added_bases);
                         zoom2.summary.min_val = zoom2.summary.min_val.min(val);
                         zoom2.summary.max_val = zoom2.summary.max_val.max(val);
-                        zoom2.summary.sum += added_bases as f64 * val;
-                        zoom2.summary.sum_squares += added_bases as f64 * val * val;
+                        zoom2.summary.sum += f64::from(added_bases) * val;
+                        zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
                     }
                     // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
                     // or we added to the end of the zoom), then write this zooms to the current section

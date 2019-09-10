@@ -70,7 +70,8 @@ impl Seek for RemoteFile {
             .send()
             .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         let mut buf = vec![0u8; READ_SIZE as usize];
-        r.read(&mut buf).unwrap();
+        let s = r.read(&mut buf).unwrap();
+        buf.truncate(s);
         self.current = Some(Cursor::new(buf));
         Ok(self.last_seek)
     }
