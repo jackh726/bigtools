@@ -408,7 +408,6 @@ pub(crate) fn write_zooms(mut file: &mut BufWriter<File>, zooms: Vec<ZoomInfo>, 
         let mut zoom_file = zoom.data;
         let zoom_size = zoom_file.seek(SeekFrom::End(0))?;
         if zoom_size > (data_size / 2) {
-            //println!("Skipping zoom {:?} because it's size ({:?}) is greater than the data_size/2 ({:?})", zoom.0, zoom.3, data_size/2);
             continue;
         }
         let zoom_data_offset = file.tell()?;

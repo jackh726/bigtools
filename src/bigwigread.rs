@@ -7,7 +7,7 @@ use byteordered::{ByteOrdered, Endianness};
 
 use crate::seekableread::{Reopen, SeekableRead, ReopenableFile};
 use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize, ZoomIntervalIter, read_info, get_block_data};
-use crate::bigwig::{BBIFile, Value, ZoomRecord};
+use crate::bigwig::{BBIFile, Value, ZoomRecord, Summary};
 
 
 struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
@@ -152,6 +152,25 @@ impl BigWigRead<ReopenableFile, File> {
             eprintln!("Error when opening: {}", path);
         }
         b
+    }
+
+    pub fn get_summary(&mut self) -> io::Result<Summary> {
+        let summary_offset = self.info.header.total_summary_offset;
+        let reader = self.ensure_reader()?;
+        reader.seek(SeekFrom::Start(summary_offset))?;
+        let bases_covered = reader.read_u64()?;
+        let min_val = reader.read_f64()?;
+        let max_val = reader.read_f64()?;
+        let sum = reader.read_f64()?;
+        let sum_squares = reader.read_f64()?;
+        Ok(Summary {
+            total_items: 0, // FIXME
+            bases_covered,
+            min_val,
+            max_val,
+            sum,
+            sum_squares,
+        })
     }
 }
 

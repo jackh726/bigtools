@@ -1,4 +1,4 @@
-#![feature(async_await, test)]
+#![feature(test)]
 
 pub mod bbiread;
 pub mod bbiwrite;
