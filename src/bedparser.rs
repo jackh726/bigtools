@@ -14,60 +14,6 @@ use crate::streaming_linereader::StreamingLineReader;
 use crate::chromvalues::{ChromGroups, ChromValues};
 
 
-pub fn get_chromgroupstreamingiterator<V: 'static, S: StreamingChromValues + std::marker::Send + 'static, H: BuildHasher>(vals: V, options: BBIWriteOptions, chrom_map: HashMap<String, u32, H>)
-    -> impl ChromGroupReadStreamingIterator
-    where V : ChromGroups<BedEntry, ChromGroup<S>> + std::marker::Send {
-    struct ChromGroupReadStreamingIteratorImpl<S: StreamingChromValues + std::marker::Send, C: ChromGroups<BedEntry, ChromGroup<S>> + std::marker::Send, H: BuildHasher> {
-        chrom_groups: C,
-        last_chrom: Option<String>,
-        chrom_ids: Option<IdMap<String>>,
-        pool: futures::executor::ThreadPool,
-        options: BBIWriteOptions,
-        chrom_map: HashMap<String, u32, H>,
-        _s: std::marker::PhantomData<S>,
-    }
-
-    impl<S: StreamingChromValues + std::marker::Send + 'static, C: ChromGroups<BedEntry, ChromGroup<S>> + std::marker::Send, H: BuildHasher> ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl<S, C, H> {
-        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
-            match self.chrom_groups.next()? {
-                Some((chrom, group)) => {
-                    let chrom_ids = self.chrom_ids.as_mut().unwrap();
-                    let last = self.last_chrom.replace(chrom.clone());
-                    if let Some(c) = last {
-                        // TODO: test this correctly fails
-                        if c >= chrom {
-                            return Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
-                        }
-                    }
-                    let length = match self.chrom_map.get(&chrom) {
-                        Some(length) => *length,
-                        None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
-                    };
-                    let chrom_id = chrom_ids.get_id(chrom.clone());
-                    let group = BigBedWrite::begin_processing_chrom(chrom, chrom_id, length, group, self.pool.clone(), self.options.clone())?;
-                    Ok(Some(Either::Left(group)))
-                },
-                None => {
-                    match self.chrom_ids.take() {
-                        Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
-                        None => Ok(None),
-                    }
-                }
-            }
-        }
-    }
-
-    ChromGroupReadStreamingIteratorImpl {
-        chrom_groups: vals,
-        last_chrom: None,
-        chrom_ids: Some(IdMap::default()),
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool."),
-        options: options.clone(),
-        chrom_map,
-        _s: std::marker::PhantomData,
-    }
-}
-
 pub trait StreamingChromValues {
     fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, u32, u32, String)>>;
 }

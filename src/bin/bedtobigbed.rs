@@ -5,7 +5,8 @@ use std::io::{BufRead, BufReader};
 use clap::{App, Arg};
 
 use bigwig2::bigwig::{BigBedWrite, WriteGroupsError};
-use bigwig2::bedparser::{self, BedParser};
+use bigwig2::bedlikeparser;
+use bigwig2::bedparser::BedParser;
 
 fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BedToBigBed")
@@ -41,9 +42,16 @@ fn main() -> Result<(), WriteGroupsError> {
         })
         .collect();
 
+    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+
     let infile = File::open(bedpath)?;
     let vals_iter = BedParser::from_file(infile);
-    let chsi = bedparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone(), chrom_map.clone());
+    let options = outb.options.clone();
+
+    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
+        BigBedWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+    };
+    let chsi = bedlikeparser::BedGraphParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
     outb.write_groups(chrom_map, chsi)?;
 
     Ok(())

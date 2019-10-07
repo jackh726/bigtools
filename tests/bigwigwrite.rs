@@ -8,7 +8,8 @@ fn test() -> io::Result<()> {
 
     use tempfile;
 
-    use bigwig2::bedgraphparser::{self, BedGraphParser};
+    use bigwig2::bedlikeparser;
+    use bigwig2::bedgraphparser::BedGraphParser;
     use bigwig2::chromvalues::{ChromGroups, ChromValues};
     use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 
@@ -25,14 +26,22 @@ fn test() -> io::Result<()> {
         group.next()?.unwrap()
     };
 
+    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+
     let infile = File::open(single_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
     let vals_iter = BedGraphParser::from_file(infile);
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 
+    let options = outb.options.clone();
+
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
-    let chsi = bedgraphparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone(), chrom_map.clone());
+
+    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
+        BigWigWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+    };
+    let chsi = bedlikeparser::BedGraphParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
     outb.write_groups(chrom_map, chsi).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap(); 
@@ -59,7 +68,7 @@ fn test_multi() -> io::Result<()> {
 
     use tempfile;
 
-    use bigwig2::bedgraphparser::{self, BedGraphParser};
+    use bigwig2::bedgraphparser::BedGraphParser;
     use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -68,10 +77,18 @@ fn test_multi() -> io::Result<()> {
     let mut multi_chrom_bedgraph = dir.clone();
     multi_chrom_bedgraph.push("multi_chrom.bedGraph");
 
+    use std::io::{self, BufReader};
+    use bigwig2::bedlikeparser;
+    use bigwig2::bigwig::ChromGroupRead;
+    use bigwig2::bedgraphparser::{BedGraphStream, ChromGroup};
+    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+
     let infile = File::open(multi_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
     let vals_iter = BedGraphParser::from_file(infile);
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
+
+    let options = outb.options.clone();
 
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr1".to_string(), 248956422);
@@ -80,7 +97,10 @@ fn test_multi() -> io::Result<()> {
     chrom_map.insert("chr4".to_string(), 190214555);
     chrom_map.insert("chr5".to_string(), 181538259);
     chrom_map.insert("chr6".to_string(), 170805979);
-    let chsi = bedgraphparser::get_chromgroupstreamingiterator(vals_iter, outb.options.clone(), chrom_map.clone());
+    let parse_fn = move |chrom: String, chrom_id: u32, chrom_length: u32, group: ChromGroup<BedGraphStream<BufReader<File>>>| -> io::Result<ChromGroupRead> {
+        BigWigWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+    };
+    let chsi = bedlikeparser::BedGraphParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
     outb.write_groups(chrom_map, chsi).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap(); 
