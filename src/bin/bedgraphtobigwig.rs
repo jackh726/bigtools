@@ -24,11 +24,25 @@ fn main() -> Result<(), WriteGroupsError> {
                 .index(3)
                 .required(true)
             )
+        .arg(Arg::with_name("nthreads")
+                .short("t")
+                .help("Set the number of threads to use")
+                .takes_value(true)
+                .default_value("6"))
         .get_matches();
 
     let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
     let chrom_map = matches.value_of("chromsizes").unwrap().to_owned();
     let bigwigpath = matches.value_of("output").unwrap().to_owned();
+    let nthreads = {
+        let nthreads = matches.value_of("nthreads").unwrap();
+        let parsed = nthreads.parse();
+        if parsed.is_err() {
+            eprintln!("Invalid argument for `nthreads`: must be a positive number");
+            return Ok(());
+        }
+        parsed.unwrap()
+    };
 
     let outb = BigWigWrite::create_file(bigwigpath);
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
@@ -41,7 +55,7 @@ fn main() -> Result<(), WriteGroupsError> {
         })
         .collect();
 
-    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(nthreads).create().expect("Unable to create thread pool.");
 
     let infile = File::open(bedgraphpath.clone())?;
     let vals_iter = BedParser::from_bedgraph_file(infile);

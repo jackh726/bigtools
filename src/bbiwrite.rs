@@ -5,9 +5,6 @@ use std::pin::Pin;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
-
 use futures::try_join;
 use futures::channel::mpsc::{channel, Receiver};
 use futures::executor::{ThreadPool};
@@ -184,6 +181,8 @@ pub(crate) fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::col
 }
 
 pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> io::Result<SectionData> {
+    use libdeflater::{Compressor, CompressionLvl};
+
     let mut bytes: Vec<u8> = vec![];
 
     let start = items_in_section[0].start;
@@ -202,9 +201,12 @@ pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<Zo
     }
 
     let out_bytes = if compress {
-        let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
-        e.write_all(&bytes)?;
-        e.finish()?
+        let mut compressor = Compressor::new(CompressionLvl::default());
+        let max_sz = compressor.zlib_compress_bound(bytes.len());
+        let mut compressed_data = vec![0; max_sz];
+        let actual_sz = compressor.zlib_compress(&bytes, &mut compressed_data).unwrap();
+        compressed_data.resize(actual_sz, 0);
+        compressed_data
     } else {
         bytes
     };

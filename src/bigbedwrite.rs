@@ -451,8 +451,7 @@ impl BigBedWrite {
 }
 
 async fn encode_section(compress: bool, items_in_section: Vec<BedEntry>, chrom_id: u32) -> io::Result<SectionData> {
-    use flate2::Compression;
-    use flate2::write::ZlibEncoder;
+    use libdeflater::{Compressor, CompressionLvl};
 
     let mut bytes: Vec<u8> = vec![];
 
@@ -468,9 +467,12 @@ async fn encode_section(compress: bool, items_in_section: Vec<BedEntry>, chrom_i
     }
 
     let out_bytes = if compress {
-        let mut e = ZlibEncoder::new(Vec::with_capacity(bytes.len()), Compression::default());
-        e.write_all(&bytes)?;
-        e.finish()?
+        let mut compressor = Compressor::new(CompressionLvl::default());
+        let max_sz = compressor.zlib_compress_bound(bytes.len());
+        let mut compressed_data = vec![0; max_sz];
+        let actual_sz = compressor.zlib_compress(&bytes, &mut compressed_data).unwrap();
+        compressed_data.resize(actual_sz, 0);
+        compressed_data
     } else {
         bytes
     };

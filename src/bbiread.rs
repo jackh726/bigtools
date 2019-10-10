@@ -4,7 +4,6 @@ use std::marker::PhantomData;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
-use flate2::read::ZlibDecoder;
 
 use crate::seekableread::SeekableRead;
 use crate::bigwig::{BBIFile, ZoomHeader, Summary, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
@@ -342,6 +341,8 @@ pub fn get_filetype(path: &str) -> io::Result<Option<BBIFile>> {
 
 /// Gets the data (uncompressed, if applicable) from a given block
 pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, block: &Block, known_offset: u64) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
+    use libdeflater::Decompressor;
+
     let (endianness, uncompress_buf_size) = {
         let info = bbifile.get_info();
         (info.header.endianness, info.header.uncompress_buf_size as usize)
@@ -356,10 +357,10 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, bl
     let mut raw_data = vec![0u8; block.size as usize];
     file.read_exact(&mut raw_data)?;
     let block_data: Vec<u8> = if uncompress_buf_size > 0 {
-        let mut uncompressed_block_data = vec![0u8; uncompress_buf_size];
-        let mut d = ZlibDecoder::new(&raw_data[..]);
-        let _ = d.read(&mut uncompressed_block_data)?;
-        uncompressed_block_data
+        let mut decompressor = Decompressor::new();
+        let mut outbuf = vec![0; uncompress_buf_size];
+        decompressor.zlib_decompress(&raw_data, &mut outbuf).unwrap();
+        outbuf
     } else {
         raw_data
     };

@@ -8,7 +8,6 @@ edition = "2018"
 byteorder = "1.3.1"
 byteordered = "0.4.0"
 crossbeam = "0.7.0"
-flate2 = { version = "1.0" }
 tempfile = "3"
 futures-preview = { version = "0.3.0-alpha.18", features = ["nightly", "async-await"] }
 rand = "0.6.5"
@@ -18,6 +17,7 @@ clap = "2"
 itertools = "0.8.0"
 bincode = "1"
 reqwest = { version = "0.9.20", optional = true }
+libdeflater = "0.2.0"
 
 
 [profile.release]
