@@ -29,6 +29,14 @@ fn main() -> Result<(), WriteGroupsError> {
                 .help("Set the number of threads to use")
                 .takes_value(true)
                 .default_value("6"))
+        .arg(Arg::with_name("nzooms")
+                .short("z")
+                .help("Set the maximum of zooms to create")
+                .takes_value(true)
+                .default_value("10"))
+        .arg(Arg::with_name("uncompressed")
+                .short("u")
+                .help("Don't use compression"))
         .get_matches();
 
     let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
@@ -43,8 +51,22 @@ fn main() -> Result<(), WriteGroupsError> {
         }
         parsed.unwrap()
     };
+    let nzooms = {
+        let nzooms = matches.value_of("nzooms").unwrap();
+        let parsed = nzooms.parse();
+        if parsed.is_err() {
+            eprintln!("Invalid argument for `nzooms`: must be a positive number");
+            return Ok(());
+        }
+        parsed.unwrap()
+    };
+    let uncompressed = {
+        matches.is_present("uncompressed")
+    };
 
-    let outb = BigWigWrite::create_file(bigwigpath);
+    let mut outb = BigWigWrite::create_file(bigwigpath);
+    outb.options.max_zooms = nzooms;
+    outb.options.compress = !uncompressed;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l { Ok(s) => !s.is_empty(), _ => true })

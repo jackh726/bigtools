@@ -47,6 +47,7 @@ impl BigBedWrite {
                 items_per_slot: 1024,
                 block_size: 256,
                 zoom_sizes: DEFAULT_ZOOM_SIZES.to_vec(),
+                max_zooms: 10,
             }
         }
     }

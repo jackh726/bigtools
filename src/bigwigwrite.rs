@@ -46,6 +46,7 @@ impl BigWigWrite {
                 items_per_slot: 1024,
                 block_size: 256,
                 zoom_sizes: DEFAULT_ZOOM_SIZES.to_vec(),
+                max_zooms: 10,
             }
         }
     }
@@ -153,7 +154,7 @@ impl BigWigWrite {
         chrom_length: u32,
         ) -> Result<Summary, WriteGroupsError> 
         where I: ChromValues<Value> + Send {
-        let num_zooms = options.zoom_sizes.len();
+        let num_zooms = if options.max_zooms > 0 { options.zoom_sizes.len() } else { 0 };
         struct ZoomItem {
             live_info: Option<ZoomRecord>,
             records: Vec<ZoomRecord>,
