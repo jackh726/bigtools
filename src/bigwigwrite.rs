@@ -25,7 +25,6 @@ use crate::bbiwrite::{
     write_zooms,
     ChromGroupRead,
     ChromGroupReadStreamingIterator,
-    DEFAULT_ZOOM_SIZES,
     WriteGroupsError,
     write_vals,
     get_chromprocessing,
@@ -41,13 +40,7 @@ impl BigWigWrite {
     pub fn create_file(path: String) -> Self {
         BigWigWrite {
             path,
-            options: BBIWriteOptions {
-                compress: true,
-                items_per_slot: 1024,
-                block_size: 256,
-                zoom_sizes: DEFAULT_ZOOM_SIZES.to_vec(),
-                max_zooms: 10,
-            }
+            options: BBIWriteOptions::default(),
         }
     }
 
@@ -154,8 +147,8 @@ impl BigWigWrite {
         chrom_length: u32,
         ) -> Result<Summary, WriteGroupsError> 
         where I: ChromValues<Value> + Send {
-        let num_zooms = if options.max_zooms > 0 { options.zoom_sizes.len() } else { 0 };
         struct ZoomItem {
+            size: u32,
             live_info: Option<ZoomRecord>,
             records: Vec<ZoomRecord>,
         }
@@ -168,7 +161,8 @@ impl BigWigWrite {
 
         let mut state_val = BedGraphSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
-            zoom_items: (0..num_zooms).map(|_| ZoomItem {
+            zoom_items: std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4)).take(options.max_zooms as usize).map(|size| ZoomItem {
+                size,
                 live_info: None,
                 records: Vec::with_capacity(options.items_per_slot as usize)
             }).collect(),
@@ -258,7 +252,7 @@ impl BigWigWrite {
                         }
                     });
                     // The end of zoom record
-                    let next_end = zoom2.start + (&options.zoom_sizes)[i];
+                    let next_end = zoom2.start + zoom_item.size;
                     // End of bases that we could add
                     let add_end = std::cmp::min(next_end, current_val.end);
                     // If the last zoom ends before this value starts, we don't add anything

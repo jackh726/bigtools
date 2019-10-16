@@ -156,6 +156,7 @@ impl BigWigRead<ReopenableFile, File> {
 
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let summary_offset = self.info.header.total_summary_offset;
+        let data_offset = self.info.header.full_data_offset;
         let reader = self.ensure_reader()?;
         reader.seek(SeekFrom::Start(summary_offset))?;
         let bases_covered = reader.read_u64()?;
@@ -163,8 +164,10 @@ impl BigWigRead<ReopenableFile, File> {
         let max_val = reader.read_f64()?;
         let sum = reader.read_f64()?;
         let sum_squares = reader.read_f64()?;
+        reader.seek(SeekFrom::Start(data_offset))?;
+        let total_items = reader.read_u64()?;
         Ok(Summary {
-            total_items: 0, // FIXME
+            total_items,
             bases_covered,
             min_val,
             max_val,

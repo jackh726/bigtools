@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crossbeam::channel::{bounded, Sender as ChannelSender, Receiver as ChannelReceiver};
@@ -13,6 +13,37 @@ use serde::Serialize;
 
 use crate::tell::Tell;
 
+// TODO: check if crossbeam::channel need or if std::sync::mpsc okay
+// TODO: validate maxsize = 0
+// TODO: add an AtomicBoolean to indicate is_in_memory, to allow Receiver to not need to lock state (and update description)
+
+// A general description of howw a filebufferedchannel works
+//
+// The underlying implementation uses crossbeam::channel::bounded channel pairs to coordinate inter-struct passing of elements. On initial
+// creation of the filebufferedchannel pair, a pair of crossbeam::channel::bounded pairs are created, which allows elements to be sent
+// via the `crossbeam_channel::Sender`.
+//
+// There are two states to how a channel sender/receiver pair can be in: in memory or disk buffered. In short, the in memory representation
+// of this channel is a simple proxy to an inner `crossbeam_channel::bounded` pair, while the disk buffered representation uses an
+// `crossbeam_channel::bounded` pair to double-buffer elements.
+//
+// In the in memory state, the two halves of the channel delegate sending elements to the inner initial crossbeam channel. When the maximum
+// capacity of the inner chanel is reached, then the channel must be switched to buffering in a temporary file. During the `send` method
+// call when no elements can be added to the inner channel, a new channel and a temporary file is created. The current
+//`crossbeam_channel::Sender` in `Sender` is replaced with the newly created `crossbeam_channel::Sender` and the old
+// `crossbeam_channel::Sender`and newly crated `crossbeam_channel::Receiver` are stored in a `ChannelState`, which is
+// stored behind an `Arc<Mutex<ChannelState>>` for both `Sender` and `Receiver`. Also stored in this ChannelState is the temporary file
+// itself, as well as information regarding the last read and write position of that temporary file. At this point the state is whiched to
+// file buffered, and the element currently being sent is send on the new, empty `crossbeam_channel::Sender` in `Sender`. During this state,
+// the `Receiver` can simply check if there are new elements. For now, if there are no new elements state is locked and polled for possible
+// new elements.
+//
+// In the file buffered state, the two halves of the channel form a double buffer for elements. When the `Sender` side of the channel fills,
+// then the `Arc<Mutex<ChannelState>>` is locked, and elements are written to disk. When the `Receiver` side of the channel is empty, then
+// the `Arc<Mutex<ChannelState>>` is locked and any elements are read from disk (up to `maxsize`), and then `Receiver` receives the next
+// element. Importantly, the lock to the inner `ChannelState` is only locked if the `Sender` fills or the `Receiver` is empty.
+
+/// Creates a filebufferedchannel sender/receiver pair.
 pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>) where T: Serialize + DeserializeOwned {
     let state = Arc::new(Mutex::new(ChannelState::new(size)));
     let (channelsender, channelreceiver) = bounded(size);
@@ -38,7 +69,6 @@ enum ChannelStateStatus<T> {
     InMemory,
     OnDisk {
         serialize_size: Option<u64>,
-        buffered: Option<T>,
         sender: ChannelSender<T>,
         buffer: ChannelReceiver<T>,
         file: File,
@@ -62,14 +92,26 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
         }
     }
 
-    fn clearqueue(&mut self, sender: &mut ChannelSender<T>) -> io::Result<()> {
+    /// This will free *some* elements from `Sender`'s `ChannelSender`, either by writing them to the disk (if state is `OnDisk`),
+    /// or by converting the `filebufferedchannel` from `InMemory` to `OnDisk` and, in the process, allocating a new buffer channel
+    /// 
+    /// It's not guaranteed that `Sender`'s `ChannelSender` will be empty when this function returns (since new elements may be added)
+    fn clearqueue(&mut self, sender: &mut ChannelSender<T>) -> ChannelResult<()> {
+        // Since we already have the lock, let's push until the `Receiver`'s buffer is full
+        match self.read() {
+            Ok(_) => {},
+            Err(ChannelError::InMemory) => {},
+            Err(ChannelError::Disconnected) => return Err(ChannelError::Disconnected),
+            Err(ChannelError::IOError(e)) => return Err(ChannelError::IOError(e)),
+            Err(ChannelError::Empty) => {},
+        }
+
         match &mut self.status {
             ChannelStateStatus::InMemory => {
                 let (channelsender, channelreceiver) = bounded(self.maxsize);
                 let sender = std::mem::replace(sender, channelsender);
                 self.status = ChannelStateStatus::OnDisk {
                     serialize_size: None,
-                    buffered: None,
                     sender,
                     buffer: channelreceiver,
                     file: tempfile::tempfile()?,
@@ -79,70 +121,87 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                 Ok(())
             },
             ChannelStateStatus::OnDisk { buffer, file, writeindex, serialize_size, .. } => {
-                file.seek(SeekFrom::Start(*writeindex))?;
-                for item in buffer.try_iter() {
+                // Decide up front the number of items to serialize and write to disk
+                // This allows us to preallocate a vector to store the bytes, since we don't/can't write buffer the file
+                let n = buffer.len();
+                if n == 0 {
+                    return Ok(());
+                }
+                let mut bytes = match &serialize_size {
+                    Some(size) => Cursor::new(vec![0u8; (*size as usize) * n]),
+                    None => Cursor::new(vec![]),
+                };
+                for item in buffer.try_iter().take(n) {
                     if serialize_size.is_none() {
                         serialize_size.replace(bincode::serialized_size(&item).unwrap());
                     }
-                    file.write_all(&bincode::serialize(&item).unwrap())?;
+                    bincode::serialize_into(&mut bytes, &item).unwrap();
                 }
+                file.seek(SeekFrom::Start(*writeindex))?;
+                bytes.seek(SeekFrom::Start(0))?;
+                io::copy(&mut bytes, file)?;
                 *writeindex = file.tell()?;
-                debug_assert!(buffer.is_empty());
                 Ok(())
             }
         }
     }
 
+    /// Result::Ok indicates that at least one element was read and sent to `Receiver` or that `Receiver` was full
     fn read(&mut self) -> ChannelResult<()> {
+        match &self.status {
+            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::OnDisk { sender, .. } => {
+                if sender.capacity().unwrap() - sender.len() == 0 {
+                    return Ok(());
+                }
+            }
+        }
         match &mut self.status {
             ChannelStateStatus::InMemory => Err(ChannelError::InMemory),
-            ChannelStateStatus::OnDisk { file, readindex, writeindex, buffer, sender, buffered, serialize_size } => {
-                let bufferedelem = buffered.take();
+            ChannelStateStatus::OnDisk { file, readindex, writeindex, buffer, sender, serialize_size } => {
+                // At this point there are two places elements can be:
+                // 1) On disk
+                // 2) In `buffer`, which has elements that were received from `Sender`, but haven't been buffered to disk yet.
+                // We read each place in order until `buffer` is full or we run out of elements
+
                 let mut sent = false;
-                if let Some(elem) = bufferedelem {
-                    if let Err(e) = sender.try_send(elem) {
-                        use crossbeam::channel::TrySendError::*;
-                        match e {
-                            Disconnected(_) => return Err(ChannelError::Disconnected),
-                            Full(t) => {
-                                buffered.replace(t);
-                                return Ok(())
-                            },
-                        }
-                        
-                    }
-                    sent = true;
-                }
-                if readindex < writeindex {
+
+                if *readindex < *writeindex {
+                    // We need to seek to the read position
                     file.seek(SeekFrom::Start(*readindex))?;
-                }
-                while readindex < writeindex {
+
                     let size = serialize_size.unwrap() as usize;
-                    let buf = &mut vec![0u8; size];
-                    file.read_exact(buf)?;
-                    *readindex += size as u64;
-                    let elem =  bincode::deserialize(buf).expect("Error while deserializing.");
-                    if let Err(e) = sender.try_send(elem) {
-                        use crossbeam::channel::TrySendError::*;
-                        match e {
-                            Disconnected(_) => return Err(ChannelError::Disconnected),
-                            Full(t) => {
-                                buffered.replace(t);
-                                return Ok(())
-                            },
+                    let diskn = (*writeindex - *readindex) as usize / size;
+                    let n = std::cmp::min(diskn, sender.capacity().unwrap() - sender.len());
+                    let mut buf = vec![0u8; n * size];
+                    file.read_exact(&mut buf)?;
+                    *readindex = file.tell()?;
+                    let mut buf = Cursor::new(buf);
+                    for _ in 0..n {
+                        let elem =  bincode::deserialize_from(&mut buf).expect("Error while deserializing.");
+                        if let Err(e) = sender.try_send(elem) {
+                            use crossbeam::channel::TrySendError::*;
+                            match e {
+                                Disconnected(_) => return Err(ChannelError::Disconnected),
+                                Full(_) => {
+                                    // We pre-checked for the capacity-len
+                                    panic!("Buffer should not be full.");
+                                },
+                            }
+                            
                         }
-                        
+                        sent = true;
                     }
-                    sent = true;
                 }
-                for elem in buffer.try_iter() {
+                let n = sender.capacity().unwrap() - sender.len();
+                for elem in buffer.try_iter().take(n) {
                     if let Err(e) = sender.try_send(elem) {
                         use crossbeam::channel::TrySendError::*;
                         match e {
                             Disconnected(_) => return Err(ChannelError::Disconnected),
-                            Full(t) => {
-                                buffered.replace(t);
-                                return Ok(())
+                            Full(_) => {
+                                // We only take max number of remaining elements
+                                panic!("Buffer should not be full.");
                             },
                         }
                     }
@@ -158,6 +217,14 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
     }
 
     fn read_wait(&mut self) -> ChannelResult<()> {
+        match &self.status {
+            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::OnDisk { sender, .. } => {
+                if sender.capacity().unwrap() - sender.len() == 0 {
+                    return Ok(());
+                }
+            }
+        }
         match self.read() {
             Ok(_) => Ok(()),
             Err(ChannelError::InMemory) => Err(ChannelError::InMemory),
@@ -166,8 +233,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
             Err(ChannelError::Empty) => {
                 match &mut self.status {
                     ChannelStateStatus::InMemory => unreachable!(),
-                    ChannelStateStatus::OnDisk { buffer, sender, buffered, .. } => {
-                        debug_assert!(buffered.is_none());
+                    ChannelStateStatus::OnDisk { buffer, sender, .. } => {
                         use crossbeam::channel::RecvError;
                         match buffer.recv() {
                             Ok(elem) => {
@@ -175,9 +241,8 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                                     use crossbeam::channel::TrySendError::*;
                                     match e {
                                         Disconnected(_) => return Err(ChannelError::Disconnected),
-                                        Full(t) => {
-                                            buffered.replace(t);
-                                            return Ok(())
+                                        Full(_) => {
+                                            panic!("Buffer should not be full.");
                                         },
                                     }
                                 }
@@ -202,17 +267,35 @@ pub struct Receiver<T> where T: Serialize + DeserializeOwned {
     receiver: ChannelReceiver<T>,
 }
 
+#[derive(Debug)]
+pub enum SendError {
+    Disconnected,
+    IOError(io::Error),
+}
+
+impl From<ChannelError> for SendError {
+    fn from(error: ChannelError) -> Self {
+        match error {
+            ChannelError::InMemory => unreachable!(),
+            ChannelError::Disconnected => SendError::Disconnected,
+            ChannelError::IOError(e) => SendError::IOError(e),
+            ChannelError::Empty => unreachable!(), 
+        }
+    }
+}
+
 impl<T> Sender<T> where T: Serialize + DeserializeOwned {
-    pub fn send(&mut self, t: T) -> io::Result<()> {
+    pub fn send(&mut self, t: T) -> Result<(), SendError> {
         if let Err(e) = self.sender.try_send(t) {
             use crossbeam::channel::TrySendError::*;
             match e {
                 Full(t) => {
                     let mut state = self.state.lock();
                     state.clearqueue(&mut self.sender)?;
+                    drop(state);
                     self.sender.try_send(t).unwrap();
                 },
-                Disconnected(_) => panic!("Disconnected."),
+                Disconnected(_) => return Err(SendError::Disconnected),
             }
         }
         Ok(())
@@ -246,10 +329,12 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
-                        match state.read_wait() {
+                        let read_wait = state.read_wait();
+                        //dbg!();
+                        drop(state);
+                        match read_wait {
                             Ok(_) => Ok(self.receiver.try_recv().expect("Internal error. read_wait() should only return Ok if items were sent to the receiver.")),
                             Err(ChannelError::InMemory) => {
-                                drop(state);
                                 match self.receiver.recv() {
                                     Ok(elem) => Ok(elem),
                                     Err(crossbeam::channel::RecvError) => Err(RecvError::Disconnected),
@@ -278,7 +363,9 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
-                        match state.read() {
+                        let read = state.read();
+                        drop(state);
+                        match read {
                             Ok(_) => Ok(self.receiver.try_recv().expect("Internal error. read() should only return Ok if items were sent to the receiver.")),
                             Err(ChannelError::InMemory) => Err(TryRecvError::Empty),
                             Err(ChannelError::Empty) => Err(TryRecvError::Empty),
@@ -351,7 +438,7 @@ mod tests {
     extern crate test;
 
     #[test]
-    fn test_works() -> io::Result<()> {
+    fn test_works() -> Result<(), SendError> {
         let (mut sender, mut receiver) = channel(50);
         for i in 0..175 {
             sender.send(i)?;
@@ -363,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recv() -> io::Result<()> {
+    fn test_recv() -> Result<(), SendError> {
         let (mut sender, mut receiver) = channel(50);
         for i in 0..175 {
             sender.send(i)?;
@@ -375,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter() -> io::Result<()> {
+    fn test_iter() -> Result<(), SendError> {
         let (mut sender, mut receiver) = channel(50);
         for i in 0..175 {
             sender.send(i)?;
@@ -388,7 +475,27 @@ mod tests {
     }
 
     #[test]
-    fn test_inmemory() -> io::Result<()> {
+    fn test_into_iter() -> Result<(), SendError> {
+        let (mut sender, receiver) = channel(50);
+        let mut receiver_iter = receiver.into_iter();
+        for i in 0..75 {
+            sender.send(i)?;
+        }
+        let mut rcount = 0;
+        for i in 75..175 {
+            sender.send(i)?;
+            assert_eq!(Some(rcount), receiver_iter.next());
+            rcount += 1;
+        }
+        while rcount < 175 {
+            assert_eq!(Some(rcount), receiver_iter.next());
+            rcount += 1;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_inmemory() -> Result<(), SendError> {
         let (mut sender, mut receiver) = channel(50);
         for i in 0..175 {
             sender.send(i)?;
@@ -398,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ondisk() -> io::Result<()> {
+    fn test_ondisk() -> Result<(), SendError> {
         let (mut sender, mut receiver) = channel(50);
         for i in 0..75 {
             sender.send(i)?;
