@@ -133,7 +133,7 @@ pub struct ChromGroupRead {
 }
 
 pub trait ChromGroupReadStreamingIterator {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap<String>>>, WriteGroupsError>;
+    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError>;
 }
 
 pub trait BBIWrite {
@@ -468,7 +468,7 @@ pub(crate) async fn write_vals<V>(
     options: &BBIWriteOptions,
 )
 -> Result<(
-    IdMap<String>,
+    IdMap,
     Summary,
     BufWriter<File>,
     Box<dyn Iterator<Item=Section> + 'static>,

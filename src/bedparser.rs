@@ -22,7 +22,7 @@ pub struct BedParserChromGroupStreamingIterator<V, C: ChromValues<V> + Send, G: 
     chrom_groups: G,
     callable: ChromGroupReadFunction<C>,
     last_chrom: Option<String>,
-    chrom_ids: Option<IdMap<String>>,
+    chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
     _v: std::marker::PhantomData<V>,
     _s: std::marker::PhantomData<C>,
@@ -44,7 +44,7 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> BedParse
 
 
 impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> ChromGroupReadStreamingIterator for BedParserChromGroupStreamingIterator<V, C, G, H> {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
+    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap)>>, WriteGroupsError> {
         match self.chrom_groups.next()? {
             Some((chrom, group)) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
@@ -59,7 +59,7 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> ChromGro
                     Some(length) => *length,
                     None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
-                let chrom_id = chrom_ids.get_id(chrom.clone());
+                let chrom_id = chrom_ids.get_id(&chrom);
                 let group = (self.callable)(chrom, chrom_id, length, group)?;
                 Ok(Some(Either::Left(group)))
             },

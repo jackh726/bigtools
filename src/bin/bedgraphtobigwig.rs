@@ -9,6 +9,7 @@ use bigwig2::bedparser::{self, BedParser};
 
 fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BedGraphToBigWig")
+        .about("Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.")
         .arg(Arg::with_name("bedgraph")
                 .help("the bedgraph to convert to a bigwig")
                 .index(1)
@@ -26,17 +27,17 @@ fn main() -> Result<(), WriteGroupsError> {
             )
         .arg(Arg::with_name("nthreads")
                 .short("t")
-                .help("Set the number of threads to use")
+                .help("Set the number of threads to use. This tool will typically use ~225% CPU on a HDD. SDDs may be higher. (IO bound)")
                 .takes_value(true)
                 .default_value("6"))
         .arg(Arg::with_name("nzooms")
                 .short("z")
-                .help("Set the maximum of zooms to create")
+                .help("Set the maximum of zooms to create.")
                 .takes_value(true)
                 .default_value("10"))
         .arg(Arg::with_name("uncompressed")
                 .short("u")
-                .help("Don't use compression"))
+                .help("Don't use compression."))
         .get_matches();
 
     let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();

@@ -87,7 +87,7 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, m
 }
 
 fn main() -> Result<(), BigWigReadAttachError> {
-        let matches = App::new("BigWigInfo")
+        let matches = App::new("BigWigAverageOverBed")
         .arg(Arg::with_name("bigwig")
                 .help("The input bigwig file")
                 .index(1)

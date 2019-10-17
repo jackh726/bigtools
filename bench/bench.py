@@ -6,6 +6,8 @@ import subprocess
 import sys
 import urllib.request
 
+from monitorps import monitor
+
 timeregex = re.compile(r'(\d.*)user (\d.*)system (\d.*)elapsed')
 
 def download_test_data():
@@ -58,34 +60,42 @@ def start_running(command):
     os.write(time_write_pipe, struct.pack('f', usage.ru_utime))
     sys.exit(0)
 
-def time(exeargs_all):
+def time(exeargs_all, bench, program):
     total_seconds = 0
-    for exeargs in exeargs_all:
+    for i, exeargs in enumerate(exeargs_all):
         exeargs.insert(0, 'time')
         exeargs = " ".join(exeargs)
         print(exeargs)
-        process = subprocess.Popen(exeargs, stderr=subprocess.PIPE, stdout=subprocess.PIPE, shell=True)
-        out, err = process.communicate()
-        err = err.decode('utf-8')
-        m = timeregex.search(err)
-        elapsed_split = m.group(3).split(':')
-        # Seconds
-        total_seconds += float(elapsed_split.pop())
-        if len(elapsed_split) > 0:
-            # Minutes
-            total_seconds += int(elapsed_split.pop()) * 60
-        if len(elapsed_split) > 0:
-            # Hours
-            total_seconds += int(elapsed_split.pop()) * 60 * 60
+        if len(exeargs_all) > 1:
+            logfile = './workdir/{}_{}_{}.log'.format(bench, program, i)
+        else:
+            logfile = './workdir/{}_{}.log'.format(bench, program)
+        with subprocess.Popen(exeargs, stderr=subprocess.PIPE, stdout=subprocess.PIPE, shell=True) as process:
+            monitor(process.pid, logfile, 0.1)
+            out, err = process.communicate()
+            err = err.decode('utf-8')
+            m = timeregex.search(err)
+            elapsed_split = m.group(3).split(':')
+            # Seconds
+            total_seconds += float(elapsed_split.pop())
+            if len(elapsed_split) > 0:
+                # Minutes
+                total_seconds += int(elapsed_split.pop()) * 60
+            if len(elapsed_split) > 0:
+                # Hours
+                total_seconds += int(elapsed_split.pop()) * 60 * 60
 
     return total_seconds
 
-def compare(bench, ucsc, bigwig2):
+def compare(bench, ucsc, bigwig2, bigwig2st=None):
     print('Benchmarking {}'.format(bench))
-    ucsctime = time(ucsc)
+    ucsctime = time(ucsc, bench, 'ucsc')
     print("ucsc: {}".format(round(ucsctime,3)))
-    bigwig2time = time(bigwig2)
+    bigwig2time = time(bigwig2, bench, 'bigwig')
     print("bigwig2: {}".format(round(bigwig2time,3)))
+    if bigwig2st is not None:
+        bigwig2sttime = time(bigwig2st, bench, 'bigwigst')
+        print("bigwig2 (st): {}".format(round(bigwig2sttime,3)))
 
 def bigwigaverageoverbed():
     # For ucsc, we have to convert narrowPeak to bed first, including adding a unique name
@@ -98,8 +108,15 @@ def bigwigaverageoverbed():
 
 def bigwigmerge():
     ucsc = [['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph']]
+    bigwig2 = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bedGraph', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
+    compare('bigwigmerge_bedgraph', ucsc, bigwig2)
+    ucsc = [
+        ['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph'],
+        ['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/test_out_ucsc.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']
+        ]
     bigwig2 = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
-    compare('bigwigmerge', ucsc, bigwig2)
+    bigwig2st = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '-t 1']]
+    compare('bigwigmerge_bigwig', ucsc, bigwig2, bigwig2st)
 
 def bedgraphtobigwig():
     # Need to generate bedGraph first, just use ucsc since it's what we're comparing against
@@ -109,15 +126,18 @@ def bedgraphtobigwig():
         process = subprocess.check_call('{}/bigWigToBedGraph ./workdir/ENCFF841DHZ.bigWig ./workdir/ENCFF841DHZ.bedGraph'.format(ucsctoolspath), shell=True)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
     bigwig2 = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig']]
-    compare('bedgraphtobigwig', ucsc, bigwig2)
+    bigwig2st = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig', '-t 1']]
+    compare('bedgraphtobigwig_small', ucsc, bigwig2, bigwig2st)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
     bigwig2 = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig']]
-    compare('bedgraphtobigwig', ucsc, bigwig2)
+    bigwig2st = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig', '-t 1']]
+    compare('bedgraphtobigwig_medium', ucsc, bigwig2, bigwig2st)
 
 def bigwigtobedgraph():
     ucsc = [['{}/bigWigToBedGraph'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_ucsc.bedGraph']]
     bigwig2 = [['{}/bigwigtobedgraph'.format(bigwig2path), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigwig2.bedGraph']]
-    compare('bigwigtobedgraph', ucsc, bigwig2)
+    bigwig2st = [['{}/bigwigtobedgraph'.format(bigwig2path), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigwig2.bedGraph', '-t 1']]
+    compare('bigwigtobedgraph', ucsc, bigwig2, bigwig2st)
 
 
 def main():
@@ -129,6 +149,7 @@ def main():
     bigwigaverageoverbed()
     bigwigmerge()
     bedgraphtobigwig()
+    # TODO: bedtobigbed
     bigwigtobedgraph()
 
 if __name__ == '__main__':

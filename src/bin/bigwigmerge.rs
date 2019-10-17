@@ -17,8 +17,21 @@ use bigwig2::idmap::IdMap;
 use bigwig2::seekableread::ReopenableFile;
 use bigwig2::utils::merge_sections_many;
 
+pub struct MergingValues {
+    iter: std::iter::Peekable<Box<dyn Iterator<Item=Value> + Send>>,
+}
 
-pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options: BBIWriteOptions) -> io::Result<(impl ChromGroupReadStreamingIterator + std::marker::Send, HashMap<String, u32>)> {
+impl ChromValues<Value> for MergingValues {
+    fn next(&mut self) -> io::Result<Option<Value>> {
+        Ok(self.iter.next())
+    }
+
+    fn peek(&mut self) -> Option<&Value> {
+        self.iter.peek()
+    }
+}
+
+pub fn get_merged_vals(bigwigs: Vec<BigWigRead<ReopenableFile, File>>) -> io::Result<(impl Iterator<Item=io::Result<(String, u32, MergingValues)>>, HashMap<String, u32>)> {
     // Get sizes for each and check that all files (that have the chrom) agree
     // Check that all chrom sizes match for all files
     let mut chrom_sizes = BTreeMap::new();
@@ -45,39 +58,33 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options
         chrom_map.insert(chrom.clone(), size);
     }
 
-    struct MergingValues<I: Iterator<Item=Value> + Send> {
-        iter: std::iter::Peekable<I>,
-    }
+    let iter = chrom_sizes.clone().into_iter().map(|(chrom, (size, bws))| {
+        let iters: Vec<_> = bws.into_iter().map(|b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
+        let iter: Box<dyn Iterator<Item=Value> + Send> = Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0));
+        let mergingvalues = MergingValues { iter: iter.peekable() };
 
-    impl<I: Iterator<Item=Value> + Send> ChromValues<Value> for MergingValues<I> {
-        fn next(&mut self) -> io::Result<Option<Value>> {
-            Ok(self.iter.next())
-        }
+        Ok((chrom, size, mergingvalues))
+    });
 
-        fn peek(&mut self) -> Option<&Value> {
-            self.iter.peek()
-        }
-    }
+    Ok((iter, chrom_map))
+}
 
-    type IterItem = (String, (u32, Vec<BigWigRead<ReopenableFile, File>>));
-
+pub fn get_merged_values(iter: impl Iterator<Item=io::Result<(String, u32, MergingValues)>> + Send + 'static, options: BBIWriteOptions, nthreads: usize) -> io::Result<impl ChromGroupReadStreamingIterator + std::marker::Send> {
     struct ChromGroupReadStreamingIteratorImpl {
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
-        iter: Box<dyn Iterator<Item=IterItem> + Send>,
-        chrom_ids: Option<IdMap<String>>,
+        iter: Box<dyn Iterator<Item=io::Result<(String, u32, MergingValues)>> + Send>,
+        chrom_ids: Option<IdMap>,
     }
 
     impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap<String>)>>, WriteGroupsError> {
+        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap)>>, WriteGroupsError> {
             let next = self.iter.next();
             match next {
-                Some((chrom, (size, bws))) => {
-                    let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(chrom.clone());
-                    let current_chrom = chrom.clone();
-                    let iters: Vec<_> = bws.into_iter().map(move |b| b.get_interval_move(&chrom, 1, size)).collect::<io::Result<Vec<_>>>()?;
-                    let mergingvalues = MergingValues { iter: merge_sections_many(iters).filter(|x| x.value != 0.0).peekable() };
-                    let group = BigWigWrite::begin_processing_chrom(current_chrom, chrom_id, size, mergingvalues, self.pool.clone(), self.options.clone())?;
+                Some(next) => {
+                    let (chrom, size, mergingvalues) = next?;
+                    let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
+                    let group = BigWigWrite::begin_processing_chrom(chrom, chrom_id, size, mergingvalues, self.pool.clone(), self.options.clone())?;
                     Ok(Some(Either::Left(group)))
                 },
                 None => {
@@ -91,19 +98,19 @@ pub fn get_merged_values(bigwigs: Vec<BigWigRead<ReopenableFile, File>>, options
     }
 
     let group_iter = ChromGroupReadStreamingIteratorImpl {
-        pool: futures::executor::ThreadPoolBuilder::new().pool_size(8).create().expect("Unable to create thread pool."),
+        pool: futures::executor::ThreadPoolBuilder::new().pool_size(nthreads).create().expect("Unable to create thread pool."),
         options,
-        iter: Box::new(chrom_sizes.into_iter()),
+        iter: Box::new(iter),
         chrom_ids: Some(IdMap::default()),
     };
 
-    Ok((group_iter, chrom_map))
+    Ok(group_iter)
 }
 
 fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BigWigMerge")
         .arg(Arg::with_name("output")
-                .help("the path of the merged output bigwig")
+                .help("the path of the merged output bigwig (if .bw or .bigWig) or bedGraph (if .bedGraph)")
                 .index(1)
                 .required(true)
             )
@@ -119,6 +126,11 @@ fn main() -> Result<(), WriteGroupsError> {
                 .multiple(true)
                 .takes_value(true)
             )
+        .arg(Arg::with_name("nthreads")
+                .short("t")
+                .help("Set the number of threads to use")
+                .takes_value(true)
+                .default_value("6"))
         .get_matches();
 
     let output = matches.value_of("output").unwrap().to_owned();
@@ -157,9 +169,47 @@ fn main() -> Result<(), WriteGroupsError> {
         }
     }
 
-    let outb = BigWigWrite::create_file(output);
-    let (all_values, chrom_map) = get_merged_values(bigwigs, outb.options.clone())?;
-    outb.write_groups(chrom_map, all_values)?;
+    let nthreads = {
+        let nthreads = matches.value_of("nthreads").unwrap();
+        let parsed = nthreads.parse();
+        if parsed.is_err() {
+            eprintln!("Invalid argument for `nthreads`: must be a positive number");
+            return Ok(());
+        }
+        parsed.unwrap()
+    };
+
+    let (iter, chrom_map) = get_merged_vals(bigwigs)?;
+
+    match output {
+        output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
+            let outb = BigWigWrite::create_file(output);
+            let all_values = get_merged_values(iter, outb.options.clone(), nthreads)?;
+            outb.write_groups(chrom_map, all_values)?;
+        },
+        output if output.ends_with(".bedGraph") => {
+            // TODO: convert to multi-threaded
+            use std::io::Write;
+
+            let mut chroms: Vec<String> = chrom_map.keys().map(|c| c.to_string()).collect();
+            chroms.sort();
+
+            let bedgraph = File::create(output)?;
+            let mut writer = io::BufWriter::new(bedgraph);
+
+            for v in iter {
+                let (chrom, _, mut values) = v?;
+                while let Some(val) = values.next()? {
+                    writer.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom, val.start, val.end, val.value))?;
+                }
+            }
+        },
+        _ => {
+            eprintln!("Invalid output file. Must end with .bw or .bigWig for bigwig or .bedGraph for bedGraph");
+            return Ok(())
+        }
+    }
+
 
     //TODO: fails with too many open files
     Ok(())
