@@ -1,8 +1,11 @@
 [package]
 name = "bigtools"
 version = "0.1.0"
-authors = ["Jack <jack.huey@umassmed.edu>"]
+authors = ["Jack Huey <jack.huey@umassmed.edu>"]
 edition = "2018"
+license = "MIT"
+description = "A library and associated tools for reading and writing bigwigs and bigbeds"
+keywords = ["bigwig", "bio"]
 
 [dependencies]
 byteorder = "1.3.1"
