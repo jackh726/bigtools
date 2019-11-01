@@ -1,5 +1,5 @@
 [package]
-name = "bigwig2"
+name = "bigtools"
 version = "0.1.0"
 authors = ["Jack <jack.huey@umassmed.edu>"]
 edition = "2018"
@@ -31,7 +31,7 @@ lto = false
 opt-level = 3
 
 [lib]
-name = "bigwig2"
+name = "bigtools"
 path = "src/lib.rs"
 
 [[bin]]
