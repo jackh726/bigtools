@@ -1,7 +1,7 @@
 use clap::{App, Arg};
 
-use bigwig2::bigwig::{BigBedRead, BigBedReadAttachError};
-use bigwig2::remote_file::*;
+use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
+use bigtools::remote_file::*;
 
 fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("Testing")

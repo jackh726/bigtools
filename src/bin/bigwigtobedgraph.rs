@@ -5,9 +5,9 @@ use clap::{App, Arg};
 
 use futures::task::SpawnExt;
 
-use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize};
-use bigwig2::seekableread::{Reopen, SeekableRead};
-use bigwig2::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use bigtools::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize};
+use bigtools::seekableread::{Reopen, SeekableRead};
+use bigtools::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bigwig: BigWigRead<R, S>, mut out_file: File, nthreads: usize) -> std::io::Result<()> {
     /*

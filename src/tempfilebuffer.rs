@@ -56,7 +56,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
     /// ```no_run
     /// # use std::fs::File;
     /// # use std::io;
-    /// # use bigwig2::tempfilebuffer::TempFileBuffer;
+    /// # use bigtools::tempfilebuffer::TempFileBuffer;
     /// let mut file = File::open("foo")?;
     /// let (mut buf, writer) = TempFileBuffer::new()?;
     /// buf.switch(file);

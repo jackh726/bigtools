@@ -4,8 +4,8 @@ use std::io::{BufRead, BufReader};
 
 use clap::{App, Arg};
 
-use bigwig2::bigwig::{BigBedWrite, WriteGroupsError};
-use bigwig2::bedparser::{self, BedParser};
+use bigtools::bigwig::{BigBedWrite, WriteGroupsError};
+use bigtools::bedparser::{self, BedParser};
 
 fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BedToBigBed")

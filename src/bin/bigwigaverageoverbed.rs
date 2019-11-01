@@ -3,9 +3,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 use clap::{App, Arg};
 
-use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
-use bigwig2::seekableread::{Reopen, SeekableRead};
-use bigwig2::streaming_linereader::StreamingLineReader;
+use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigtools::seekableread::{Reopen, SeekableRead};
+use bigtools::streaming_linereader::StreamingLineReader;
 
 struct Options {
     simple: bool,

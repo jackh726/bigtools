@@ -6,16 +6,16 @@ use clap::{App, Arg};
 
 use futures::future::Either;
 
-use bigwig2::bigwig::BBIWriteOptions;
-use bigwig2::bigwig::ChromGroupReadStreamingIterator;
-use bigwig2::chromvalues::ChromValues;
-use bigwig2::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
-use bigwig2::bigwig::Value;
-use bigwig2::bigwig::ChromGroupRead;
+use bigtools::bigwig::BBIWriteOptions;
+use bigtools::bigwig::ChromGroupReadStreamingIterator;
+use bigtools::chromvalues::ChromValues;
+use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
+use bigtools::bigwig::Value;
+use bigtools::bigwig::ChromGroupRead;
 
-use bigwig2::idmap::IdMap;
-use bigwig2::seekableread::ReopenableFile;
-use bigwig2::utils::merge_sections_many;
+use bigtools::idmap::IdMap;
+use bigtools::seekableread::ReopenableFile;
+use bigtools::utils::merge_sections_many;
 
 pub struct MergingValues {
     iter: std::iter::Peekable<Box<dyn Iterator<Item=Value> + Send>>,

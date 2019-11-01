@@ -5,7 +5,7 @@ use std::io::{self};
 fn test_valid_read() -> io::Result<()> {
     use std::path::PathBuf;
 
-    use bigwig2::bigwig::{BBIRead, BigWigRead};
+    use bigtools::bigwig::{BBIRead, BigWigRead};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");

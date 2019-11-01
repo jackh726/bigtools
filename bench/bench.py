@@ -87,15 +87,15 @@ def time(exeargs_all, bench, program):
 
     return total_seconds
 
-def compare(bench, ucsc, bigwig2, bigwig2st=None):
+def compare(bench, ucsc, bigtools, bigtoolsst=None):
     print('Benchmarking {}'.format(bench))
     ucsctime = time(ucsc, bench, 'ucsc')
     print("ucsc: {}".format(round(ucsctime,3)))
-    bigwig2time = time(bigwig2, bench, 'bigwig')
-    print("bigwig2: {}".format(round(bigwig2time,3)))
-    if bigwig2st is not None:
-        bigwig2sttime = time(bigwig2st, bench, 'bigwigst')
-        print("bigwig2 (st): {}".format(round(bigwig2sttime,3)))
+    bigtoolstime = time(bigtools, bench, 'bigwig')
+    print("bigtools: {}".format(round(bigtoolstime,3)))
+    if bigtoolsst is not None:
+        bigtoolssttime = time(bigtoolsst, bench, 'bigwigst')
+        print("bigtools (st): {}".format(round(bigtoolssttime,3)))
 
 def bigwigaverageoverbed():
     # For ucsc, we have to convert narrowPeak to bed first, including adding a unique name
@@ -103,20 +103,20 @@ def bigwigaverageoverbed():
         ['cat ./workdir/ENCFF646AZP.bed | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' > ./workdir/ENCFF646AZP_cut.bed'],
         ['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP_cut.bed', './workdir/test_out_ucsc.bed']
         ]
-    bigwig2 = [['{}/bigwigaverageoverbed'.format(bigwig2path), '-s' , './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP.bed', './workdir/test_out_bigwig2.bed']]
-    compare('bigwigaverageoverbed', ucsc, bigwig2)
+    bigtools = [['{}/bigwigaverageoverbed'.format(bigtoolspath), '-s' , './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP.bed', './workdir/test_out_bigtools.bed']]
+    compare('bigwigaverageoverbed', ucsc, bigtools)
 
 def bigwigmerge():
     ucsc = [['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph']]
-    bigwig2 = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bedGraph', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
-    compare('bigwigmerge_bedgraph', ucsc, bigwig2)
+    bigtools = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bedGraph', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
+    compare('bigwigmerge_bedgraph', ucsc, bigtools)
     ucsc = [
         ['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph'],
         ['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/test_out_ucsc.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']
         ]
-    bigwig2 = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
-    bigwig2st = [['{}/bigwigmerge'.format(bigwig2path), './workdir/test_out_bigwig2.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '-t 1']]
-    compare('bigwigmerge_bigwig', ucsc, bigwig2, bigwig2st)
+    bigtools = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
+    bigtoolsst = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '-t 1']]
+    compare('bigwigmerge_bigwig', ucsc, bigtools, bigtoolsst)
 
 def bedgraphtobigwig():
     # Need to generate bedGraph first, just use ucsc since it's what we're comparing against
@@ -125,26 +125,26 @@ def bedgraphtobigwig():
     if not os.path.exists('./workdir/ENCFF841DHZ.bedGraph'):
         process = subprocess.check_call('{}/bigWigToBedGraph ./workdir/ENCFF841DHZ.bigWig ./workdir/ENCFF841DHZ.bedGraph'.format(ucsctoolspath), shell=True)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
-    bigwig2 = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig']]
-    bigwig2st = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig', '-t 1']]
-    compare('bedgraphtobigwig_small', ucsc, bigwig2, bigwig2st)
+    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig']]
+    bigtoolsst = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
+    compare('bedgraphtobigwig_small', ucsc, bigtools, bigtoolsst)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
-    bigwig2 = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig']]
-    bigwig2st = [['{}/bedgraphtobigwig'.format(bigwig2path), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigwig2.bigWig', '-t 1']]
-    compare('bedgraphtobigwig_medium', ucsc, bigwig2, bigwig2st)
+    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig']]
+    bigtoolsst = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
+    compare('bedgraphtobigwig_medium', ucsc, bigtools, bigtoolsst)
 
 def bigwigtobedgraph():
     ucsc = [['{}/bigWigToBedGraph'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_ucsc.bedGraph']]
-    bigwig2 = [['{}/bigwigtobedgraph'.format(bigwig2path), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigwig2.bedGraph']]
-    bigwig2st = [['{}/bigwigtobedgraph'.format(bigwig2path), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigwig2.bedGraph', '-t 1']]
-    compare('bigwigtobedgraph', ucsc, bigwig2, bigwig2st)
+    bigtools = [['{}/bigwigtobedgraph'.format(bigtoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph']]
+    bigtoolsst = [['{}/bigwigtobedgraph'.format(bigtoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 1']]
+    compare('bigwigtobedgraph', ucsc, bigtools, bigtoolsst)
 
 
 def main():
     global ucsctoolspath
-    global bigwig2path
+    global bigtoolspath
     ucsctoolspath = sys.argv[1]
-    bigwig2path = sys.argv[2]
+    bigtoolspath = sys.argv[2]
     download_test_data()
     bigwigaverageoverbed()
     bigwigmerge()
@@ -155,4 +155,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# To run (example): python3 bench/bench.py ~/temp /mnt/c/Users/jackh/Documents/Git/rust/bigwig2/target/release
+# To run (example): python3 bench/bench.py ~/temp /mnt/c/Users/jackh/Documents/Git/rust/bigtools/target/release

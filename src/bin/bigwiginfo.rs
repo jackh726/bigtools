@@ -1,6 +1,6 @@
 use clap::{App, Arg};
 
-use bigwig2::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
 
 fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigInfo")
