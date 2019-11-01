@@ -1,3 +1,0 @@
-(A) Reimplement bigwigmerge to match ucsc speeds @speed
-Investigate bigwigmerge tradeoff of memory/speed @speed
-(B) Allow outputting bigwigmerge as bedgraph @features
