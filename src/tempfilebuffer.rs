@@ -5,7 +5,7 @@ use std::sync::{Arc};
 
 use parking_lot::{Condvar, Mutex};
 
-use crossbeam::atomic::AtomicCell;
+use crossbeam_utils::atomic::AtomicCell;
 
 // TODO: Change TempFileBuffer to memory buffer if under a certain threshold
 

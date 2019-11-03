@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use crossbeam::channel::{bounded, Sender as ChannelSender, Receiver as ChannelReceiver};
+use crossbeam_channel::{bounded, Sender as ChannelSender, Receiver as ChannelReceiver};
 
 use parking_lot::Mutex;
 
@@ -13,14 +13,14 @@ use serde::Serialize;
 
 use crate::tell::Tell;
 
-// TODO: check if crossbeam::channel need or if std::sync::mpsc okay
+// TODO: check if crossbeam_channel need or if std::sync::mpsc okay
 // TODO: validate maxsize = 0
 // TODO: add an AtomicBoolean to indicate is_in_memory, to allow Receiver to not need to lock state (and update description)
 
 // A general description of howw a filebufferedchannel works
 //
-// The underlying implementation uses crossbeam::channel::bounded channel pairs to coordinate inter-struct passing of elements. On initial
-// creation of the filebufferedchannel pair, a pair of crossbeam::channel::bounded pairs are created, which allows elements to be sent
+// The underlying implementation uses crossbeam_channel::bounded channel pairs to coordinate inter-struct passing of elements. On initial
+// creation of the filebufferedchannel pair, a pair of crossbeam_channel::bounded pairs are created, which allows elements to be sent
 // via the `crossbeam_channel::Sender`.
 //
 // There are two states to how a channel sender/receiver pair can be in: in memory or disk buffered. In short, the in memory representation
@@ -180,7 +180,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                     for _ in 0..n {
                         let elem =  bincode::deserialize_from(&mut buf).expect("Error while deserializing.");
                         if let Err(e) = sender.try_send(elem) {
-                            use crossbeam::channel::TrySendError::*;
+                            use crossbeam_channel::TrySendError::*;
                             match e {
                                 Disconnected(_) => return Err(ChannelError::Disconnected),
                                 Full(_) => {
@@ -196,7 +196,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                 let n = sender.capacity().unwrap() - sender.len();
                 for elem in buffer.try_iter().take(n) {
                     if let Err(e) = sender.try_send(elem) {
-                        use crossbeam::channel::TrySendError::*;
+                        use crossbeam_channel::TrySendError::*;
                         match e {
                             Disconnected(_) => return Err(ChannelError::Disconnected),
                             Full(_) => {
@@ -234,11 +234,11 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                 match &mut self.status {
                     ChannelStateStatus::InMemory => unreachable!(),
                     ChannelStateStatus::OnDisk { buffer, sender, .. } => {
-                        use crossbeam::channel::RecvError;
+                        use crossbeam_channel::RecvError;
                         match buffer.recv() {
                             Ok(elem) => {
                                 if let Err(e) = sender.try_send(elem) {
-                                    use crossbeam::channel::TrySendError::*;
+                                    use crossbeam_channel::TrySendError::*;
                                     match e {
                                         Disconnected(_) => return Err(ChannelError::Disconnected),
                                         Full(_) => {
@@ -287,7 +287,7 @@ impl From<ChannelError> for SendError {
 impl<T> Sender<T> where T: Serialize + DeserializeOwned {
     pub fn send(&mut self, t: T) -> Result<(), SendError> {
         if let Err(e) = self.sender.try_send(t) {
-            use crossbeam::channel::TrySendError::*;
+            use crossbeam_channel::TrySendError::*;
             match e {
                 Full(t) => {
                     let mut state = self.state.lock();
@@ -322,7 +322,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                 Ok(t)
             },
             Err(e) => {
-                use crossbeam::channel::TryRecvError::*;
+                use crossbeam_channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
                     Disconnected => Err(RecvError::Disconnected),
@@ -337,7 +337,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                             Err(ChannelError::InMemory) => {
                                 match self.receiver.recv() {
                                     Ok(elem) => Ok(elem),
-                                    Err(crossbeam::channel::RecvError) => Err(RecvError::Disconnected),
+                                    Err(crossbeam_channel::RecvError) => Err(RecvError::Disconnected),
                                 }
                             },
                             Err(ChannelError::Disconnected) => Err(RecvError::Disconnected),
@@ -356,7 +356,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                 Ok(t)
             },
             Err(e) => {
-                use crossbeam::channel::TryRecvError::*;
+                use crossbeam_channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
                     Disconnected => Err(TryRecvError::Disconnected),

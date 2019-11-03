@@ -4,7 +4,7 @@ use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
-use crossbeam::atomic::AtomicCell;
+use crossbeam_utils::atomic::AtomicCell;
 use futures::future::Either;
 
 use crate::bigwig::{BedEntry, Value};

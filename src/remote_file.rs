@@ -1,5 +1,7 @@
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
+use futures::executor::block_on;
+
 use reqwest;
 
 use crate::seekableread::Reopen;
@@ -64,15 +66,16 @@ impl Seek for RemoteFile {
             }
         };
         let client = reqwest::Client::new();
-        let mut r = client
+        let r = block_on(client
             .get(self.url.clone())
             .header(reqwest::header::RANGE, format!("bytes={}-{}", self.last_seek, self.last_seek + READ_SIZE as u64))
-            .send()
+            .send())
             .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-        let mut buf = vec![0u8; READ_SIZE as usize];
-        let s = r.read(&mut buf).unwrap();
-        buf.truncate(s);
-        self.current = Some(Cursor::new(buf));
+        let bytes = block_on(r.bytes()).map_err(|_| io::Error::from(io::ErrorKind::Other))?.slice(0, READ_SIZE as usize);
+        //let mut buf = vec![0u8; READ_SIZE as usize];
+        //let s = bytes.read(&mut buf).unwrap();
+        //buf.truncate(s);
+        self.current = Some(Cursor::new(bytes.to_vec()));
         Ok(self.last_seek)
     }
 }
