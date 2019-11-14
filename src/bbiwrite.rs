@@ -627,7 +627,7 @@ where
         .map(|(size, zoom)| {
             drop(zoom.2);
             let zoom_iter: Box<dyn Iterator<Item = Section> + 'static> =
-                Box::new(zoom.0.into_iter().flat_map(|s| s));
+                Box::new(zoom.0.into_iter().flatten());
             let closed_file = zoom.1.await_temp_file();
             ZoomInfo {
                 resolution: size,
@@ -637,7 +637,7 @@ where
         })
         .collect();
     let section_iter: Box<dyn Iterator<Item = Section> + 'static> =
-        Box::new(section_iter.into_iter().flat_map(|s| s));
+        Box::new(section_iter.into_iter().flatten());
     Ok((
         chrom_ids,
         summary_complete,

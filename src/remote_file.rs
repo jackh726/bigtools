@@ -53,9 +53,7 @@ impl Seek for RemoteFile {
             SeekFrom::Start(s) => s,
             SeekFrom::End(_) => unimplemented!(),
             SeekFrom::Current(s) => {
-                if s == 0 {
-                    self.last_seek
-                } else if s > 0 {
+                if s >= 0 {
                     self.last_seek + (s as u64)
                 } else {
                     if self.last_seek < s.checked_neg().unwrap() as u64 {
