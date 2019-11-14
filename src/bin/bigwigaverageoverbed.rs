@@ -11,21 +11,32 @@ struct Options {
     simple: bool,
 }
 
-fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, mut bigwigin: BigWigRead<R, S>, bedout: File, options: Options) -> io::Result<()> {
+fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+    bedinpath: String,
+    mut bigwigin: BigWigRead<R, S>,
+    bedout: File,
+    options: Options,
+) -> io::Result<()> {
     let uniquenames = {
         if !options.simple {
             true
         } else {
-            let reader = BufReader::new(File::open(bedinpath.clone())?); 
+            let reader = BufReader::new(File::open(bedinpath.clone())?);
             let mut lines = reader
                 .lines()
                 .take(10)
-                .map(|line| -> io::Result<Option<String>>{
+                .map(|line| -> io::Result<Option<String>> {
                     let l = line?;
                     let mut split = l.splitn(5, '\t');
-                    let _chrom = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _start = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _end = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _chrom = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _start = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _end = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
                     let name = split.next();
                     Ok(match name {
                         None => None,
@@ -50,7 +61,9 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, m
         let end = split.next().expect("Missing end").parse::<u32>().unwrap();
         let name = split.next();
         let rest = split.next();
-        let interval = bigwigin.get_interval(chrom, start, end)?.collect::<Result<Vec<_>, _>>()?;
+        let interval = bigwigin
+            .get_interval(chrom, start, end)?
+            .collect::<Result<Vec<_>, _>>()?;
         let mut bases = 0;
         let mut sum = 0.0;
         for val in interval {
@@ -68,9 +81,14 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, m
         let stats = format!("{}\t{}\t{:.3}\t{:.3}\t{:.3}", size, bases, sum, mean0, mean);
         if options.simple {
             if uniquenames {
-                bedoutwriter.write_fmt(format_args!("{}\t{}\n", name.expect("Bad bed format (no name)."), stats))?;
+                bedoutwriter.write_fmt(format_args!(
+                    "{}\t{}\n",
+                    name.expect("Bad bed format (no name)."),
+                    stats
+                ))?;
             } else {
-                bedoutwriter.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom, start, end, stats))?;
+                bedoutwriter
+                    .write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom, start, end, stats))?;
             }
         } else {
             let last = match name {
@@ -80,14 +98,17 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: String, m
                 },
                 None => String::from(""),
             };
-            bedoutwriter.write_fmt(format_args!("{}\t{}\t{}\t{}\t{}\n", chrom, start, end, last, stats))?;
+            bedoutwriter.write_fmt(format_args!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                chrom, start, end, last, stats
+            ))?;
         }
     }
     Ok(())
 }
 
 fn main() -> Result<(), BigWigReadAttachError> {
-        let matches = App::new("BigWigAverageOverBed")
+    let matches = App::new("BigWigAverageOverBed")
         .arg(Arg::with_name("bigwig")
                 .help("The input bigwig file")
                 .index(1)
@@ -117,9 +138,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
 
     let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
-    let options = Options {
-        simple,
-    };
+    let options = Options { simple };
     write(bedinpath, inbigwig, outbed, options)?;
 
     Ok(())

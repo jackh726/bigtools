@@ -1,13 +1,15 @@
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::fs::File;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
+use crate::bigwig::{
+    BBIFile, Summary, ZoomHeader, ZoomRecord, BIGBED_MAGIC, BIGWIG_MAGIC, CHROM_TREE_MAGIC,
+    CIR_TREE_MAGIC,
+};
 use crate::seekableread::SeekableRead;
-use crate::bigwig::{BBIFile, ZoomHeader, Summary, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC, BIGWIG_MAGIC, BIGBED_MAGIC};
-
 
 #[derive(Debug)]
 pub struct Block {
@@ -81,14 +83,24 @@ pub trait BBIRead<R: SeekableRead> {
     fn get_chroms(&self) -> Vec<ChromAndSize>;
 
     /// This assumes the file is at the cir tree start
-    fn search_cir_tree(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
+    fn search_cir_tree(
+        &mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<Vec<Block>> {
         let chrom_ix = {
             let chrom_info = &self.get_info().chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
             //println!("Chrom: {:?}", chrom);
             match chrom {
                 Some(c) => c.id,
-                None => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} not found.", chrom_name)))
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{} not found.", chrom_name),
+                    ))
+                }
             }
         };
 
@@ -96,7 +108,10 @@ pub trait BBIRead<R: SeekableRead> {
 
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid file format: CIR_TREE_MAGIC does not match."));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Invalid file format: CIR_TREE_MAGIC does not match.",
+            ));
         }
         let _blocksize = file.read_u32()?;
         let _item_count = file.read_u64()?;
@@ -117,7 +132,12 @@ pub trait BBIRead<R: SeekableRead> {
         Ok(blocks)
     }
 
-    fn get_overlapping_blocks(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<Block>> {
+    fn get_overlapping_blocks(
+        &mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<Vec<Block>> {
         let full_index_offset = self.get_info().header.full_index_offset;
 
         let file = self.ensure_reader()?;
@@ -127,7 +147,9 @@ pub trait BBIRead<R: SeekableRead> {
     }
 }
 
-pub(crate) fn read_info<R: SeekableRead>(file: BufReader<R>) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+pub(crate) fn read_info<R: SeekableRead>(
+    file: BufReader<R>,
+) -> Result<BBIFileInfo, BBIFileReadInfoError> {
     let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
     let magic = file.read_u32()?;
@@ -136,17 +158,13 @@ pub(crate) fn read_info<R: SeekableRead>(file: BufReader<R>) -> Result<BBIFileIn
         _ if magic == BIGWIG_MAGIC.to_be() => {
             file = file.into_opposite();
             BBIFile::BigWig
-        },
-        _ if magic == BIGWIG_MAGIC.to_le() => {
-            BBIFile::BigWig
-        },
+        }
+        _ if magic == BIGWIG_MAGIC.to_le() => BBIFile::BigWig,
         _ if magic == BIGBED_MAGIC.to_be() => {
             file = file.into_opposite();
             BBIFile::BigBed
-        },
-        _ if magic == BIGBED_MAGIC.to_le() => {
-            BBIFile::BigBed
-        },
+        }
+        _ if magic == BIGBED_MAGIC.to_le() => BBIFile::BigBed,
         _ => return Err(BBIFileReadInfoError::UnknownMagic),
     };
 
@@ -191,7 +209,7 @@ pub(crate) fn read_info<R: SeekableRead>(file: BufReader<R>) -> Result<BBIFileIn
     if magic != CHROM_TREE_MAGIC {
         return Err(BBIFileReadInfoError::InvalidChroms);
     }
-    assert_eq!(val_size, 8u32); 
+    assert_eq!(val_size, 8u32);
 
     let mut chrom_info = Vec::with_capacity(item_count as usize);
     read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
@@ -206,7 +224,10 @@ pub(crate) fn read_info<R: SeekableRead>(file: BufReader<R>) -> Result<BBIFileIn
     Ok(info)
 }
 
-fn read_zoom_headers<R: SeekableRead>(file: &mut ByteOrdered<BufReader<R>, Endianness>, header: &BBIHeader) -> io::Result<Vec<ZoomHeader>> {
+fn read_zoom_headers<R: SeekableRead>(
+    file: &mut ByteOrdered<BufReader<R>, Endianness>,
+    header: &BBIHeader,
+) -> io::Result<Vec<ZoomHeader>> {
     let mut zoom_headers = vec![];
     for _ in 0..header.zoom_levels {
         let reduction_level = file.read_u32()?;
@@ -226,7 +247,11 @@ fn read_zoom_headers<R: SeekableRead>(file: &mut ByteOrdered<BufReader<R>, Endia
     Ok(zoom_headers)
 }
 
-fn read_chrom_tree_block<R: SeekableRead>(f: &mut ByteOrdered<BufReader<R>, Endianness>, chroms: &mut Vec<ChromInfo>, key_size: u32) -> io::Result<()> {
+fn read_chrom_tree_block<R: SeekableRead>(
+    f: &mut ByteOrdered<BufReader<R>, Endianness>,
+    chroms: &mut Vec<ChromInfo>,
+    key_size: u32,
+) -> io::Result<()> {
     let isleaf = f.read_u8()?;
     let _reserved = f.read_u8()?;
     let count = f.read_u16()?;
@@ -237,7 +262,12 @@ fn read_chrom_tree_block<R: SeekableRead>(f: &mut ByteOrdered<BufReader<R>, Endi
             f.read_exact(&mut key_bytes)?;
             let key_string = match String::from_utf8(key_bytes) {
                 Ok(s) => s.trim_matches(char::from(0)).to_owned(),
-                Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "Invalid file format: Invalid utf-8 string.")),
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Invalid file format: Invalid utf-8 string.",
+                    ))
+                }
             };
             let chrom_id = f.read_u32()?;
             let chrom_size = f.read_u32()?;
@@ -279,11 +309,26 @@ fn compare_position(chrom1: u32, chrom1_base: u32, chrom2: u32, chrom2_base: u32
 }
 
 #[inline]
-fn overlaps(chromq: u32, chromq_start: u32, chromq_end: u32, chromb1: u32, chromb1_start: u32, chromb2: u32, chromb2_end: u32) -> bool {
-    compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0 && compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
+fn overlaps(
+    chromq: u32,
+    chromq_start: u32,
+    chromq_end: u32,
+    chromb1: u32,
+    chromb1_start: u32,
+    chromb2: u32,
+    chromb2_end: u32,
+) -> bool {
+    compare_position(chromq, chromq_start, chromb2, chromb2_end) <= 0
+        && compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
 }
 
-fn search_overlapping_blocks<R: SeekableRead>(mut file: &mut ByteOrdered<BufReader<R>, Endianness>, chrom_ix: u32, start: u32, end: u32, mut blocks: &mut Vec<Block>) -> io::Result<()> {
+fn search_overlapping_blocks<R: SeekableRead>(
+    mut file: &mut ByteOrdered<BufReader<R>, Endianness>,
+    chrom_ix: u32,
+    start: u32,
+    end: u32,
+    mut blocks: &mut Vec<Block>,
+) -> io::Result<()> {
     //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
 
     let isleaf: u8 = file.read_u8()?;
@@ -301,7 +346,15 @@ fn search_overlapping_blocks<R: SeekableRead>(mut file: &mut ByteOrdered<BufRead
         if isleaf == 1 {
             let data_offset = file.read_u64()?;
             let data_size = file.read_u64()?;
-            if !overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
+            if !overlaps(
+                chrom_ix,
+                start,
+                end,
+                start_chrom_ix,
+                start_base,
+                end_chrom_ix,
+                end_base,
+            ) {
                 continue;
             }
             //println!("Overlaps (leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
@@ -311,7 +364,15 @@ fn search_overlapping_blocks<R: SeekableRead>(mut file: &mut ByteOrdered<BufRead
             })
         } else {
             let data_offset = file.read_u64()?;
-            if !overlaps(chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base) {
+            if !overlaps(
+                chrom_ix,
+                start,
+                end,
+                start_chrom_ix,
+                start_base,
+                end_chrom_ix,
+                end_base,
+            ) {
                 continue;
             }
             //println!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
@@ -340,12 +401,19 @@ pub fn get_filetype(path: &str) -> io::Result<Option<BBIFile>> {
 }
 
 /// Gets the data (uncompressed, if applicable) from a given block
-pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, block: &Block, known_offset: u64) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
+pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
+    bbifile: &mut B,
+    block: &Block,
+    known_offset: u64,
+) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
     use libdeflater::Decompressor;
 
     let (endianness, uncompress_buf_size) = {
         let info = bbifile.get_info();
-        (info.header.endianness, info.header.uncompress_buf_size as usize)
+        (
+            info.header.endianness,
+            info.header.uncompress_buf_size as usize,
+        )
     };
     let file = bbifile.ensure_reader()?;
 
@@ -359,7 +427,9 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, bl
     let block_data: Vec<u8> = if uncompress_buf_size > 0 {
         let mut decompressor = Decompressor::new();
         let mut outbuf = vec![0; uncompress_buf_size];
-        decompressor.zlib_decompress(&raw_data, &mut outbuf).unwrap();
+        decompressor
+            .zlib_decompress(&raw_data, &mut outbuf)
+            .unwrap();
         outbuf
     } else {
         raw_data
@@ -368,7 +438,13 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, bl
     Ok(ByteOrdered::runtime(Cursor::new(block_data), endianness))
 }
 
-pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(bbifile: &mut B, block: Block, known_offset: &mut u64, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=ZoomRecord> + Send>> {
+pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
+    bbifile: &mut B,
+    block: Block,
+    known_offset: &mut u64,
+    start: u32,
+    end: u32,
+) -> io::Result<Box<dyn Iterator<Item = ZoomRecord> + Send>> {
     let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
     let len = data_mut.inner_mut().get_mut().len();
     assert_eq!(len % (4 * 8), 0);
@@ -396,7 +472,7 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(bbifile: &mu
                     max_val,
                     sum,
                     sum_squares,
-                }
+                },
             });
         }
     }
@@ -405,17 +481,27 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(bbifile: &mu
     Ok(Box::new(records.into_iter()))
 }
 
-pub(crate) struct ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+pub(crate) struct ZoomIntervalIter<'a, I, S, B>
+where
+    I: Iterator<Item = Block> + Send,
+    S: SeekableRead,
+    B: BBIRead<S>,
+{
     bbifile: &'a mut B,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item=ZoomRecord> + Send + 'a>>,
+    vals: Option<Box<dyn Iterator<Item = ZoomRecord> + Send + 'a>>,
     start: u32,
     end: u32,
     _phantom: PhantomData<S>,
 }
 
-impl<'a, I, S, B> ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+impl<'a, I, S, B> ZoomIntervalIter<'a, I, S, B>
+where
+    I: Iterator<Item = Block> + Send,
+    S: SeekableRead,
+    B: BBIRead<S>,
+{
     pub fn new(bbifile: &'a mut B, blocks: I, start: u32, end: u32) -> Self {
         ZoomIntervalIter {
             bbifile,
@@ -429,25 +515,42 @@ impl<'a, I, S, B> ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + 
     }
 }
 
-impl<'a, I, S, B> Iterator for ZoomIntervalIter<'a, I, S, B> where I: Iterator<Item=Block> + Send, S: SeekableRead, B: BBIRead<S> {
+impl<'a, I, S, B> Iterator for ZoomIntervalIter<'a, I, S, B>
+where
+    I: Iterator<Item = Block> + Send,
+    S: SeekableRead,
+    B: BBIRead<S>,
+{
     type Item = io::Result<ZoomRecord>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.vals {
-                Some(vals) => {
-                    match vals.next() {
-                        Some(v) => { return Some(Ok(v)); }
-                        None => { self.vals = None; }
+                Some(vals) => match vals.next() {
+                    Some(v) => {
+                        return Some(Ok(v));
+                    }
+                    None => {
+                        self.vals = None;
                     }
                 },
                 None => {
                     let current_block = self.blocks.next()?;
-                    match get_zoom_block_values(self.bbifile, current_block, &mut self.known_offset, self.start, self.end) {
-                        Ok(vals) => { self.vals = Some(vals); }
-                        Err(e) => { return Some(Err(e)); }
+                    match get_zoom_block_values(
+                        self.bbifile,
+                        current_block,
+                        &mut self.known_offset,
+                        self.start,
+                        self.end,
+                    ) {
+                        Ok(vals) => {
+                            self.vals = Some(vals);
+                        }
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
-                },
+                }
             }
         }
     }

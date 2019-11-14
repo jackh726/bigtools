@@ -1,6 +1,5 @@
 use std::io::{self};
 
-
 #[test]
 fn test_valid_read() -> io::Result<()> {
     use std::path::PathBuf;
@@ -13,7 +12,8 @@ fn test_valid_read() -> io::Result<()> {
     let mut valid_bigwig = dir.clone();
     valid_bigwig.push("valid.bigWig");
 
-    let mut bwread = BigWigRead::from_file_and_attach(valid_bigwig.to_string_lossy().to_string()).unwrap(); 
+    let mut bwread =
+        BigWigRead::from_file_and_attach(valid_bigwig.to_string_lossy().to_string()).unwrap();
 
     // Test that chrom tree parsing works
     let chroms = bwread.get_chroms();
@@ -27,7 +27,11 @@ fn test_valid_read() -> io::Result<()> {
     assert_eq!(summary.max_val, 14254.0);
 
     // This tests simply reading an interval. Importantly, the provided interval actually splits an interval in two, so this also tests correct splitting on read.
-    let first_interval = bwread.get_interval("chr17", 0, 59899)?.next().unwrap().unwrap();
+    let first_interval = bwread
+        .get_interval("chr17", 0, 59899)?
+        .next()
+        .unwrap()
+        .unwrap();
     assert_eq!(first_interval.start, 59898);
     assert_eq!(first_interval.end, 59899);
     assert_eq!(first_interval.value, 0.06792);

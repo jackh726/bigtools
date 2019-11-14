@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use crossbeam_channel::{bounded, Sender as ChannelSender, Receiver as ChannelReceiver};
+use crossbeam_channel::{bounded, Receiver as ChannelReceiver, Sender as ChannelSender};
 
 use parking_lot::Mutex;
 
@@ -44,11 +44,20 @@ use crate::tell::Tell;
 // element. Importantly, the lock to the inner `ChannelState` is only locked if the `Sender` fills or the `Receiver` is empty.
 
 /// Creates a filebufferedchannel sender/receiver pair.
-pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>) where T: Serialize + DeserializeOwned {
+pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>)
+where
+    T: Serialize + DeserializeOwned,
+{
     let state = Arc::new(Mutex::new(ChannelState::new(size)));
     let (channelsender, channelreceiver) = bounded(size);
-    let sender = Sender { state: state.clone(), sender: channelsender };
-    let receiver = Receiver { state, receiver: channelreceiver };
+    let sender = Sender {
+        state: state.clone(),
+        sender: channelsender,
+    };
+    let receiver = Receiver {
+        state,
+        receiver: channelreceiver,
+    };
     (sender, receiver)
 }
 
@@ -74,17 +83,23 @@ enum ChannelStateStatus<T> {
         file: File,
         readindex: u64,
         writeindex: u64,
-    }
+    },
 }
 
-struct ChannelState<T> where T: Serialize + DeserializeOwned {
+struct ChannelState<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     maxsize: usize,
     status: ChannelStateStatus<T>,
 }
 
 type ChannelResult<R> = Result<R, ChannelError>;
 
-impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
+impl<T> ChannelState<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     fn new(maxsize: usize) -> ChannelState<T> {
         ChannelState {
             maxsize,
@@ -94,16 +109,16 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
 
     /// This will free *some* elements from `Sender`'s `ChannelSender`, either by writing them to the disk (if state is `OnDisk`),
     /// or by converting the `filebufferedchannel` from `InMemory` to `OnDisk` and, in the process, allocating a new buffer channel
-    /// 
+    ///
     /// It's not guaranteed that `Sender`'s `ChannelSender` will be empty when this function returns (since new elements may be added)
     fn clearqueue(&mut self, sender: &mut ChannelSender<T>) -> ChannelResult<()> {
         // Since we already have the lock, let's push until the `Receiver`'s buffer is full
         match self.read() {
-            Ok(_) => {},
-            Err(ChannelError::InMemory) => {},
+            Ok(_) => {}
+            Err(ChannelError::InMemory) => {}
             Err(ChannelError::Disconnected) => return Err(ChannelError::Disconnected),
             Err(ChannelError::IOError(e)) => return Err(ChannelError::IOError(e)),
-            Err(ChannelError::Empty) => {},
+            Err(ChannelError::Empty) => {}
         }
 
         match &mut self.status {
@@ -119,8 +134,14 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                     writeindex: 0,
                 };
                 Ok(())
-            },
-            ChannelStateStatus::OnDisk { buffer, file, writeindex, serialize_size, .. } => {
+            }
+            ChannelStateStatus::OnDisk {
+                buffer,
+                file,
+                writeindex,
+                serialize_size,
+                ..
+            } => {
                 // Decide up front the number of items to serialize and write to disk
                 // This allows us to preallocate a vector to store the bytes, since we don't/can't write buffer the file
                 let n = buffer.len();
@@ -149,7 +170,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
     /// Result::Ok indicates that at least one element was read and sent to `Receiver` or that `Receiver` was full
     fn read(&mut self) -> ChannelResult<()> {
         match &self.status {
-            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::InMemory => {}
             ChannelStateStatus::OnDisk { sender, .. } => {
                 if sender.capacity().unwrap() - sender.len() == 0 {
                     return Ok(());
@@ -158,7 +179,14 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
         }
         match &mut self.status {
             ChannelStateStatus::InMemory => Err(ChannelError::InMemory),
-            ChannelStateStatus::OnDisk { file, readindex, writeindex, buffer, sender, serialize_size } => {
+            ChannelStateStatus::OnDisk {
+                file,
+                readindex,
+                writeindex,
+                buffer,
+                sender,
+                serialize_size,
+            } => {
                 // At this point there are two places elements can be:
                 // 1) On disk
                 // 2) In `buffer`, which has elements that were received from `Sender`, but haven't been buffered to disk yet.
@@ -178,7 +206,8 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                     *readindex = file.tell()?;
                     let mut buf = Cursor::new(buf);
                     for _ in 0..n {
-                        let elem =  bincode::deserialize_from(&mut buf).expect("Error while deserializing.");
+                        let elem = bincode::deserialize_from(&mut buf)
+                            .expect("Error while deserializing.");
                         if let Err(e) = sender.try_send(elem) {
                             use crossbeam_channel::TrySendError::*;
                             match e {
@@ -186,9 +215,8 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                                 Full(_) => {
                                     // We pre-checked for the capacity-len
                                     panic!("Buffer should not be full.");
-                                },
+                                }
                             }
-                            
                         }
                         sent = true;
                     }
@@ -202,7 +230,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
                             Full(_) => {
                                 // We only take max number of remaining elements
                                 panic!("Buffer should not be full.");
-                            },
+                            }
                         }
                     }
                     sent = true;
@@ -218,7 +246,7 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
 
     fn read_wait(&mut self) -> ChannelResult<()> {
         match &self.status {
-            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::InMemory => {}
             ChannelStateStatus::OnDisk { sender, .. } => {
                 if sender.capacity().unwrap() - sender.len() == 0 {
                     return Ok(());
@@ -230,39 +258,43 @@ impl<T> ChannelState<T> where T: Serialize + DeserializeOwned {
             Err(ChannelError::InMemory) => Err(ChannelError::InMemory),
             Err(ChannelError::Disconnected) => Err(ChannelError::Disconnected),
             Err(ChannelError::IOError(e)) => Err(ChannelError::IOError(e)),
-            Err(ChannelError::Empty) => {
-                match &mut self.status {
-                    ChannelStateStatus::InMemory => unreachable!(),
-                    ChannelStateStatus::OnDisk { buffer, sender, .. } => {
-                        use crossbeam_channel::RecvError;
-                        match buffer.recv() {
-                            Ok(elem) => {
-                                if let Err(e) = sender.try_send(elem) {
-                                    use crossbeam_channel::TrySendError::*;
-                                    match e {
-                                        Disconnected(_) => return Err(ChannelError::Disconnected),
-                                        Full(_) => {
-                                            panic!("Buffer should not be full.");
-                                        },
+            Err(ChannelError::Empty) => match &mut self.status {
+                ChannelStateStatus::InMemory => unreachable!(),
+                ChannelStateStatus::OnDisk { buffer, sender, .. } => {
+                    use crossbeam_channel::RecvError;
+                    match buffer.recv() {
+                        Ok(elem) => {
+                            if let Err(e) = sender.try_send(elem) {
+                                use crossbeam_channel::TrySendError::*;
+                                match e {
+                                    Disconnected(_) => return Err(ChannelError::Disconnected),
+                                    Full(_) => {
+                                        panic!("Buffer should not be full.");
                                     }
                                 }
-                                Ok(())
-                            },
-                            Err(RecvError) => Err(ChannelError::Disconnected),
+                            }
+                            Ok(())
                         }
+                        Err(RecvError) => Err(ChannelError::Disconnected),
                     }
                 }
-            }
+            },
         }
     }
 }
 
-pub struct Sender<T> where T: Serialize + DeserializeOwned {
+pub struct Sender<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     state: Arc<Mutex<ChannelState<T>>>,
     sender: ChannelSender<T>,
 }
 
-pub struct Receiver<T> where T: Serialize + DeserializeOwned {
+pub struct Receiver<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     state: Arc<Mutex<ChannelState<T>>>,
     receiver: ChannelReceiver<T>,
 }
@@ -279,12 +311,15 @@ impl From<ChannelError> for SendError {
             ChannelError::InMemory => unreachable!(),
             ChannelError::Disconnected => SendError::Disconnected,
             ChannelError::IOError(e) => SendError::IOError(e),
-            ChannelError::Empty => unreachable!(), 
+            ChannelError::Empty => unreachable!(),
         }
     }
 }
 
-impl<T> Sender<T> where T: Serialize + DeserializeOwned {
+impl<T> Sender<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     pub fn send(&mut self, t: T) -> Result<(), SendError> {
         if let Err(e) = self.sender.try_send(t) {
             use crossbeam_channel::TrySendError::*;
@@ -294,7 +329,7 @@ impl<T> Sender<T> where T: Serialize + DeserializeOwned {
                     state.clearqueue(&mut self.sender)?;
                     drop(state);
                     self.sender.try_send(t).unwrap();
-                },
+                }
                 Disconnected(_) => return Err(SendError::Disconnected),
             }
         }
@@ -312,15 +347,16 @@ pub enum RecvError {
 pub enum TryRecvError {
     Empty,
     Disconnected,
-    IOError(io::Error)
+    IOError(io::Error),
 }
 
-impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
+impl<T> Receiver<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     pub fn recv(&mut self) -> Result<T, RecvError> {
         match self.receiver.try_recv() {
-            Ok(t) => {
-                Ok(t)
-            },
+            Ok(t) => Ok(t),
             Err(e) => {
                 use crossbeam_channel::TryRecvError::*;
                 match e {
@@ -344,7 +380,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                             Err(ChannelError::IOError(e)) => Err(RecvError::IOError(e)),
                             Err(ChannelError::Empty) => unreachable!(),
                         }
-                    },
+                    }
                 }
             }
         }
@@ -352,9 +388,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
 
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         match self.receiver.try_recv() {
-            Ok(t) => {
-                Ok(t)
-            },
+            Ok(t) => Ok(t),
             Err(e) => {
                 use crossbeam_channel::TryRecvError::*;
                 match e {
@@ -372,7 +406,7 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
                             Err(ChannelError::Disconnected) => Err(TryRecvError::Disconnected),
                             Err(ChannelError::IOError(e)) => Err(TryRecvError::IOError(e)),
                         }
-                    },
+                    }
                 }
             }
         }
@@ -387,11 +421,17 @@ impl<T> Receiver<T> where T: Serialize + DeserializeOwned {
     }
 }
 
-pub struct TryIter<'a, T: 'a> where T: Serialize + DeserializeOwned {
+pub struct TryIter<'a, T: 'a>
+where
+    T: Serialize + DeserializeOwned,
+{
     receiver: &'a mut Receiver<T>,
 }
 
-impl<'a, T> Iterator for TryIter<'a, T> where T: Serialize + DeserializeOwned {
+impl<'a, T> Iterator for TryIter<'a, T>
+where
+    T: Serialize + DeserializeOwned,
+{
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -399,11 +439,17 @@ impl<'a, T> Iterator for TryIter<'a, T> where T: Serialize + DeserializeOwned {
     }
 }
 
-pub struct Iter<'a, T: 'a> where T: Serialize + DeserializeOwned {
+pub struct Iter<'a, T: 'a>
+where
+    T: Serialize + DeserializeOwned,
+{
     receiver: &'a mut Receiver<T>,
 }
 
-impl<'a, T> Iterator for Iter<'a, T> where T: Serialize + DeserializeOwned {
+impl<'a, T> Iterator for Iter<'a, T>
+where
+    T: Serialize + DeserializeOwned,
+{
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -411,11 +457,17 @@ impl<'a, T> Iterator for Iter<'a, T> where T: Serialize + DeserializeOwned {
     }
 }
 
-pub struct IntoIter<T> where T: Serialize + DeserializeOwned {
+pub struct IntoIter<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     receiver: Receiver<T>,
 }
 
-impl<T> IntoIterator for Receiver<T> where T: Serialize + DeserializeOwned {
+impl<T> IntoIterator for Receiver<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     type Item = T;
     type IntoIter = IntoIter<T>;
 
@@ -424,7 +476,10 @@ impl<T> IntoIterator for Receiver<T> where T: Serialize + DeserializeOwned {
     }
 }
 
-impl<T> Iterator for IntoIter<T> where T: Serialize + DeserializeOwned {
+impl<T> Iterator for IntoIter<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {

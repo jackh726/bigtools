@@ -18,7 +18,7 @@ impl Default for IdMap {
 impl IdMap {
     pub fn get_map(self) -> HashMap<String, u32> {
         self.map
-    } 
+    }
 
     /// If the key already exists in the map, this will simply return the id for it.
     /// Otherwise, it locks a mutex and returns a new id.

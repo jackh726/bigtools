@@ -2,12 +2,11 @@ use std::io;
 
 use crate::bigwig::Value;
 
-
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
 ///  (val, val, val or None, overhang or None) when merging two breaks up one, and may or may not add an overhang (one.start < two.start or one.end > two.end)
 /// The overhang may equal the previous value
-/// 
+///
 /// # Panics
 /// Panics if the two Values do not overlap.
 pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value>, Option<Value>) {
@@ -51,12 +50,7 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
             // |---|
             // |--|
             if two.value == 0.0 {
-                (
-                    one,
-                    None,
-                    None,
-                    None,
-                )
+                (one, None, None, None)
             } else {
                 (
                     Value {
@@ -177,12 +171,7 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
             // |----|
             //  |--|
             if two.value == 0.0 {
-                (
-                    one,
-                    None,
-                    None,
-                    None,
-                )
+                (one, None, None, None)
             } else {
                 (
                     Value {
@@ -211,12 +200,7 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
             //  |--|
             // |---|
             if one.value == 0.0 {
-                (
-                    two,
-                    None,
-                    None,
-                    None,
-                )
+                (two, None, None, None)
             } else {
                 (
                     Value {
@@ -237,12 +221,7 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
             //  |--|
             // |----|
             if one.value == 0.0 {
-                (
-                    two,
-                    None,
-                    None,
-                    None,
-                )
+                (two, None, None, None)
             } else {
                 (
                     Value {
@@ -328,7 +307,10 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
     }
 }
 
-struct ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
+struct ValueIter<I>
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     error: io::Result<()>,
     sections: Vec<(I, Option<Value>)>,
     next_sections: Option<Box<dyn Iterator<Item = Value> + Send>>,
@@ -336,7 +318,10 @@ struct ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
     next_start: u32,
 }
 
-impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + Send {
+impl<I> Iterator for ValueIter<I>
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     type Item = Value;
 
     fn next(&mut self) -> Option<Value> {
@@ -356,8 +341,7 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
             let mut data = vec![0f32; DATA_SIZE];
             let mut max_sections: usize = 0;
             let mut all_none = true;
-            'sections: 
-            for (section, last) in &mut self.sections {
+            'sections: for (section, last) in &mut self.sections {
                 'section: loop {
                     let next_val = match last.take() {
                         Some(next_val) => next_val,
@@ -368,7 +352,7 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                                 continue 'section;
                             }
                             None => continue 'sections,
-                        }
+                        },
                     };
                     all_none = false;
 
@@ -395,7 +379,13 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
             let mut current: Option<(u32, u32, f32)> = None;
             for (idx, i) in data[..].iter().enumerate() {
                 match &mut current {
-                    None => current = Some((idx as u32 + current_start, idx as u32 + current_start + 1, *i)),
+                    None => {
+                        current = Some((
+                            idx as u32 + current_start,
+                            idx as u32 + current_start + 1,
+                            *i,
+                        ))
+                    }
                     Some(c) => {
                         if (c.2 - *i).abs() < std::f32::EPSILON {
                             c.1 += 1;
@@ -407,7 +397,11 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                                     value: c.2,
                                 });
                             }
-                            current = Some((idx as u32 + current_start, idx as u32 + current_start + 1, *i));
+                            current = Some((
+                                idx as u32 + current_start,
+                                idx as u32 + current_start + 1,
+                                *i,
+                            ));
                         }
                     }
                 }
@@ -448,7 +442,14 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                             continue;
                         }
                         // We now know that next_val overlaps with the current item
-                        let nvq = std::mem::replace(queued, Value { start: 0, end: 0, value: 0.0 });
+                        let nvq = std::mem::replace(
+                            queued,
+                            Value {
+                                start: 0,
+                                end: 0,
+                                value: 0.0,
+                            },
+                        );
                         // See merge_into for what these are
                         // In short: one, two, and three are strictly contained within the current val's start-end, while overhang is anything left over
                         let (one, two, three, overhang) = merge_into(nvq, insert_val);
@@ -457,7 +458,7 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                         // If these exist, they don't change any of the queue after the current item
                         if let Some(th) = three {
                             queue.insert(idx + 1, th);
-                        }   
+                        }
                         if let Some(tw) = two {
                             queue.insert(idx + 1, tw);
                         }
@@ -466,8 +467,8 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
                         match overhang {
                             Some(o) => {
                                 insert_val = o;
-                                continue 'insert
-                            },
+                                continue 'insert;
+                            }
                             None => return,
                         }
                     }
@@ -496,7 +497,10 @@ impl<I> Iterator for ValueIter<I> where I : Iterator<Item=io::Result<Value>> + S
     }
 }
 
-pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=Value> + Send where I : Iterator<Item=io::Result<Value>> + Send {    
+pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item = Value> + Send
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     ValueIter {
         // TODO: this isn't used right now
         error: Ok(()),
@@ -507,14 +511,20 @@ pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item=Value> + S
     }
 }
 
-struct FillValues<I> where I: Iterator<Item=io::Result<Value>> {
+struct FillValues<I>
+where
+    I: Iterator<Item = io::Result<Value>>,
+{
     iter: I,
     last_val: Option<Value>,
     expected_end: Option<u32>,
     last_end: u32,
 }
 
-impl<I> Iterator for FillValues<I> where I : Iterator<Item=io::Result<Value>> + Send {
+impl<I> Iterator for FillValues<I>
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -529,38 +539,43 @@ impl<I> Iterator for FillValues<I> where I : Iterator<Item=io::Result<Value>> + 
                     let last = self.last_end;
                     self.last_end = next.start;
                     self.last_val.replace(next);
-                    Some(Ok(Value { start: last, end: self.last_end, value: 0.0 }))
+                    Some(Ok(Value {
+                        start: last,
+                        end: self.last_end,
+                        value: 0.0,
+                    }))
                 } else {
                     self.last_end = next.end;
                     Some(Ok(next))
                 }
-            },
-            Some(_) => {
-                next
             }
-            None => {
-                match self.expected_end {
-                    None => {
+            Some(_) => next,
+            None => match self.expected_end {
+                None => None,
+                Some(expected_end) => {
+                    if self.last_end < expected_end {
+                        let last = self.last_end;
+                        self.last_end = expected_end;
+                        Some(Ok(Value {
+                            start: last,
+                            end: expected_end,
+                            value: 0.0,
+                        }))
+                    } else {
                         None
-                    },
-                    Some(expected_end) => {
-                        if self.last_end < expected_end {
-                            let last = self.last_end;
-                            self.last_end = expected_end;
-                            Some(Ok(Value { start: last, end: expected_end, value: 0.0 }))
-                        } else {
-                            None
-                        }
                     }
                 }
-            }
+            },
         }
     }
 }
 
 /// Fills any space between `Value`s with `0.0`s.
 /// Note: Output values will not be merged if any input Values are `0.0`
-pub fn fill<I>(iter: I) -> impl Iterator<Item=io::Result<Value>> + Send where I : Iterator<Item=io::Result<Value>> + Send {
+pub fn fill<I>(iter: I) -> impl Iterator<Item = io::Result<Value>> + Send
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     FillValues {
         iter,
         last_val: None,
@@ -571,9 +586,16 @@ pub fn fill<I>(iter: I) -> impl Iterator<Item=io::Result<Value>> + Send where I 
 
 /// Fills any space between `Value`s with `0.0`s. This will also pad the start and end with `0.0`s if they do not exist.
 /// Note: Output values will not be merged if any input Values are `0.0`
-/// 
+///
 /// If the start > the end of the first value, it will be ignored.
-pub fn fill_start_to_end<I>(iter: I, start: u32, end: u32) -> impl Iterator<Item=io::Result<Value>> + Send where I : Iterator<Item=io::Result<Value>> + Send {
+pub fn fill_start_to_end<I>(
+    iter: I,
+    start: u32,
+    end: u32,
+) -> impl Iterator<Item = io::Result<Value>> + Send
+where
+    I: Iterator<Item = io::Result<Value>> + Send,
+{
     FillValues {
         iter,
         last_val: None,
@@ -581,7 +603,6 @@ pub fn fill_start_to_end<I>(iter: I, start: u32, end: u32) -> impl Iterator<Item
         last_end: start,
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -594,7 +615,11 @@ mod tests {
         let first = generate_sections_seq(50, end, 1234);
         let second = generate_sections_seq(50, end, 12345);
         //println!("Running merge many with: \n{:?} \n{:?}", first, second);
-        let merged = merge_sections_many(vec![first.into_iter().map(Result::Ok), second.into_iter().map(Result::Ok)]).collect::<Vec<_>>();
+        let merged = merge_sections_many(vec![
+            first.into_iter().map(Result::Ok),
+            second.into_iter().map(Result::Ok),
+        ])
+        .collect::<Vec<_>>();
         //println!("\nMerged (many): {:?}\n", merged);
         let mut last_end = 0;
         let mut last_val = None;
@@ -614,7 +639,10 @@ mod tests {
         let first = generate_sections_seq(50, 150000, 1234);
         let second = generate_sections_seq(50, 150000, 12345);
         b.iter(|| {
-            let merged = merge_sections_many(vec![first.clone().into_iter().map(Result::Ok), second.clone().into_iter().map(Result::Ok)]);
+            let merged = merge_sections_many(vec![
+                first.clone().into_iter().map(Result::Ok),
+                second.clone().into_iter().map(Result::Ok),
+            ]);
             let mut last_start = 0;
             for val in merged {
                 assert!(last_start <= val.start);
@@ -633,7 +661,7 @@ mod tests {
                 first.clone().into_iter().map(Result::Ok),
                 second.clone().into_iter().map(Result::Ok),
                 third.clone().into_iter().map(Result::Ok),
-                ]);
+            ]);
             let mut last_start = 0;
             for val in merged {
                 assert!(last_start <= val.start);
@@ -648,7 +676,13 @@ mod tests {
         assert!(_sections.last().map(|v| v.end).unwrap_or(0) == 150);
     }
 
-    fn generate_sections_seq_skip(start: u32, end: u32, seed: u64, skip: f32, size: f32) -> Vec<Value> {
+    fn generate_sections_seq_skip(
+        start: u32,
+        end: u32,
+        seed: u64,
+        skip: f32,
+        size: f32,
+    ) -> Vec<Value> {
         use rand::prelude::*;
 
         let mut out = vec![];
@@ -715,18 +749,65 @@ mod tests {
     #[test]
     fn test_fill() {
         let intervals: Vec<io::Result<Value>> = vec![
-            Ok(Value { start: 10, end: 15, value: 0.5 }),
-            Ok(Value { start: 20, end: 30, value: 0.7 }),
-            Ok(Value { start: 30, end: 35, value: 0.9 }),
+            Ok(Value {
+                start: 10,
+                end: 15,
+                value: 0.5,
+            }),
+            Ok(Value {
+                start: 20,
+                end: 30,
+                value: 0.7,
+            }),
+            Ok(Value {
+                start: 30,
+                end: 35,
+                value: 0.9,
+            }),
             Err(io::Error::new(io::ErrorKind::Other, "Test error")),
         ];
 
         let mut iter = fill(intervals.into_iter());
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 0, end: 10, value: 0.0 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 10, end: 15, value: 0.5 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 15, end: 20, value: 0.0 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 20, end: 30, value: 0.7 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value {  start: 30, end: 35, value: 0.9 });
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 0,
+                end: 10,
+                value: 0.0
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 10,
+                end: 15,
+                value: 0.5
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 15,
+                end: 20,
+                value: 0.0
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 20,
+                end: 30,
+                value: 0.7
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 30,
+                end: 35,
+                value: 0.9
+            }
+        );
         assert!(iter.next().unwrap().is_err());
         assert!(iter.next().is_none());
     }
@@ -734,20 +815,74 @@ mod tests {
     #[test]
     fn test_fill_start_to_end() {
         let intervals: Vec<io::Result<Value>> = vec![
-            Ok(Value { start: 10, end: 15, value: 0.5 }),
-            Ok(Value { start: 20, end: 30, value: 0.7 }),
-            Ok(Value { start: 30, end: 35, value: 0.9 }),
+            Ok(Value {
+                start: 10,
+                end: 15,
+                value: 0.5,
+            }),
+            Ok(Value {
+                start: 20,
+                end: 30,
+                value: 0.7,
+            }),
+            Ok(Value {
+                start: 30,
+                end: 35,
+                value: 0.9,
+            }),
             Err(io::Error::new(io::ErrorKind::Other, "Test error")),
         ];
 
         let mut iter = fill_start_to_end(intervals.into_iter(), 5, 50);
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 5, end: 10, value: 0.0 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 10, end: 15, value: 0.5 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 15, end: 20, value: 0.0 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value { start: 20, end: 30, value: 0.7 });
-        assert_eq!(iter.next().unwrap().unwrap(), Value {  start: 30, end: 35, value: 0.9 });
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 5,
+                end: 10,
+                value: 0.0
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 10,
+                end: 15,
+                value: 0.5
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 15,
+                end: 20,
+                value: 0.0
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 20,
+                end: 30,
+                value: 0.7
+            }
+        );
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 30,
+                end: 35,
+                value: 0.9
+            }
+        );
         assert!(iter.next().unwrap().is_err());
-        assert_eq!(iter.next().unwrap().unwrap(), Value {  start: 35, end: 50, value: 0.0 });
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            Value {
+                start: 35,
+                end: 50,
+                value: 0.0
+            }
+        );
         assert!(iter.next().is_none());
     }
 }

@@ -6,7 +6,6 @@ use reqwest;
 
 use crate::seekableread::Reopen;
 
-
 const READ_SIZE: usize = 8 * 1_048_576; // 8 MB chunks
 
 pub struct RemoteFile {
@@ -31,7 +30,8 @@ impl Read for RemoteFile {
             self.seek(SeekFrom::Start(self.last_seek))?;
         }
         let initial_read = self.current.as_mut().unwrap().read(buf)?;
-        let parts_left: usize = (((buf.len() - initial_read) as f32) / (READ_SIZE as f32)).ceil() as usize;
+        let parts_left: usize =
+            (((buf.len() - initial_read) as f32) / (READ_SIZE as f32)).ceil() as usize;
         let initial_pos = self.last_seek;
         let mut total_read = initial_read;
         for part in 0..parts_left {
@@ -40,7 +40,7 @@ impl Read for RemoteFile {
             let read = self.current.as_mut().unwrap().read(&mut buf[start..])?;
             total_read += read;
             if read <= READ_SIZE as usize {
-                break
+                break;
             }
         }
         Ok(total_read)
@@ -66,12 +66,23 @@ impl Seek for RemoteFile {
             }
         };
         let client = reqwest::Client::new();
-        let r = block_on(client
-            .get(self.url.clone())
-            .header(reqwest::header::RANGE, format!("bytes={}-{}", self.last_seek, self.last_seek + READ_SIZE as u64))
-            .send())
-            .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-        let bytes = block_on(r.bytes()).map_err(|_| io::Error::from(io::ErrorKind::Other))?.slice(0, READ_SIZE as usize);
+        let r = block_on(
+            client
+                .get(self.url.clone())
+                .header(
+                    reqwest::header::RANGE,
+                    format!(
+                        "bytes={}-{}",
+                        self.last_seek,
+                        self.last_seek + READ_SIZE as u64
+                    ),
+                )
+                .send(),
+        )
+        .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
+        let bytes = block_on(r.bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::Other))?
+            .slice(0, READ_SIZE as usize);
         //let mut buf = vec![0u8; READ_SIZE as usize];
         //let s = bytes.read(&mut buf).unwrap();
         //buf.truncate(s);

@@ -1,79 +1,125 @@
-use std::io::{self, Seek, SeekFrom};
-use std::io::{BufReader};
 use std::fs::File;
+use std::io::BufReader;
+use std::io::{self, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
-use crate::seekableread::{Reopen, SeekableRead, ReopenableFile};
-use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize, ZoomIntervalIter, read_info, get_block_data};
-use crate::bigwig::{BBIFile, Value, ZoomRecord, Summary};
+use crate::bbiread::{
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, Block, ChromAndSize,
+    ZoomIntervalIter,
+};
+use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
+use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
-
-struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+struct IntervalIter<'a, I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     bigwig: &'a mut BigWigRead<R, S>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item=Value> + Send + 'a>>,
+    vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
     start: u32,
     end: u32,
 }
 
-impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.vals {
-                Some(vals) => {
-                    match vals.next() {
-                        Some(v) => { return Some(Ok(v)); }
-                        None => { self.vals = None; }
+                Some(vals) => match vals.next() {
+                    Some(v) => {
+                        return Some(Ok(v));
+                    }
+                    None => {
+                        self.vals = None;
                     }
                 },
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_block_values(self.bigwig, current_block, &mut self.known_offset, self.start, self.end) {
-                        Ok(vals) => { self.vals = Some(vals); }
-                        Err(e) => { return Some(Err(e)); }
+                    match get_block_values(
+                        self.bigwig,
+                        current_block,
+                        &mut self.known_offset,
+                        self.start,
+                        self.end,
+                    ) {
+                        Ok(vals) => {
+                            self.vals = Some(vals);
+                        }
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
-                },
+                }
             }
         }
     }
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+struct OwnedIntervalIter<I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     bigwig: BigWigRead<R, S>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item=Value> + Send>>,
+    vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
     start: u32,
     end: u32,
 }
 
-impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     type Item = io::Result<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.vals {
-                Some(vals) => {
-                    match vals.next() {
-                        Some(v) => { return Some(Ok(v)); }
-                        None => { self.vals = None; }
+                Some(vals) => match vals.next() {
+                    Some(v) => {
+                        return Some(Ok(v));
+                    }
+                    None => {
+                        self.vals = None;
                     }
                 },
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_block_values(&mut self.bigwig, current_block, &mut self.known_offset, self.start, self.end) {
-                        Ok(vals) => { self.vals = Some(vals); }
-                        Err(e) => { return Some(Err(e)); }
+                    match get_block_values(
+                        &mut self.bigwig,
+                        current_block,
+                        &mut self.known_offset,
+                        self.start,
+                        self.end,
+                    ) {
+                        Ok(vals) => {
+                            self.vals = Some(vals);
+                        }
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -102,14 +148,21 @@ impl From<BBIFileReadInfoError> for BigWigReadAttachError {
     }
 }
 
-pub struct BigWigRead<R, S> where R:Reopen<S>, S: SeekableRead {
+pub struct BigWigRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
 }
 
-
-impl<R, S> Clone for BigWigRead<R, S> where R: Reopen<S>, S: SeekableRead {
+impl<R, S> Clone for BigWigRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     fn clone(&self) -> Self {
         BigWigRead {
             info: self.info.clone(),
@@ -118,7 +171,6 @@ impl<R, S> Clone for BigWigRead<R, S> where R: Reopen<S>, S: SeekableRead {
         }
     }
 }
-
 
 impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
     fn get_info(&self) -> &BBIFileInfo {
@@ -140,7 +192,14 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
     }
 
     fn get_chroms(&self) -> Vec<ChromAndSize> {
-        self.info.chrom_info.iter().map(|c| ChromAndSize { name: c.name.clone(), length: c.length }).collect::<Vec<_>>()
+        self.info
+            .chrom_info
+            .iter()
+            .map(|c| ChromAndSize {
+                name: c.name.clone(),
+                length: c.length,
+            })
+            .collect::<Vec<_>>()
     }
 }
 
@@ -177,7 +236,11 @@ impl BigWigRead<ReopenableFile, File> {
     }
 }
 
-impl<R,S> BigWigRead<R,S> where R: Reopen<S>, S: SeekableRead {
+impl<R, S> BigWigRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     pub fn from(reopen: R) -> Result<Self, BigWigReadAttachError> {
         let fp = reopen.reopen()?;
         let file = BufReader::new(fp);
@@ -188,7 +251,7 @@ impl<R,S> BigWigRead<R,S> where R: Reopen<S>, S: SeekableRead {
             Ok(info) => info,
         };
         match info.filetype {
-            BBIFile::BigWig => {},
+            BBIFile::BigWig => {}
             _ => return Err(BigWigReadAttachError::NotABigWig),
         }
 
@@ -201,7 +264,12 @@ impl<R,S> BigWigRead<R,S> where R: Reopen<S>, S: SeekableRead {
 }
 
 impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
-    pub fn get_interval_move(mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send> {
+    pub fn get_interval_move(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(OwnedIntervalIter {
             bigwig: self,
@@ -213,7 +281,12 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
         })
     }
 
-    pub fn get_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<Value>> + Send + 'a> {
+    pub fn get_interval<'a>(
+        &'a mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send + 'a> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
             bigwig: self,
@@ -225,11 +298,25 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
         })
     }
 
-    pub fn get_zoom_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32, reduction_level: u32) -> io::Result<impl Iterator<Item=io::Result<ZoomRecord>> + Send + 'a> {
-        let zoom_header = match self.info.zoom_headers.iter().find(|h| h.reduction_level == reduction_level) {
+    pub fn get_zoom_interval<'a>(
+        &'a mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+        reduction_level: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+        let zoom_header = match self
+            .info
+            .zoom_headers
+            .iter()
+            .find(|h| h.reduction_level == reduction_level)
+        {
             Some(h) => h,
             None => {
-                return Err(io::Error::new(io::ErrorKind::Other, "No reduction level found."));
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No reduction level found.",
+                ));
             }
         };
 
@@ -241,7 +328,13 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
     }
 }
 
-fn get_block_values<R: Reopen<S>, S: SeekableRead>(bigwig: &mut BigWigRead<R, S>, block: Block, known_offset: &mut u64, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=Value> + Send>> {
+fn get_block_values<R: Reopen<S>, S: SeekableRead>(
+    bigwig: &mut BigWigRead<R, S>,
+    block: Block,
+    known_offset: &mut u64,
+    start: u32,
+    end: u32,
+) -> io::Result<Box<dyn Iterator<Item = Value> + Send>> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
     let mut values: Vec<Value> = Vec::new();
 
@@ -267,7 +360,7 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(bigwig: &mut BigWigRead<R, S>
                     end: chrom_end,
                     value,
                 }
-            },
+            }
             2 => {
                 // variable step
                 let chrom_start = block_data_mut.read_u32()?;
@@ -278,7 +371,7 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(bigwig: &mut BigWigRead<R, S>
                     end: chrom_end,
                     value,
                 }
-            },
+            }
             3 => {
                 // fixed step
                 let chrom_start = curr_start;
@@ -290,8 +383,13 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(bigwig: &mut BigWigRead<R, S>
                     end: chrom_end,
                     value,
                 }
-            },
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Unknown bigwig section type: {}", section_type)))
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unknown bigwig section type: {}", section_type),
+                ))
+            }
         };
         if value.end >= start && value.start <= end {
             value.start = value.start.max(start);

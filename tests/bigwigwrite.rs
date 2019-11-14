@@ -9,15 +9,15 @@ fn test() -> io::Result<()> {
     use tempfile;
 
     use bigtools::bedparser::{self, BedParser};
-    use bigtools::chromvalues::{ChromGroups, ChromValues};
     use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
+    use bigtools::chromvalues::{ChromGroups, ChromValues};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
 
     let mut single_chrom_bedgraph = dir.clone();
     single_chrom_bedgraph.push("single_chrom.bedGraph");
-    
+
     let first = {
         let infile = File::open(single_chrom_bedgraph.clone())?;
         let mut vals_iter = BedParser::from_bedgraph_file(infile);
@@ -25,7 +25,10 @@ fn test() -> io::Result<()> {
         group.next()?.unwrap()
     };
 
-    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+    let pool = futures::executor::ThreadPoolBuilder::new()
+        .pool_size(6)
+        .create()
+        .expect("Unable to create thread pool.");
 
     let infile = File::open(single_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -38,12 +41,24 @@ fn test() -> io::Result<()> {
     chrom_map.insert("chr17".to_string(), 83257441);
 
     let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigWigWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+        BigWigWrite::begin_processing_chrom(
+            chrom,
+            chrom_id,
+            chrom_length,
+            group,
+            pool.clone(),
+            options.clone(),
+        )
     };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
+    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+        vals_iter,
+        chrom_map.clone(),
+        Box::new(parse_fn),
+    );
     outb.write_groups(chrom_map, chsi).unwrap();
 
-    let mut bwread = BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap(); 
+    let mut bwread =
+        BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 1);
@@ -76,7 +91,10 @@ fn test_multi() -> io::Result<()> {
     let mut multi_chrom_bedgraph = dir.clone();
     multi_chrom_bedgraph.push("multi_chrom.bedGraph");
 
-    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+    let pool = futures::executor::ThreadPoolBuilder::new()
+        .pool_size(6)
+        .create()
+        .expect("Unable to create thread pool.");
 
     let infile = File::open(multi_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -94,18 +112,36 @@ fn test_multi() -> io::Result<()> {
     chrom_map.insert("chr6".to_string(), 170805979);
 
     let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigWigWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+        BigWigWrite::begin_processing_chrom(
+            chrom,
+            chrom_id,
+            chrom_length,
+            group,
+            pool.clone(),
+            options.clone(),
+        )
     };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
+    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+        vals_iter,
+        chrom_map.clone(),
+        Box::new(parse_fn),
+    );
     outb.write_groups(chrom_map, chsi).unwrap();
 
-    let mut bwread = BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap(); 
+    let mut bwread =
+        BigWigRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 6);
 
-    assert_eq!(bwread.get_interval("chr1", 0, 248956422).unwrap().count(), 200);
-    assert_eq!(bwread.get_interval("chr6", 0, 170805979).unwrap().count(), 2000);
+    assert_eq!(
+        bwread.get_interval("chr1", 0, 248956422).unwrap().count(),
+        200
+    );
+    assert_eq!(
+        bwread.get_interval("chr6", 0, 170805979).unwrap().count(),
+        2000
+    );
 
     Ok(())
 }

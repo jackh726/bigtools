@@ -7,18 +7,23 @@ use std::sync::Arc;
 use crossbeam_utils::atomic::AtomicCell;
 use futures::future::Either;
 
-use crate::bigwig::{BedEntry, Value};
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::ChromGroupReadStreamingIterator;
 use crate::bigwig::WriteGroupsError;
+use crate::bigwig::{BedEntry, Value};
 use crate::chromvalues::{ChromGroups, ChromValues};
 use crate::idmap::IdMap;
 use crate::streaming_linereader::StreamingLineReader;
 
+pub type ChromGroupReadFunction<C> =
+    Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;
 
-pub type ChromGroupReadFunction<C> = Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;
-
-pub struct BedParserChromGroupStreamingIterator<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> {
+pub struct BedParserChromGroupStreamingIterator<
+    V,
+    C: ChromValues<V> + Send,
+    G: ChromGroups<V, C>,
+    H: BuildHasher,
+> {
     chrom_groups: G,
     callable: ChromGroupReadFunction<C>,
     last_chrom: Option<String>,
@@ -28,8 +33,14 @@ pub struct BedParserChromGroupStreamingIterator<V, C: ChromValues<V> + Send, G: 
     _s: std::marker::PhantomData<C>,
 }
 
-impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> BedParserChromGroupStreamingIterator<V, C, G, H> {
-    pub fn new(vals: G, chrom_map: HashMap<String, u32, H>, callable: ChromGroupReadFunction<C>) -> Self{
+impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
+    BedParserChromGroupStreamingIterator<V, C, G, H>
+{
+    pub fn new(
+        vals: G,
+        chrom_map: HashMap<String, u32, H>,
+        callable: ChromGroupReadFunction<C>,
+    ) -> Self {
         BedParserChromGroupStreamingIterator {
             chrom_groups: vals,
             callable,
@@ -42,8 +53,9 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> BedParse
     }
 }
 
-
-impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> ChromGroupReadStreamingIterator for BedParserChromGroupStreamingIterator<V, C, G, H> {
+impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
+    ChromGroupReadStreamingIterator for BedParserChromGroupStreamingIterator<V, C, G, H>
+{
     fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap)>>, WriteGroupsError> {
         match self.chrom_groups.next()? {
             Some((chrom, group)) => {
@@ -62,17 +74,14 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher> ChromGro
                 let chrom_id = chrom_ids.get_id(&chrom);
                 let group = (self.callable)(chrom, chrom_id, length, group)?;
                 Ok(Some(Either::Left(group)))
-            },
-            None => {
-                match self.chrom_ids.take() {
-                    Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
-                    None => Ok(None),
-                }
             }
+            None => match self.chrom_ids.take() {
+                Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
+                None => Ok(None),
+            },
         }
     }
 }
-
 
 pub trait StreamingChromValues<V> {
     fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>>;
@@ -95,19 +104,21 @@ impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
             Some(chrom) => chrom,
             None => {
                 return Ok(None);
-            },
+            }
         };
         let v = (self.parse)(split);
         Ok(Some((chrom, v)))
     }
 }
 
-pub struct BedIteratorStream<V: Clone, I: Iterator<Item=io::Result<(String, V)>>> {
+pub struct BedIteratorStream<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> {
     iter: I,
     curr: Option<(String, V)>,
 }
 
-impl<V: Clone, I: Iterator<Item=io::Result<(String, V)>>> StreamingChromValues<V> for BedIteratorStream<V, I> {
+impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues<V>
+    for BedIteratorStream<V, I>
+{
     fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>> {
         use std::ops::Deref;
         self.curr = match self.iter.next() {
@@ -118,7 +129,7 @@ impl<V: Clone, I: Iterator<Item=io::Result<(String, V)>>> StreamingChromValues<V
     }
 }
 
-pub struct BedParser<V, S: StreamingChromValues<V>>{
+pub struct BedParser<V, S: StreamingChromValues<V>> {
     state: Arc<AtomicCell<Option<BedParserState<V, S>>>>,
 }
 
@@ -139,35 +150,44 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 
 impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
-        let parse = |mut split: std::str::SplitWhitespace<'_> | {
+        let parse = |mut split: std::str::SplitWhitespace<'_>| {
             let start = split.next().expect("Missing start").parse::<u32>().unwrap();
             let end = split.next().expect("Missing end").parse::<u32>().unwrap();
             let rest_strings: Vec<&str> = split.collect();
             let rest = &rest_strings[..].join("\t");
-            BedEntry { start, end, rest: rest.to_string() }
+            BedEntry {
+                start,
+                end,
+                rest: rest.to_string(),
+            }
         };
-        BedParser::new(BedStream { bed: StreamingLineReader::new(BufReader::new(file)), parse: Box::new(parse) })
+        BedParser::new(BedStream {
+            bed: StreamingLineReader::new(BufReader::new(file)),
+            parse: Box::new(parse),
+        })
     }
 }
 
 impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
-        let parse = |mut split: std::str::SplitWhitespace<'_> | {
+        let parse = |mut split: std::str::SplitWhitespace<'_>| {
             let start = split.next().expect("Missing start").parse::<u32>().unwrap();
             let end = split.next().expect("Missing end").parse::<u32>().unwrap();
             let value = split.next().expect("Missing value").parse::<f32>().unwrap();
             Value { start, end, value }
         };
-        BedParser::new(BedStream { bed: StreamingLineReader::new(BufReader::new(file)), parse: Box::new(parse) })
+        BedParser::new(BedStream {
+            bed: StreamingLineReader::new(BufReader::new(file)),
+            parse: Box::new(parse),
+        })
     }
 }
 
-impl<V: Clone, I: Iterator<Item=io::Result<(String, V)>>> BedParser<V, BedIteratorStream<V, I>> {
+impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<V, BedIteratorStream<V, I>> {
     pub fn from_iter(iter: I) -> Self {
         BedParser::new(BedIteratorStream { iter, curr: None })
     }
 }
-
 
 #[derive(Debug)]
 enum ChromOpt {
@@ -191,11 +211,11 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
             ChromOpt::Diff(real_chrom) => {
                 self.curr_chrom.replace(real_chrom);
-            },
-            ChromOpt::Same => {},
+            }
+            ChromOpt::Same => {}
             ChromOpt::None => {
                 self.curr_chrom = None;
-            },
+            }
         }
 
         if let Some((chrom, v)) = self.stream.next()? {
@@ -229,9 +249,12 @@ impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedPars
         let ret = match next_chrom {
             None => Ok(None),
             Some(chrom) => {
-                let group = ChromGroup { state: self.state.clone(), curr_state: None };
+                let group = ChromGroup {
+                    state: self.state.clone(),
+                    curr_state: None,
+                };
                 Ok(Some((chrom.to_owned(), group)))
-            },
+            }
         };
         self.state.swap(Some(state));
         ret
@@ -305,14 +328,56 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr17");
-            assert_eq!(BedEntry { start: 1, end: 100, rest: "test1\t0".to_string() }, group.next()?.unwrap());
-            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.peek().unwrap());
-            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.peek().unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test1\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test2\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
+            assert_eq!(
+                &BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test2\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(BedEntry { start: 101, end: 200, rest: "test2\t0".to_string() }, group.next()?.unwrap());
-            assert_eq!(&BedEntry { start: 201, end: 300, rest: "test3\t0".to_string() }, group.peek().unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test2\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &BedEntry {
+                    start: 201,
+                    end: 300,
+                    rest: "test3\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(BedEntry { start: 201, end: 300, rest: "test3\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 201,
+                    end: 300,
+                    rest: "test3\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -321,11 +386,39 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr18");
-            assert_eq!(BedEntry { start: 1, end: 100, rest: "test4\t0".to_string() }, group.next()?.unwrap());
-            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.peek().unwrap());
-            assert_eq!(&BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.peek().unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test4\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test5\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
+            assert_eq!(
+                &BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test5\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(BedEntry { start: 101, end: 200, rest: "test5\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 101,
+                    end: 200,
+                    rest: "test5\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -334,7 +427,14 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr19");
-            assert_eq!(BedEntry { start: 1, end: 100, rest: "test6\t0".to_string() }, group.next()?.unwrap());
+            assert_eq!(
+                BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test6\t0".to_string()
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -354,14 +454,56 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr17");
-            assert_eq!(Value { start: 1, end: 100, value: 0.5 }, group.next()?.unwrap());
-            assert_eq!(&Value { start: 101, end: 200, value: 0.5 }, group.peek().unwrap());
-            assert_eq!(&Value { start: 101, end: 200, value: 0.5 }, group.peek().unwrap());
+            assert_eq!(
+                Value {
+                    start: 1,
+                    end: 100,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.peek().unwrap()
+            );
+            assert_eq!(
+                &Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(Value { start: 101, end: 200, value: 0.5 }, group.next()?.unwrap());
-            assert_eq!(&Value { start: 201, end: 300, value: 0.5 }, group.peek().unwrap());
+            assert_eq!(
+                Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &Value {
+                    start: 201,
+                    end: 300,
+                    value: 0.5
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(Value { start: 201, end: 300, value: 0.5 }, group.next()?.unwrap());
+            assert_eq!(
+                Value {
+                    start: 201,
+                    end: 300,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -370,11 +512,39 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr18");
-            assert_eq!(Value { start: 1, end: 100, value: 0.5 }, group.next()?.unwrap());
-            assert_eq!(&Value { start: 101, end: 200, value: 0.5 }, group.peek().unwrap());
-            assert_eq!(&Value { start: 101, end: 200, value: 0.5 }, group.peek().unwrap());
+            assert_eq!(
+                Value {
+                    start: 1,
+                    end: 100,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
+            assert_eq!(
+                &Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.peek().unwrap()
+            );
+            assert_eq!(
+                &Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.peek().unwrap()
+            );
 
-            assert_eq!(Value { start: 101, end: 200, value: 0.5 }, group.next()?.unwrap());
+            assert_eq!(
+                Value {
+                    start: 101,
+                    end: 200,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -383,7 +553,14 @@ mod tests {
         {
             let (chrom, mut group) = bgp.next()?.unwrap();
             assert_eq!(chrom, "chr19");
-            assert_eq!(Value { start: 1, end: 100, value: 0.5 }, group.next()?.unwrap());
+            assert_eq!(
+                Value {
+                    start: 1,
+                    end: 100,
+                    value: 0.5
+                },
+                group.next()?.unwrap()
+            );
             assert_eq!(None, group.peek());
 
             assert_eq!(None, group.next()?);
@@ -392,5 +569,4 @@ mod tests {
         assert!(bgp.next()?.is_none());
         Ok(())
     }
-
 }

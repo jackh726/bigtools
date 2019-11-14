@@ -24,7 +24,6 @@ impl<B: BufRead> StreamingLineReader<B> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,5 +49,4 @@ mod tests {
         assert!(slr.read()?.is_none());
         Ok(())
     }
-
 }

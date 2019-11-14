@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Seek, Write};
 use std::marker::Send;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
 
@@ -17,7 +17,7 @@ enum BufferState<R: Write + Send + 'static> {
 
 pub enum ClosedFile<R: Write + Send + 'static> {
     Temp(File),
-    Real(R)
+    Real(R),
 }
 
 /// This struct provides a way to "buffer" data in a temporary file
@@ -46,8 +46,18 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         let closed_file = Arc::new(AtomicCell::new(None));
         let real_file = Arc::new(AtomicCell::new(None));
         Ok((
-            TempFileBuffer { closed: closed.clone(), closed_file: closed_file.clone(), real_file: real_file.clone(), has_switched: false },
-            TempFileBufferWriter { closed, buffer_state, closed_file, real_file },
+            TempFileBuffer {
+                closed: closed.clone(),
+                closed_file: closed_file.clone(),
+                real_file: real_file.clone(),
+                has_switched: false,
+            },
+            TempFileBufferWriter {
+                closed,
+                buffer_state,
+                closed_file,
+                real_file,
+            },
         ))
     }
 
@@ -69,8 +79,18 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         let closed_file = Arc::new(AtomicCell::new(None));
         let real_file = Arc::new(AtomicCell::new(None));
         Ok((
-            TempFileBuffer { closed: closed.clone(), closed_file: closed_file.clone(), real_file: real_file.clone(), has_switched: true },
-            TempFileBufferWriter { closed, buffer_state, closed_file, real_file },
+            TempFileBuffer {
+                closed: closed.clone(),
+                closed_file: closed_file.clone(),
+                real_file: real_file.clone(),
+                has_switched: true,
+            },
+            TempFileBufferWriter {
+                closed,
+                buffer_state,
+                closed_file,
+                real_file,
+            },
         ))
     }
 
@@ -86,7 +106,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
     }
 
     pub fn await_file(self) -> ClosedFile<R> {
-        let &(ref lock, ref cvar) =  &*self.closed;
+        let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock();
 
         while !*closed {
@@ -103,23 +123,23 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 closed_file.seek(io::SeekFrom::Start(0)).unwrap();
                 io::copy(&mut closed_file, &mut real_file).unwrap();
                 ClosedFile::Real(real_file)
-            },
+            }
             (Some(_), Some(ClosedFile::Real(_))) => unreachable!(),
             (Some(real_file), None) => {
                 // Switch was called but no writes have happened
                 // Writer was dropped with no tempfile being created (or written to)
                 ClosedFile::Real(real_file)
-            },
+            }
             (None, Some(closed)) => {
                 // Switch was not called or called with subsequent writes
                 closed
-            },
+            }
             (None, None) => panic!("No data was written."),
         }
     }
 
     pub fn await_real_file(self) -> R {
-        let &(ref lock, ref cvar) =  &*self.closed;
+        let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock();
 
         while !*closed {
@@ -140,23 +160,21 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 closed_file.seek(io::SeekFrom::Start(0)).unwrap();
                 io::copy(&mut closed_file, &mut real_file).unwrap();
                 real_file
-            },
+            }
             (Some(_), Some(ClosedFile::Real(_))) => unreachable!(),
             (Some(real_file), None) => {
                 // Switch was called but no writes have happened
                 // Writer was dropped with no tempfile being created (or written to)
                 real_file
-            },
+            }
             (None, Some(ClosedFile::Temp(_))) => unreachable!(), // Checked self.has_switched
-            (None, Some(ClosedFile::Real(real_file))) => {
-                real_file
-            },
+            (None, Some(ClosedFile::Real(real_file))) => real_file,
             (None, None) => panic!("No data was written."),
         }
     }
 
     pub fn await_temp_file(self) -> File {
-        let &(ref lock, ref cvar) =  &*self.closed;
+        let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock();
 
         while !*closed {
@@ -173,15 +191,16 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
 
         match closed_file {
             Some(ClosedFile::Real(_)) => unreachable!(),
-            Some(ClosedFile::Temp(t)) => {
-                t
-            },
+            Some(ClosedFile::Temp(t)) => t,
             None => panic!("No data was written."),
         }
     }
 
-    pub fn expect_closed_write<O>(self, mut real: &mut O) -> io::Result<()> where O: Write {
-        let &(ref lock, ref cvar) =  &*self.closed;
+    pub fn expect_closed_write<O>(self, mut real: &mut O) -> io::Result<()>
+    where
+        O: Write,
+    {
+        let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock();
 
         while !*closed {
@@ -200,10 +219,9 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
             Some(ClosedFile::Temp(mut closed_file)) => {
                 closed_file.seek(io::SeekFrom::Start(0))?;
                 io::copy(&mut closed_file, &mut real)?;
-            },
+            }
             Some(ClosedFile::Real(_)) => unreachable!(),
             None => panic!("No data was written."),
-            
         }
         Ok(())
     }
@@ -214,7 +232,7 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
         match &mut self.buffer_state {
             BufferState::NotStarted => {
                 self.buffer_state = BufferState::Temp(Some(tempfile::tempfile()?));
-            },
+            }
             BufferState::Temp(ref mut file) => {
                 let real_file = self.real_file.swap(None).take();
                 if let Some(mut new_file) = real_file {
@@ -224,8 +242,8 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
                     io::copy(&mut file, &mut new_file)?;
                     self.buffer_state = BufferState::Real(Some(new_file));
                 }
-            },
-            BufferState::Real(_) => {},
+            }
+            BufferState::Real(_) => {}
         }
         Ok(())
     }
@@ -236,15 +254,15 @@ impl<R: Write + Send + 'static> Drop for TempFileBufferWriter<R> {
         let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock();
         match &mut self.buffer_state {
-            BufferState::NotStarted => {},
+            BufferState::NotStarted => {}
             BufferState::Temp(f) => {
                 let temp = f.take();
                 self.closed_file.swap(Some(ClosedFile::Temp(temp.unwrap())));
-            },
+            }
             BufferState::Real(f) => {
                 let real = f.take();
                 self.closed_file.swap(Some(ClosedFile::Real(real.unwrap())));
-            },
+            }
         }
         *closed = true;
         cvar.notify_one();

@@ -5,27 +5,26 @@ use std::pin::Pin;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
-use futures::try_join;
 use futures::channel::mpsc::{channel, Receiver};
-use futures::executor::{ThreadPool};
+use futures::executor::ThreadPool;
 use futures::future::{Either, Future, FutureExt};
 use futures::stream::StreamExt;
 use futures::task::SpawnExt;
+use futures::try_join;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::filebufferedchannel;
 use crate::idmap::IdMap;
 use crate::tell::Tell;
 use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-use crate::bigwig::{CHROM_TREE_MAGIC, CIR_TREE_MAGIC, ZoomHeader, Summary, ZoomRecord};
-
+use crate::bigwig::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
 
 pub(crate) struct ZoomInfo {
     pub(crate) resolution: u32,
     pub(crate) data: File,
-    pub(crate) sections: Box<dyn Iterator<Item=Section>>,
+    pub(crate) sections: Box<dyn Iterator<Item = Section>>,
 }
 
 #[derive(Debug)]
@@ -110,25 +109,31 @@ impl<W> From<io::IntoInnerError<W>> for WriteGroupsError {
 
 pub struct TempZoomInfo {
     pub resolution: u32,
-    pub data_write_future: Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future: Box<dyn Future<Output = Result<usize, WriteGroupsError>> + Send + Unpin>,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
-    pub sections: filebufferedchannel::Receiver<Section>,   
+    pub sections: filebufferedchannel::Receiver<Section>,
 }
 
 pub(crate) struct ChromProcessingInput {
-    pub(crate) zooms_channels: Vec<futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>>,
-    pub(crate) ftx: futures::channel::mpsc::Sender<Pin<Box<dyn Future<Output=io::Result<SectionData>> + Send>>>,
+    pub(crate) zooms_channels: Vec<
+        futures::channel::mpsc::Sender<
+            Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+        >,
+    >,
+    pub(crate) ftx: futures::channel::mpsc::Sender<
+        Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+    >,
 }
 
 pub struct ChromProcessingOutput {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
-    pub data_write_future: Box<dyn Future<Output=Result<usize, WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future: Box<dyn Future<Output = Result<usize, WriteGroupsError>> + Send + Unpin>,
     pub zooms: Vec<TempZoomInfo>,
 }
 
 pub struct ChromGroupRead {
-    pub summary_future: Pin<Box<dyn Future<Output=Result<Summary, WriteGroupsError>> + Send>>,
+    pub summary_future: Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError>> + Send>>,
     pub processing_output: ChromProcessingOutput,
 }
 
@@ -136,8 +141,7 @@ pub trait ChromGroupReadStreamingIterator {
     fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError>;
 }
 
-pub trait BBIWrite {
-}
+pub trait BBIWrite {}
 
 pub(crate) const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -151,7 +155,11 @@ pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::collections::HashMap<String, u32>, chrom_ids: &std::collections::HashMap<String, u32>) -> io::Result<()> {
+pub(crate) fn write_chrom_tree(
+    file: &mut BufWriter<File>,
+    chrom_sizes: std::collections::HashMap<String, u32>,
+    chrom_ids: &std::collections::HashMap<String, u32>,
+) -> io::Result<()> {
     let mut chroms: Vec<&String> = chrom_ids.keys().collect();
     chroms.sort();
     //println!("Used chroms {:?}", chroms);
@@ -178,7 +186,9 @@ pub(crate) fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::col
         let chrom_bytes = chrom.as_bytes();
         key_bytes[..chrom_bytes.len()].copy_from_slice(chrom_bytes);
         file.write_all(key_bytes)?;
-        let id = *chrom_ids.get(chrom).expect("Internal error. (Chrom not found).");
+        let id = *chrom_ids
+            .get(chrom)
+            .expect("Internal error. (Chrom not found).");
         file.write_u32::<NativeEndian>(id)?;
         let length = chrom_sizes.get(&chrom[..]);
         match length {
@@ -191,8 +201,11 @@ pub(crate) fn write_chrom_tree(file: &mut BufWriter<File>, chrom_sizes: std::col
     Ok(())
 }
 
-pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<ZoomRecord>) -> io::Result<SectionData> {
-    use libdeflater::{Compressor, CompressionLvl};
+pub(crate) async fn encode_zoom_section(
+    compress: bool,
+    items_in_section: Vec<ZoomRecord>,
+) -> io::Result<SectionData> {
+    use libdeflater::{CompressionLvl, Compressor};
 
     let mut bytes: Vec<u8> = vec![];
 
@@ -208,14 +221,16 @@ pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<Zo
         bytes.write_f32::<NativeEndian>(item.summary.min_val as f32)?;
         bytes.write_f32::<NativeEndian>(item.summary.max_val as f32)?;
         bytes.write_f32::<NativeEndian>(item.summary.sum as f32)?;
-        bytes.write_f32::<NativeEndian>(item.summary.sum_squares as f32)?; 
+        bytes.write_f32::<NativeEndian>(item.summary.sum_squares as f32)?;
     }
 
     let out_bytes = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
         let mut compressed_data = vec![0; max_sz];
-        let actual_sz = compressor.zlib_compress(&bytes, &mut compressed_data).unwrap();
+        let actual_sz = compressor
+            .zlib_compress(&bytes, &mut compressed_data)
+            .unwrap();
         compressed_data.resize(actual_sz, 0);
         compressed_data
     } else {
@@ -231,18 +246,30 @@ pub(crate) async fn encode_zoom_section(compress: bool, items_in_section: Vec<Zo
 }
 
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
-pub(crate) fn get_rtreeindex<S>(sections_stream: S, options: &BBIWriteOptions) -> (RTreeChildren, usize, u64) where S : Iterator<Item=Section> {
+pub(crate) fn get_rtreeindex<S>(
+    sections_stream: S,
+    options: &BBIWriteOptions,
+) -> (RTreeChildren, usize, u64)
+where
+    S: Iterator<Item = Section>,
+{
     use itertools::Itertools;
 
     let block_size = options.block_size as usize;
     let mut total_sections = 0;
 
     let sections: Vec<_> = sections_stream.collect();
-    let chunks = sections.into_iter().inspect(|_| total_sections += 1).chunks(block_size);
-    let mut current_nodes: Vec<RTreeChildren> = chunks.into_iter().map(|chunk| {
-        let current_chunk: Vec<_> = chunk.collect();
-        RTreeChildren::DataSections(current_chunk)
-    }).collect();
+    let chunks = sections
+        .into_iter()
+        .inspect(|_| total_sections += 1)
+        .chunks(block_size);
+    let mut current_nodes: Vec<RTreeChildren> = chunks
+        .into_iter()
+        .map(|chunk| {
+            let current_chunk: Vec<_> = chunk.collect();
+            RTreeChildren::DataSections(current_chunk)
+        })
+        .collect();
     let mut levels = 0;
     let nodes: RTreeChildren = loop {
         if current_nodes.len() == 1 {
@@ -250,26 +277,31 @@ pub(crate) fn get_rtreeindex<S>(sections_stream: S, options: &BBIWriteOptions) -
         }
         levels += 1;
         let chunks = current_nodes.into_iter().chunks(block_size);
-        current_nodes = chunks.into_iter().map(|chunk| {
-            RTreeChildren::Nodes(chunk.map(|c| {
-                match &c {
-                    RTreeChildren::DataSections(sections) => RTreeNode {
-                        start_chrom_idx: sections.first().unwrap().chrom,
-                        start_base: sections.first().unwrap().start,
-                        end_chrom_idx: sections.last().unwrap().chrom,
-                        end_base: sections.last().unwrap().end,
-                        children: c,
-                    },
-                    RTreeChildren::Nodes(children) => RTreeNode {
-                        start_chrom_idx: children.first().unwrap().start_chrom_idx,
-                        start_base: children.first().unwrap().start_base,
-                        end_chrom_idx: children.last().unwrap().end_chrom_idx,
-                        end_base: children.last().unwrap().end_base,
-                        children: c,
-                    },
-                }
-            }).collect())
-        }).collect()
+        current_nodes = chunks
+            .into_iter()
+            .map(|chunk| {
+                RTreeChildren::Nodes(
+                    chunk
+                        .map(|c| match &c {
+                            RTreeChildren::DataSections(sections) => RTreeNode {
+                                start_chrom_idx: sections.first().unwrap().chrom,
+                                start_base: sections.first().unwrap().start,
+                                end_chrom_idx: sections.last().unwrap().chrom,
+                                end_base: sections.last().unwrap().end,
+                                children: c,
+                            },
+                            RTreeChildren::Nodes(children) => RTreeNode {
+                                start_chrom_idx: children.first().unwrap().start_chrom_idx,
+                                start_base: children.first().unwrap().start_base,
+                                end_chrom_idx: children.last().unwrap().end_chrom_idx,
+                                end_base: children.last().unwrap().end_base,
+                                children: c,
+                            },
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
     };
 
     //println!("Total sections: {:?}", total_sections);
@@ -277,7 +309,6 @@ pub(crate) fn get_rtreeindex<S>(sections_stream: S, options: &BBIWriteOptions) -
     //println!("Levels: {:?}", levels);
     (nodes, levels, total_sections)
 }
-
 
 const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
 const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
@@ -302,24 +333,35 @@ fn write_tree(
     curr_level: usize,
     dest_level: usize,
     childnode_offset: u64,
-    options: &BBIWriteOptions
+    options: &BBIWriteOptions,
 ) -> io::Result<u64> {
-    let non_leafnode_full_block_size: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
-    let leafnode_full_block_size: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * u64::from(options.block_size);
+    let non_leafnode_full_block_size: u64 =
+        NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
+    let leafnode_full_block_size: u64 =
+        NODEHEADER_SIZE + LEAFNODE_SIZE * u64::from(options.block_size);
     debug_assert!(curr_level >= dest_level);
     let mut total_size = 0;
     if curr_level != dest_level {
         let mut next_offset_offset = 0;
         match nodes {
-            RTreeChildren::DataSections(_) => panic!("Datasections found at level: {:?}", curr_level),
+            RTreeChildren::DataSections(_) => {
+                panic!("Datasections found at level: {:?}", curr_level)
+            }
             RTreeChildren::Nodes(children) => {
                 for child in children {
-                    next_offset_offset += write_tree(&mut file, &child.children, curr_level - 1, dest_level, childnode_offset + next_offset_offset, options)?;
+                    next_offset_offset += write_tree(
+                        &mut file,
+                        &child.children,
+                        curr_level - 1,
+                        dest_level,
+                        childnode_offset + next_offset_offset,
+                        options,
+                    )?;
                 }
             }
         }
         total_size += next_offset_offset;
-        return Ok(total_size)
+        return Ok(total_size);
     }
     let isleaf = match nodes {
         RTreeChildren::DataSections(_) => 1,
@@ -343,7 +385,7 @@ fn write_tree(
                 file.write_u64::<NativeEndian>(section.size)?;
                 total_size += 32;
             }
-        },
+        }
         RTreeChildren::Nodes(children) => {
             file.write_u16::<NativeEndian>(children.len() as u16)?;
             total_size += 4;
@@ -372,7 +414,7 @@ pub(crate) fn write_rtreeindex(
     nodes: RTreeChildren,
     levels: usize,
     section_count: u64,
-    options: &BBIWriteOptions
+    options: &BBIWriteOptions,
 ) -> io::Result<()> {
     let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
@@ -389,7 +431,7 @@ pub(crate) fn write_rtreeindex(
                 file.write_u32::<NativeEndian>(sections.first().unwrap().start)?;
                 file.write_u32::<NativeEndian>(sections.last().unwrap().chrom)?;
                 file.write_u32::<NativeEndian>(sections.last().unwrap().end)?;
-            },
+            }
             RTreeChildren::Nodes(children) => {
                 file.write_u32::<NativeEndian>(children.first().unwrap().start_chrom_idx)?;
                 file.write_u32::<NativeEndian>(children.first().unwrap().start_base)?;
@@ -413,7 +455,12 @@ pub(crate) fn write_rtreeindex(
     Ok(())
 }
 
-pub(crate) fn write_zooms(mut file: &mut BufWriter<File>, zooms: Vec<ZoomInfo>, data_size: u64, options: &BBIWriteOptions) -> io::Result<Vec<ZoomHeader>> {
+pub(crate) fn write_zooms(
+    mut file: &mut BufWriter<File>,
+    zooms: Vec<ZoomInfo>,
+    data_size: u64,
+    options: &BBIWriteOptions,
+) -> io::Result<Vec<ZoomHeader>> {
     let mut zoom_entries: Vec<ZoomHeader> = vec![];
     let mut zoom_count = 0;
     let mut last_zoom_section_count = u64::max_value();
@@ -466,26 +513,39 @@ pub(crate) async fn write_vals<V>(
     mut vals_iter: V,
     file: BufWriter<File>,
     options: &BBIWriteOptions,
-)
--> Result<(
-    IdMap,
-    Summary,
-    BufWriter<File>,
-    Box<dyn Iterator<Item=Section> + 'static>,
-    Vec<ZoomInfo>
-), WriteGroupsError>
-where V : ChromGroupReadStreamingIterator + Send {
+) -> Result<
+    (
+        IdMap,
+        Summary,
+        BufWriter<File>,
+        Box<dyn Iterator<Item = Section> + 'static>,
+        Vec<ZoomInfo>,
+    ),
+    WriteGroupsError,
+>
+where
+    V: ChromGroupReadStreamingIterator + Send,
+{
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
-    type ZoomValue = (Vec<Box<dyn Iterator<Item=Section>>>, TempFileBuffer<File>, Option<TempFileBufferWriter<File>>);
-    
-    let mut zooms_map: HashMap<u32, ZoomValue> = std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4)).take(options.max_zooms as usize).map(|size| -> io::Result<_> {
-        let section_iter: Vec<Box<dyn Iterator<Item=Section>>> = vec![];
-        let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) = TempFileBuffer::new()?;
-        let value = (section_iter, buf, Some(write));
-        Ok((size, value))
-    }).collect::<io::Result<_>>()?;
+    type ZoomValue = (
+        Vec<Box<dyn Iterator<Item = Section>>>,
+        TempFileBuffer<File>,
+        Option<TempFileBufferWriter<File>>,
+    );
 
-    let mut section_iter: Vec<Box<dyn Iterator<Item=Section>>> = vec![];
+    let mut zooms_map: HashMap<u32, ZoomValue> =
+        std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
+            .take(options.max_zooms as usize)
+            .map(|size| -> io::Result<_> {
+                let section_iter: Vec<Box<dyn Iterator<Item = Section>>> = vec![];
+                let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
+                    TempFileBuffer::new()?;
+                let value = (section_iter, buf, Some(write));
+                Ok((size, value))
+            })
+            .collect::<io::Result<_>>()?;
+
+    let mut section_iter: Vec<Box<dyn Iterator<Item = Section>>> = vec![];
     let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
@@ -494,22 +554,42 @@ where V : ChromGroupReadStreamingIterator + Send {
         let next = vals_iter.next()?;
         match next {
             Some(Either::Left(read)) => {
-                let ChromGroupRead { summary_future, processing_output: ChromProcessingOutput { sections, mut data, data_write_future, mut zooms } } = read;
+                let ChromGroupRead {
+                    summary_future,
+                    processing_output:
+                        ChromProcessingOutput {
+                            sections,
+                            mut data,
+                            data_write_future,
+                            mut zooms,
+                        },
+                } = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
                 data.switch(raw_file);
-                for TempZoomInfo { resolution: size, data: buf, .. } in zooms.iter_mut() {
+                for TempZoomInfo {
+                    resolution: size,
+                    data: buf,
+                    ..
+                } in zooms.iter_mut()
+                {
                     let zoom = zooms_map.get_mut(size).unwrap();
                     let writer = zoom.2.take().unwrap();
                     buf.switch(writer);
                 }
-                
+
                 // All the futures are actually just handles, so these are purely for the result
                 let (chrom_summary, _num_sections) = try_join!(summary_future, data_write_future)?;
                 section_iter.push(Box::new(sections.into_iter()));
-                raw_file = data.await_real_file();  
+                raw_file = data.await_real_file();
 
-                for TempZoomInfo { resolution, data_write_future, data, sections } in zooms.into_iter() {
+                for TempZoomInfo {
+                    resolution,
+                    data_write_future,
+                    data,
+                    sections,
+                } in zooms.into_iter()
+                {
                     let zoom = zooms_map.get_mut(&resolution).unwrap();
                     let _num_sections = data_write_future.await?;
                     zoom.0.push(Box::new(sections.into_iter()));
@@ -517,9 +597,7 @@ where V : ChromGroupReadStreamingIterator + Send {
                 }
 
                 match &mut summary {
-                    None => {
-                        summary = Some(chrom_summary)
-                    },
+                    None => summary = Some(chrom_summary),
                     Some(summary) => {
                         summary.total_items += chrom_summary.total_items;
                         summary.bases_covered += chrom_summary.bases_covered;
@@ -529,7 +607,7 @@ where V : ChromGroupReadStreamingIterator + Send {
                         summary.sum_squares += chrom_summary.sum_squares;
                     }
                 }
-            },
+            }
             Some(Either::Right(chrom_ids)) => break chrom_ids,
             None => unreachable!(),
         }
@@ -544,24 +622,35 @@ where V : ChromGroupReadStreamingIterator + Send {
         sum_squares: 0.0,
     });
 
-    let zoom_infos: Vec<ZoomInfo> = zooms_map.into_iter().map(|(size, zoom)| {
-        drop(zoom.2);
-        let zoom_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(zoom.0.into_iter().flat_map(|s| s));
-        let closed_file = zoom.1.await_temp_file();
-        ZoomInfo {
-            resolution: size,
-            data: closed_file,
-            sections: zoom_iter,
-        }
-    }).collect();
-    let section_iter: Box<dyn Iterator<Item=Section> + 'static> = Box::new(section_iter.into_iter().flat_map(|s| s));
-    Ok((chrom_ids, summary_complete, BufWriter::new(raw_file), section_iter, zoom_infos))
+    let zoom_infos: Vec<ZoomInfo> = zooms_map
+        .into_iter()
+        .map(|(size, zoom)| {
+            drop(zoom.2);
+            let zoom_iter: Box<dyn Iterator<Item = Section> + 'static> =
+                Box::new(zoom.0.into_iter().flat_map(|s| s));
+            let closed_file = zoom.1.await_temp_file();
+            ZoomInfo {
+                resolution: size,
+                data: closed_file,
+                sections: zoom_iter,
+            }
+        })
+        .collect();
+    let section_iter: Box<dyn Iterator<Item = Section> + 'static> =
+        Box::new(section_iter.into_iter().flat_map(|s| s));
+    Ok((
+        chrom_ids,
+        summary_complete,
+        BufWriter::new(raw_file),
+        section_iter,
+        zoom_infos,
+    ))
 }
 
 pub(crate) async fn write_data<W: Write>(
     mut data_file: W,
     mut section_sender: filebufferedchannel::Sender<Section>,
-    mut frx: Receiver<impl Future<Output=io::Result<SectionData>> + Send >
+    mut frx: Receiver<impl Future<Output = io::Result<SectionData>> + Send>,
 ) -> Result<usize, WriteGroupsError> {
     let mut current_offset = 0;
     let mut total = 0;
@@ -570,13 +659,15 @@ pub(crate) async fn write_data<W: Write>(
         total += 1;
         let size = section.data.len() as u64;
         data_file.write_all(&section.data)?;
-        section_sender.send(Section {
-            chrom: section.chrom,
-            start: section.start,
-            end: section.end,
-            offset: current_offset,
-            size,
-        }).expect("Couldn't send section.");
+        section_sender
+            .send(Section {
+                chrom: section.chrom,
+                start: section.start,
+                end: section.end,
+                offset: current_offset,
+                size,
+            })
+            .expect("Couldn't send section.");
         current_offset += size;
     }
     Ok(total)
@@ -593,27 +684,33 @@ pub(crate) fn get_chromprocessing(
         let file = BufWriter::new(write);
 
         let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
-        let (sections_remote, sections_handle) = write_data(file, section_sender, frx).remote_handle();
+        let (sections_remote, sections_handle) =
+            write_data(file, section_sender, frx).remote_handle();
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
         (sections_handle, buf, section_receiver)
     };
 
-    let processed_zooms: Vec<_> = std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4)).take(options.max_zooms as usize).map(|size| -> io::Result<_> {
-        let (ftx, frx) = channel::<_>(100);
-        let (buf, write) = TempFileBuffer::new()?;
-        let file = BufWriter::new(write);
+    let processed_zooms: Vec<_> =
+        std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
+            .take(options.max_zooms as usize)
+            .map(|size| -> io::Result<_> {
+                let (ftx, frx) = channel::<_>(100);
+                let (buf, write) = TempFileBuffer::new()?;
+                let file = BufWriter::new(write);
 
-        let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
-        let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
-        pool.spawn(remote).expect("Couldn't spawn future.");
-        let zoom_info = TempZoomInfo {
-            resolution: size,
-            data_write_future: Box::new(handle),
-            data: buf,
-            sections: section_receiver,
-        };
-        Ok((zoom_info, ftx))
-    }).collect::<io::Result<_>>()?;
+                let (section_sender, section_receiver) =
+                    filebufferedchannel::channel::<Section>(200);
+                let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
+                pool.spawn(remote).expect("Couldn't spawn future.");
+                let zoom_info = TempZoomInfo {
+                    resolution: size,
+                    data_write_future: Box::new(handle),
+                    data: buf,
+                    sections: section_receiver,
+                };
+                Ok((zoom_info, ftx))
+            })
+            .collect::<io::Result<_>>()?;
     let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms.into_iter().unzip();
 
     Ok((
@@ -626,6 +723,6 @@ pub(crate) fn get_chromprocessing(
             data: buf,
             data_write_future: Box::new(sections_handle),
             zooms: zoom_infos,
-        }
+        },
     ))
 }

@@ -9,7 +9,11 @@ use bigtools::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize}
 use bigtools::seekableread::{Reopen, SeekableRead};
 use bigtools::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bigwig: BigWigRead<R, S>, mut out_file: File, nthreads: usize) -> std::io::Result<()> {
+pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+    bigwig: BigWigRead<R, S>,
+    mut out_file: File,
+    nthreads: usize,
+) -> std::io::Result<()> {
     /*
     // This is the simple single-threaded approach
     let mut chroms: Vec<ChromAndSize> = bigwig.get_chroms();
@@ -24,22 +28,39 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bigwig: BigWi
     }
     */
 
-    let mut pool = futures::executor::ThreadPoolBuilder::new().pool_size(nthreads).create().expect("Unable to create thread pool.");
+    let mut pool = futures::executor::ThreadPoolBuilder::new()
+        .pool_size(nthreads)
+        .create()
+        .expect("Unable to create thread pool.");
 
-    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig.get_chroms().into_iter().map(|chrom| {
-        let bigwig = bigwig.clone();
-        let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) = TempFileBuffer::new()?;
-        let writer = io::BufWriter::new(file);
-        async fn file_future<R: Reopen<S> + 'static, S: SeekableRead + 'static>(mut bigwig: BigWigRead<R, S>, chrom: ChromAndSize, mut writer: io::BufWriter<TempFileBufferWriter<File>>) -> io::Result<()> {
-            for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
-                let val = raw_val?;
-                writer.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.value))?;
-            }
-            Ok(())
-        };
-        let handle = pool.spawn_with_handle(file_future(bigwig, chrom, writer)).expect("Couldn't spawn.");
-        Ok((handle, buf))
-    }).collect::<Vec<_>>();
+    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig
+        .get_chroms()
+        .into_iter()
+        .map(|chrom| {
+            let bigwig = bigwig.clone();
+            let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
+                TempFileBuffer::new()?;
+            let writer = io::BufWriter::new(file);
+            async fn file_future<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+                mut bigwig: BigWigRead<R, S>,
+                chrom: ChromAndSize,
+                mut writer: io::BufWriter<TempFileBufferWriter<File>>,
+            ) -> io::Result<()> {
+                for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
+                    let val = raw_val?;
+                    writer.write_fmt(format_args!(
+                        "{}\t{}\t{}\t{}\n",
+                        chrom.name, val.start, val.end, val.value
+                    ))?;
+                }
+                Ok(())
+            };
+            let handle = pool
+                .spawn_with_handle(file_future(bigwig, chrom, writer))
+                .expect("Couldn't spawn.");
+            Ok((handle, buf))
+        })
+        .collect::<Vec<_>>();
 
     for res in chrom_files {
         let (f, mut buf) = res.unwrap();

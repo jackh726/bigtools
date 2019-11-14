@@ -13,21 +13,32 @@ struct Options {
     delimiter: String,
 }
 
-fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mut bigwigin: BigWigRead<R, S>, out: File, options: Options) -> io::Result<()> {
+fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+    bedinpath: &Path,
+    mut bigwigin: BigWigRead<R, S>,
+    out: File,
+    options: Options,
+) -> io::Result<()> {
     let uniquenames = {
         if !options.withnames {
             true
         } else {
-            let reader = BufReader::new(File::open(bedinpath)?); 
+            let reader = BufReader::new(File::open(bedinpath)?);
             let mut lines = reader
                 .lines()
                 .take(10)
-                .map(|line| -> io::Result<Option<String>>{
+                .map(|line| -> io::Result<Option<String>> {
                     let l = line?;
                     let mut split = l.splitn(5, '\t');
-                    let _chrom = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _start = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _end = split.next().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _chrom = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _start = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
+                    let _end = split
+                        .next()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
                     let name = split.next();
                     Ok(match name {
                         None => None,
@@ -51,7 +62,9 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mu
         let start = split.next().expect("Missing start").parse::<u32>().unwrap();
         let end = split.next().expect("Missing end").parse::<u32>().unwrap();
         let name = split.next();
-        let interval = bigwigin.get_interval(chrom, start, end)?.collect::<Result<Vec<_>, _>>()?;
+        let interval = bigwigin
+            .get_interval(chrom, start, end)?
+            .collect::<Result<Vec<_>, _>>()?;
         let size = end - start;
         let mut vals: Vec<f32> = vec![0f32; size as usize];
         for val in interval {
@@ -67,7 +80,10 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mu
             } else {
                 format!("{}:{}-{}", chrom, start, end)
             };
-            outwriter.write_fmt(format_args!("{}{}{}\n", uniquename, &options.delimiter, vals_string))?;
+            outwriter.write_fmt(format_args!(
+                "{}{}{}\n",
+                uniquename, &options.delimiter, vals_string
+            ))?;
         } else {
             outwriter.write_fmt(format_args!("{}\n", vals_string))?;
         }
@@ -76,7 +92,7 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(bedinpath: &Path, mu
 }
 
 fn main() -> Result<(), BigWigReadAttachError> {
-        let matches = App::new("BigWigInfo")
+    let matches = App::new("BigWigInfo")
         .arg(Arg::with_name("bigwig")
                 .help("The input bigwig file")
                 .index(1)

@@ -9,15 +9,15 @@ fn test() -> io::Result<()> {
     use tempfile;
 
     use bigtools::bedparser::{self, BedParser};
-    use bigtools::chromvalues::{ChromGroups, ChromValues};
     use bigtools::bigwig::{BBIRead, BigBedRead, BigBedWrite};
+    use bigtools::chromvalues::{ChromGroups, ChromValues};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
 
     let mut bed = dir.clone();
     bed.push("small.bed");
-    
+
     let first = {
         let infile = File::open(bed.clone())?;
         let mut vals_iter = BedParser::from_bed_file(infile);
@@ -25,7 +25,10 @@ fn test() -> io::Result<()> {
         group.next()?.unwrap()
     };
 
-    let pool = futures::executor::ThreadPoolBuilder::new().pool_size(6).create().expect("Unable to create thread pool.");
+    let pool = futures::executor::ThreadPoolBuilder::new()
+        .pool_size(6)
+        .create()
+        .expect("Unable to create thread pool.");
 
     let infile = File::open(bed)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -40,12 +43,24 @@ fn test() -> io::Result<()> {
     chrom_map.insert("chr19".to_string(), 58617616);
 
     let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigBedWrite::begin_processing_chrom(chrom, chrom_id, chrom_length, group, pool.clone(), options.clone())
+        BigBedWrite::begin_processing_chrom(
+            chrom,
+            chrom_id,
+            chrom_length,
+            group,
+            pool.clone(),
+            options.clone(),
+        )
     };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(vals_iter, chrom_map.clone(), Box::new(parse_fn));
+    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+        vals_iter,
+        chrom_map.clone(),
+        Box::new(parse_fn),
+    );
     outb.write_groups(chrom_map, chsi).unwrap();
 
-    let mut bwread = BigBedRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap(); 
+    let mut bwread =
+        BigBedRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 3);

@@ -1,81 +1,129 @@
-use std::io::{self, Read, Seek, SeekFrom};
-use std::io::{BufReader};
 use std::fs::File;
+use std::io::BufReader;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 
-use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
-use crate::bbiread::{BBIRead, BBIFileReadInfoError, BBIFileInfo, Block, ChromAndSize, ZoomIntervalIter, read_info, get_block_data};
+use crate::bbiread::{
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, Block, ChromAndSize,
+    ZoomIntervalIter,
+};
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
+use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
-
-struct IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+struct IntervalIter<'a, I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     bigbed: &'a mut BigBedRead<R, S>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item=BedEntry> + Send + 'a>>,
+    vals: Option<Box<dyn Iterator<Item = BedEntry> + Send + 'a>>,
     expected_chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.vals {
-                Some(vals) => {
-                    match vals.next() {
-                        Some(v) => { return Some(Ok(v)); }
-                        None => { self.vals = None; }
+                Some(vals) => match vals.next() {
+                    Some(v) => {
+                        return Some(Ok(v));
+                    }
+                    None => {
+                        self.vals = None;
                     }
                 },
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_block_entries(self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
-                        Ok(vals) => { self.vals = Some(vals); }
-                        Err(e) => { return Some(Err(e)); }
+                    match get_block_entries(
+                        self.bigbed,
+                        current_block,
+                        &mut self.known_offset,
+                        self.expected_chrom,
+                        self.start,
+                        self.end,
+                    ) {
+                        Ok(vals) => {
+                            self.vals = Some(vals);
+                        }
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
-                },
+                }
             }
         }
     }
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+struct OwnedIntervalIter<I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     bigbed: BigBedRead<R, S>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item=BedEntry> + Send>>,
+    vals: Option<Box<dyn Iterator<Item = BedEntry> + Send>>,
     expected_chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S> where I: Iterator<Item=Block> + Send, R: Reopen<S>, S: SeekableRead {
+impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
+where
+    I: Iterator<Item = Block> + Send,
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     type Item = io::Result<BedEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.vals {
-                Some(vals) => {
-                    match vals.next() {
-                        Some(v) => { return Some(Ok(v)); }
-                        None => { self.vals = None; }
+                Some(vals) => match vals.next() {
+                    Some(v) => {
+                        return Some(Ok(v));
+                    }
+                    None => {
+                        self.vals = None;
                     }
                 },
                 None => {
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
-                    match get_block_entries(&mut self.bigbed, current_block, &mut self.known_offset, self.expected_chrom, self.start, self.end) {
-                        Ok(vals) => { self.vals = Some(vals); }
-                        Err(e) => { return Some(Err(e)); }
+                    match get_block_entries(
+                        &mut self.bigbed,
+                        current_block,
+                        &mut self.known_offset,
+                        self.expected_chrom,
+                        self.start,
+                        self.end,
+                    ) {
+                        Ok(vals) => {
+                            self.vals = Some(vals);
+                        }
+                        Err(e) => {
+                            return Some(Err(e));
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -104,13 +152,21 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
     }
 }
 
-pub struct BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead {
+pub struct BigBedRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
 }
 
-impl<R, S> Clone for BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead {
+impl<R, S> Clone for BigBedRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     fn clone(&self) -> Self {
         BigBedRead {
             info: self.info.clone(),
@@ -120,7 +176,11 @@ impl<R, S> Clone for BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead {
     }
 }
 
-impl<R, S> BBIRead<S> for BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead{
+impl<R, S> BBIRead<S> for BigBedRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -140,7 +200,14 @@ impl<R, S> BBIRead<S> for BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead{
     }
 
     fn get_chroms(&self) -> Vec<ChromAndSize> {
-        self.info.chrom_info.iter().map(|c| ChromAndSize { name: c.name.clone(), length: c.length }).collect::<Vec<_>>()
+        self.info
+            .chrom_info
+            .iter()
+            .map(|c| ChromAndSize {
+                name: c.name.clone(),
+                length: c.length,
+            })
+            .collect::<Vec<_>>()
     }
 }
 
@@ -155,7 +222,11 @@ impl BigBedRead<ReopenableFile, File> {
     }
 }
 
-impl<R,S> BigBedRead<R,S> where R: Reopen<S>, S: SeekableRead {
+impl<R, S> BigBedRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
     pub fn from(reopen: R) -> Result<Self, BigBedReadAttachError> {
         let fp = reopen.reopen()?;
         let file = BufReader::new(fp);
@@ -166,7 +237,7 @@ impl<R,S> BigBedRead<R,S> where R: Reopen<S>, S: SeekableRead {
             Ok(info) => info,
         };
         match info.filetype {
-            BBIFile::BigBed => {},
+            BBIFile::BigBed => {}
             _ => return Err(BigBedReadAttachError::NotABigBed),
         }
 
@@ -178,11 +249,26 @@ impl<R,S> BigBedRead<R,S> where R: Reopen<S>, S: SeekableRead {
     }
 }
 
-impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRead {
-    pub fn get_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<BedEntry>> + Send + 'a> {
+impl<R: 'static, S: 'static> BigBedRead<R, S>
+where
+    R: Reopen<S>,
+    S: SeekableRead,
+{
+    pub fn get_interval<'a>(
+        &'a mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<BedEntry>> + Send + 'a> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
-        let chrom_ix = self.get_info().chrom_info.iter().find(|&x| x.name == chrom_name).unwrap().id;
+        let chrom_ix = self
+            .get_info()
+            .chrom_info
+            .iter()
+            .find(|&x| x.name == chrom_name)
+            .unwrap()
+            .id;
         Ok(IntervalIter {
             bigbed: self,
             known_offset: 0,
@@ -194,10 +280,21 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
         })
     }
 
-    pub fn get_interval_move(mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<impl Iterator<Item=io::Result<BedEntry>> + Send> {
+    pub fn get_interval_move(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<BedEntry>> + Send> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
-        let chrom_ix = self.get_info().chrom_info.iter().find(|&x| x.name == chrom_name).unwrap().id;
+        let chrom_ix = self
+            .get_info()
+            .chrom_info
+            .iter()
+            .find(|&x| x.name == chrom_name)
+            .unwrap()
+            .id;
         Ok(OwnedIntervalIter {
             bigbed: self,
             known_offset: 0,
@@ -209,11 +306,25 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
         })
     }
 
-    pub fn get_zoom_interval<'a>(&'a mut self, chrom_name: &str, start: u32, end: u32, reduction_level: u32) -> io::Result<impl Iterator<Item=io::Result<ZoomRecord>> + Send + 'a> {
-        let zoom_header = match self.info.zoom_headers.iter().find(|h| h.reduction_level == reduction_level) {
+    pub fn get_zoom_interval<'a>(
+        &'a mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+        reduction_level: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+        let zoom_header = match self
+            .info
+            .zoom_headers
+            .iter()
+            .find(|h| h.reduction_level == reduction_level)
+        {
             Some(h) => h,
             None => {
-                return Err(io::Error::new(io::ErrorKind::Other, "No reduction level found."));
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No reduction level found.",
+                ));
             }
         };
 
@@ -226,21 +337,35 @@ impl<R: 'static, S: 'static> BigBedRead<R, S> where R: Reopen<S>, S: SeekableRea
 }
 
 // TODO: remove expected_chrom
-fn get_block_entries<R: Reopen<S>, S: SeekableRead>(bigbed: &mut BigBedRead<R, S>, block: Block, known_offset: &mut u64, expected_chrom: u32, start: u32, end: u32) -> io::Result<Box<dyn Iterator<Item=BedEntry> + Send>> {
+fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
+    bigbed: &mut BigBedRead<R, S>,
+    block: Block,
+    known_offset: &mut u64,
+    expected_chrom: u32,
+    start: u32,
+    end: u32,
+) -> io::Result<Box<dyn Iterator<Item = BedEntry> + Send>> {
     let mut block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
     let mut entries: Vec<BedEntry> = Vec::new();
 
     let mut read_entry = || -> io::Result<BedEntry> {
         let _chrom_id = block_data_mut.read_u32()?;
-        assert_eq!(_chrom_id, expected_chrom, "BUG: bigBed had multiple chroms in a section");
+        assert_eq!(
+            _chrom_id, expected_chrom,
+            "BUG: bigBed had multiple chroms in a section"
+        );
         let chrom_start = block_data_mut.read_u32()?;
         let chrom_end = block_data_mut.read_u32()?;
-        let s: Vec<u8> = block_data_mut.by_ref().bytes().take_while(|c| {
-            if let Ok(c) = c {
-                return *c != b'\0';
-            }
-            false
-        }).collect::<Result<Vec<u8>,_>>()?;
+        let s: Vec<u8> = block_data_mut
+            .by_ref()
+            .bytes()
+            .take_while(|c| {
+                if let Ok(c) = c {
+                    return *c != b'\0';
+                }
+                false
+            })
+            .collect::<Result<Vec<u8>, _>>()?;
         let rest = String::from_utf8(s).unwrap();
         Ok(BedEntry {
             start: chrom_start,
@@ -249,9 +374,9 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(bigbed: &mut BigBedRead<R, S
         })
     };
     while let Ok(entry) = read_entry() {
-        // TODO: the entire section could be terminated by many 0s. Need to identify a better way of filtering out these    
+        // TODO: the entire section could be terminated by many 0s. Need to identify a better way of filtering out these
         if entry.start == 0 && entry.end == 0 {
-            break
+            break;
         }
         if entry.end >= start && entry.start <= end {
             entries.push(entry)
