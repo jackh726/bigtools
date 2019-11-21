@@ -60,12 +60,21 @@ pub(crate) enum RTreeChildren {
 }
 
 #[derive(Clone)]
+pub enum InputSortType {
+    ALL,
+    START,
+    // TODO
+    //NONE,
+}
+
+#[derive(Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
     pub items_per_slot: u32,
     pub block_size: u32,
     pub initial_zoom_size: u32,
     pub max_zooms: u32,
+    pub input_sort_type: InputSortType,
 }
 
 impl Default for BBIWriteOptions {
@@ -76,6 +85,7 @@ impl Default for BBIWriteOptions {
             block_size: 256,
             initial_zoom_size: 160,
             max_zooms: 10,
+            input_sort_type: InputSortType::ALL,
         }
     }
 }
@@ -164,13 +174,14 @@ pub(crate) fn write_chrom_tree(
     chroms.sort();
     //println!("Used chroms {:?}", chroms);
 
-    file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
     let item_count = chroms.len() as u64;
     // TODO: for now, always just use the length of chroms (if less than 256). This means we don't have to implement writing non-leaf nodes for now...
     // TODO: make this configurable
     let block_size = std::cmp::max(256, item_count) as u32;
-    file.write_u32::<NativeEndian>(block_size)?;
     let max_bytes = chroms.iter().map(|a| a.len() as u32).fold(0, u32::max);
+
+    file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
+    file.write_u32::<NativeEndian>(block_size)?;
     file.write_u32::<NativeEndian>(max_bytes)?;
     file.write_u32::<NativeEndian>(8)?; // size of Id (u32) + Size (u32)
     file.write_u64::<NativeEndian>(item_count)?;
@@ -340,7 +351,6 @@ fn write_tree(
     let leafnode_full_block_size: u64 =
         NODEHEADER_SIZE + LEAFNODE_SIZE * u64::from(options.block_size);
     debug_assert!(curr_level >= dest_level);
-    let mut total_size = 0;
     if curr_level != dest_level {
         let mut next_offset_offset = 0;
         match nodes {
@@ -356,26 +366,24 @@ fn write_tree(
                         dest_level,
                         childnode_offset + next_offset_offset,
                         options,
-                    )?;
+                    )? * u64::from(options.block_size);
                 }
             }
         }
-        total_size += next_offset_offset;
-        return Ok(total_size);
+        return Ok(next_offset_offset);
     }
     let isleaf = match nodes {
         RTreeChildren::DataSections(_) => 1,
         RTreeChildren::Nodes(_) => 0,
     };
 
-    //println!("Level: {:?}", curr_level);
-    //println!("Writing {}. Isleaf: {} At: {}", "node", isleaf, file.seek(SeekFrom::Current(0))?);
+    //eprintln!("Level: {:?}", curr_level);
+    //eprintln!("Writing {}. Isleaf: {} At: {}", "node", isleaf, file.seek(SeekFrom::Current(0))?);
     file.write_u8(isleaf)?;
     file.write_u8(0)?;
     match &nodes {
         RTreeChildren::DataSections(sections) => {
             file.write_u16::<NativeEndian>(sections.len() as u16)?;
-            total_size += 4;
             for section in sections {
                 file.write_u32::<NativeEndian>(section.chrom)?;
                 file.write_u32::<NativeEndian>(section.start)?;
@@ -383,12 +391,11 @@ fn write_tree(
                 file.write_u32::<NativeEndian>(section.end)?;
                 file.write_u64::<NativeEndian>(section.offset)?;
                 file.write_u64::<NativeEndian>(section.size)?;
-                total_size += 32;
             }
+            return Ok(4 + sections.len() as u64 * 32);
         }
         RTreeChildren::Nodes(children) => {
             file.write_u16::<NativeEndian>(children.len() as u16)?;
-            total_size += 4;
             let full_size = if (curr_level - 1) > 0 {
                 non_leafnode_full_block_size
             } else {
@@ -401,12 +408,15 @@ fn write_tree(
                 file.write_u32::<NativeEndian>(child.end_chrom_idx)?;
                 file.write_u32::<NativeEndian>(child.end_base)?;
                 file.write_u64::<NativeEndian>(child_offset)?;
-                total_size += 24;
             }
+            let child_size = if (curr_level - 1) > 0 {
+                24
+            } else {
+                32
+            };
+            return Ok(4 + children.len() as u64 * child_size)
         }
     }
-
-    Ok(total_size)
 }
 
 pub(crate) fn write_rtreeindex(
@@ -421,28 +431,26 @@ pub(crate) fn write_rtreeindex(
     calculate_offsets(&mut index_offsets, &nodes, levels);
 
     let end_of_data = file.seek(SeekFrom::Current(0))?;
-    {
-        file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
-        file.write_u32::<NativeEndian>(options.block_size)?;
-        file.write_u64::<NativeEndian>(section_count)?;
-        match &nodes {
-            RTreeChildren::DataSections(sections) => {
-                file.write_u32::<NativeEndian>(sections.first().unwrap().chrom)?;
-                file.write_u32::<NativeEndian>(sections.first().unwrap().start)?;
-                file.write_u32::<NativeEndian>(sections.last().unwrap().chrom)?;
-                file.write_u32::<NativeEndian>(sections.last().unwrap().end)?;
-            }
-            RTreeChildren::Nodes(children) => {
-                file.write_u32::<NativeEndian>(children.first().unwrap().start_chrom_idx)?;
-                file.write_u32::<NativeEndian>(children.first().unwrap().start_base)?;
-                file.write_u32::<NativeEndian>(children.last().unwrap().end_chrom_idx)?;
-                file.write_u32::<NativeEndian>(children.last().unwrap().end_base)?;
-            }
+    file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
+    file.write_u32::<NativeEndian>(options.block_size)?;
+    file.write_u64::<NativeEndian>(section_count)?;
+    match &nodes {
+        RTreeChildren::DataSections(sections) => {
+            file.write_u32::<NativeEndian>(sections.first().unwrap().chrom)?;
+            file.write_u32::<NativeEndian>(sections.first().unwrap().start)?;
+            file.write_u32::<NativeEndian>(sections.last().unwrap().chrom)?;
+            file.write_u32::<NativeEndian>(sections.last().unwrap().end)?;
         }
-        file.write_u64::<NativeEndian>(end_of_data)?;
-        file.write_u32::<NativeEndian>(options.items_per_slot)?;
-        file.write_u32::<NativeEndian>(0)?;
+        RTreeChildren::Nodes(children) => {
+            file.write_u32::<NativeEndian>(children.first().unwrap().start_chrom_idx)?;
+            file.write_u32::<NativeEndian>(children.first().unwrap().start_base)?;
+            file.write_u32::<NativeEndian>(children.last().unwrap().end_chrom_idx)?;
+            file.write_u32::<NativeEndian>(children.last().unwrap().end_base)?;
+        }
     }
+    file.write_u64::<NativeEndian>(end_of_data)?;
+    file.write_u32::<NativeEndian>(options.items_per_slot)?;
+    file.write_u32::<NativeEndian>(0)?;
 
     let mut next_offset = file.seek(SeekFrom::Current(0))?;
     for level in (0..=levels).rev() {

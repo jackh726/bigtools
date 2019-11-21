@@ -24,6 +24,7 @@ pub struct BedParserChromGroupStreamingIterator<
     G: ChromGroups<V, C>,
     H: BuildHasher,
 > {
+    allow_out_of_order_chroms: bool,
     chrom_groups: G,
     callable: ChromGroupReadFunction<C>,
     last_chrom: Option<String>,
@@ -40,8 +41,10 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
         vals: G,
         chrom_map: HashMap<String, u32, H>,
         callable: ChromGroupReadFunction<C>,
+        allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserChromGroupStreamingIterator {
+            allow_out_of_order_chroms,
             chrom_groups: vals,
             callable,
             last_chrom: None,
@@ -63,7 +66,7 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
                     // TODO: test this correctly fails
-                    if c >= chrom {
+                    if !self.allow_out_of_order_chroms && c >= chrom {
                         return Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                     }
                 }

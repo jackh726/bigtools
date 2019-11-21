@@ -213,6 +213,7 @@ pub(crate) fn read_info<R: SeekableRead>(
 
     let mut chrom_info = Vec::with_capacity(item_count as usize);
     read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
+    chrom_info.sort_by(|c1, c2| c1.name.cmp(&c2.name));
 
     let info = BBIFileInfo {
         filetype,
@@ -278,16 +279,22 @@ fn read_chrom_tree_block<R: SeekableRead>(
             });
         }
     } else {
-        let mut current_position: u64;
+        // First, go through and get child blocks
+        let mut children: Vec<u64> = vec![];
+        children.reserve_exact(count as usize);
         for _ in 0..count {
+            // We don't need this, but have to read it
             let mut key_bytes = vec![0u8; key_size as usize];
             f.read_exact(&mut key_bytes)?;
+
             // TODO: could add specific find here by comparing key string
             let child_offset = f.read_u64()?;
-            current_position = f.seek(SeekFrom::Current(0))?;
-            f.seek(SeekFrom::Start(child_offset))?;
+            children.push(child_offset);
+        }
+        // Then go through each child block
+        for child in children {
+            f.seek(SeekFrom::Start(child))?;
             read_chrom_tree_block(f, chroms, key_size)?;
-            f.seek(SeekFrom::Start(current_position))?;
         }
     }
     Ok(())
@@ -335,7 +342,7 @@ fn search_overlapping_blocks<R: SeekableRead>(
     assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
     let _reserved = file.read_u8()?;
     let count: u16 = file.read_u16()?;
-    //println!("Index: {:?} {:?} {:?}", isleaf, _reserved, count);
+    //eprintln!("Index: {:?} {:?} {:?}", isleaf, _reserved, count);
 
     let mut childblocks: Vec<u64> = vec![];
     for _ in 0..count {
@@ -343,44 +350,35 @@ fn search_overlapping_blocks<R: SeekableRead>(
         let start_base = file.read_u32()?;
         let end_chrom_ix = file.read_u32()?;
         let end_base = file.read_u32()?;
+        let block_overlaps = overlaps(
+            chrom_ix,
+            start,
+            end,
+            start_chrom_ix,
+            start_base,
+            end_chrom_ix,
+            end_base,
+        );
         if isleaf == 1 {
             let data_offset = file.read_u64()?;
             let data_size = file.read_u64()?;
-            if !overlaps(
-                chrom_ix,
-                start,
-                end,
-                start_chrom_ix,
-                start_base,
-                end_chrom_ix,
-                end_base,
-            ) {
-                continue;
+            if block_overlaps {
+                //eprintln!("Overlaps (leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
+                blocks.push(Block {
+                    offset: data_offset,
+                    size: data_size,
+                });
             }
-            //println!("Overlaps (leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
-            blocks.push(Block {
-                offset: data_offset,
-                size: data_size,
-            })
         } else {
             let data_offset = file.read_u64()?;
-            if !overlaps(
-                chrom_ix,
-                start,
-                end,
-                start_chrom_ix,
-                start_base,
-                end_chrom_ix,
-                end_base,
-            ) {
-                continue;
+            if block_overlaps {
+                //eprintln!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
+                childblocks.push(data_offset);
             }
-            //println!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
-            childblocks.push(data_offset);
         }
     }
     for childblock in childblocks {
-        //println!("Seeking to {:?}", childblock);
+        //eprintln!("Seeking to {:?}", childblock);
         file.seek(SeekFrom::Start(childblock))?;
         search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
     }
