@@ -4,8 +4,8 @@ use std::io::{BufRead, BufReader};
 
 use clap::{App, Arg};
 
-use bigtools::bedparser::{self, BedParser};
 use bigtools::bbiwrite::InputSortType;
+use bigtools::bedparser::{self, BedParser};
 use bigtools::bigwig::{BigWigWrite, WriteGroupsError};
 
 fn main() -> Result<(), WriteGroupsError> {
@@ -77,7 +77,10 @@ fn main() -> Result<(), WriteGroupsError> {
             return Ok(());
         }
         Some(sorted) => {
-            eprintln!("Invalid option for `sorted`: `{}`. Options are `all`, `start`, or `none`.", sorted);
+            eprintln!(
+                "Invalid option for `sorted`: `{}`. Options are `all`, `start`, or `none`.",
+                sorted
+            );
             return Ok(());
         }
     };

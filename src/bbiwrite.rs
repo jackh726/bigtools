@@ -409,12 +409,8 @@ fn write_tree(
                 file.write_u32::<NativeEndian>(child.end_base)?;
                 file.write_u64::<NativeEndian>(child_offset)?;
             }
-            let child_size = if (curr_level - 1) > 0 {
-                24
-            } else {
-                32
-            };
-            return Ok(4 + children.len() as u64 * child_size)
+            let child_size = if (curr_level - 1) > 0 { 24 } else { 32 };
+            return Ok(4 + children.len() as u64 * child_size);
         }
     }
 }

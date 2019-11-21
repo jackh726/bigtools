@@ -607,9 +607,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-/*
-    extern crate test;
-*/
+    /*
+        extern crate test;
+    */
     #[test]
     fn test_merge_many() {
         let end = 15000;
@@ -635,43 +635,43 @@ mod tests {
         assert!(last_end == end);
     }
 
-/*
-    #[bench]
-    fn bench_merge_many(b: &mut test::Bencher) {
-        let first = generate_sections_seq(50, 150000, 1234);
-        let second = generate_sections_seq(50, 150000, 12345);
-        b.iter(|| {
-            let merged = merge_sections_many(vec![
-                first.clone().into_iter().map(Result::Ok),
-                second.clone().into_iter().map(Result::Ok),
-            ]);
-            let mut last_start = 0;
-            for val in merged {
-                assert!(last_start <= val.start);
-                last_start = val.start;
-            }
-        });
-    }
+    /*
+        #[bench]
+        fn bench_merge_many(b: &mut test::Bencher) {
+            let first = generate_sections_seq(50, 150000, 1234);
+            let second = generate_sections_seq(50, 150000, 12345);
+            b.iter(|| {
+                let merged = merge_sections_many(vec![
+                    first.clone().into_iter().map(Result::Ok),
+                    second.clone().into_iter().map(Result::Ok),
+                ]);
+                let mut last_start = 0;
+                for val in merged {
+                    assert!(last_start <= val.start);
+                    last_start = val.start;
+                }
+            });
+        }
 
-    #[bench]
-    fn bench_merge_many_skiplarge(b: &mut test::Bencher) {
-        let first = generate_sections_seq(50, 15000, 1234);
-        let second = generate_sections_seq_skip(50, 15000, 12345, 50.0, 200.0);
-        let third = generate_sections_seq_skip(50, 15000, 123456, 0.0, 0.0);
-        b.iter(|| {
-            let merged = merge_sections_many(vec![
-                first.clone().into_iter().map(Result::Ok),
-                second.clone().into_iter().map(Result::Ok),
-                third.clone().into_iter().map(Result::Ok),
-            ]);
-            let mut last_start = 0;
-            for val in merged {
-                assert!(last_start <= val.start);
-                last_start = val.start;
-            }
-        });
-    }
-*/
+        #[bench]
+        fn bench_merge_many_skiplarge(b: &mut test::Bencher) {
+            let first = generate_sections_seq(50, 15000, 1234);
+            let second = generate_sections_seq_skip(50, 15000, 12345, 50.0, 200.0);
+            let third = generate_sections_seq_skip(50, 15000, 123456, 0.0, 0.0);
+            b.iter(|| {
+                let merged = merge_sections_many(vec![
+                    first.clone().into_iter().map(Result::Ok),
+                    second.clone().into_iter().map(Result::Ok),
+                    third.clone().into_iter().map(Result::Ok),
+                ]);
+                let mut last_start = 0;
+                for val in merged {
+                    assert!(last_start <= val.start);
+                    last_start = val.start;
+                }
+            });
+        }
+    */
 
     #[test]
     fn can_gen() {
@@ -679,41 +679,41 @@ mod tests {
         assert!(_sections.last().map(|v| v.end).unwrap_or(0) == 150);
     }
 
-/*
-    fn generate_sections_seq_skip(
-        start: u32,
-        end: u32,
-        seed: u64,
-        skip: f32,
-        size: f32,
-    ) -> Vec<Value> {
-        use rand::prelude::*;
+    /*
+        fn generate_sections_seq_skip(
+            start: u32,
+            end: u32,
+            seed: u64,
+            skip: f32,
+            size: f32,
+        ) -> Vec<Value> {
+            use rand::prelude::*;
 
-        let mut out = vec![];
+            let mut out = vec![];
 
-        let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
+            let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
 
-        let mut curr = start;
-        loop {
-            let value: f32 = rng.gen();
-            let size = (rng.gen::<f32>() * size).floor() as u32 + 5;
-            let skip = 0.max((rng.gen::<f32>() * skip).floor() as i32 + -7) as u32;
+            let mut curr = start;
+            loop {
+                let value: f32 = rng.gen();
+                let size = (rng.gen::<f32>() * size).floor() as u32 + 5;
+                let skip = 0.max((rng.gen::<f32>() * skip).floor() as i32 + -7) as u32;
 
-            let curr_end = end.min(curr + size);
-            out.push(Value {
-                start: curr,
-                end: curr_end,
-                value,
-            });
-            if end <= curr_end + skip {
-                break;
-            } else {
-                curr = curr + size + skip;
+                let curr_end = end.min(curr + size);
+                out.push(Value {
+                    start: curr,
+                    end: curr_end,
+                    value,
+                });
+                if end <= curr_end + skip {
+                    break;
+                } else {
+                    curr = curr + size + skip;
+                }
             }
+            out
         }
-        out
-    }
-*/
+    */
 
     fn generate_sections_seq(start: u32, end: u32, seed: u64) -> Vec<Value> {
         use rand::prelude::*;
