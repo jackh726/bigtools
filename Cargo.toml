@@ -13,13 +13,13 @@ byteordered = "0.4.0"
 crossbeam-channel = "0.3.9"
 crossbeam-utils = "0.6.6"
 tempfile = "3"
-futures-preview = { version = "0.3.0-alpha.19", features = ["async-await"] }
+futures = { version = "0.3.1", features = ["thread-pool"] }
 parking_lot = { version = "0.7.1" }
 serde = { version = "1.0", features = ["derive"] }
 clap = "2"
 itertools = "0.8.0"
 bincode = "1"
-reqwest = { version = "0.10.0-alpha.1", optional = true }
+reqwest = { version = "0.10.0-alpha.2", optional = true }
 libdeflater = "0.2.0"
 
 [dev-dependencies]

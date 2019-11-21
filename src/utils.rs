@@ -607,8 +607,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+/*
     extern crate test;
-
+*/
     #[test]
     fn test_merge_many() {
         let end = 15000;
@@ -634,6 +635,7 @@ mod tests {
         assert!(last_end == end);
     }
 
+/*
     #[bench]
     fn bench_merge_many(b: &mut test::Bencher) {
         let first = generate_sections_seq(50, 150000, 1234);
@@ -669,6 +671,7 @@ mod tests {
             }
         });
     }
+*/
 
     #[test]
     fn can_gen() {
@@ -676,6 +679,7 @@ mod tests {
         assert!(_sections.last().map(|v| v.end).unwrap_or(0) == 150);
     }
 
+/*
     fn generate_sections_seq_skip(
         start: u32,
         end: u32,
@@ -709,6 +713,7 @@ mod tests {
         }
         out
     }
+*/
 
     fn generate_sections_seq(start: u32, end: u32, seed: u64) -> Vec<Value> {
         use rand::prelude::*;

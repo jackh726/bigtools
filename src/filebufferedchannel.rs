@@ -490,7 +490,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate test;
 
     #[test]
     fn test_works() -> Result<(), SendError> {

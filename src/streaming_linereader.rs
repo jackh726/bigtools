@@ -30,7 +30,6 @@ mod tests {
     use std::fs::File;
     use std::io::{self, BufReader};
     use std::path::PathBuf;
-    extern crate test;
 
     #[test]
     fn test_works() -> io::Result<()> {

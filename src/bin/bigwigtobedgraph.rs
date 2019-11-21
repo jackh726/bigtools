@@ -28,7 +28,7 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     }
     */
 
-    let mut pool = futures::executor::ThreadPoolBuilder::new()
+    let pool = futures::executor::ThreadPoolBuilder::new()
         .pool_size(nthreads)
         .create()
         .expect("Unable to create thread pool.");

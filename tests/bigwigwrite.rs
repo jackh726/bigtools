@@ -54,6 +54,7 @@ fn test() -> io::Result<()> {
         vals_iter,
         chrom_map.clone(),
         Box::new(parse_fn),
+        false,
     );
     outb.write_groups(chrom_map, chsi).unwrap();
 
@@ -125,6 +126,7 @@ fn test_multi() -> io::Result<()> {
         vals_iter,
         chrom_map.clone(),
         Box::new(parse_fn),
+        false,
     );
     outb.write_groups(chrom_map, chsi).unwrap();
 

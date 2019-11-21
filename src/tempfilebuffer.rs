@@ -294,7 +294,6 @@ impl<R: Write + Send + 'static> Write for TempFileBufferWriter<R> {
 mod tests {
     use super::*;
     use std::io::Read;
-    extern crate test;
 
     #[test]
     fn test_works() -> io::Result<()> {

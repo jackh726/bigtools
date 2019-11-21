@@ -319,7 +319,6 @@ mod tests {
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
-    extern crate test;
 
     #[test]
     fn test_bed_works() -> io::Result<()> {

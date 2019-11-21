@@ -146,7 +146,7 @@ impl BigBedWrite {
         >,
         chrom_id: u32,
         options: BBIWriteOptions,
-        mut pool: ThreadPool,
+        pool: ThreadPool,
         mut group: I,
         chrom: String,
         chrom_length: u32,
