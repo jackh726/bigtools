@@ -59,7 +59,7 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
 impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
     ChromGroupReadStreamingIterator for BedParserChromGroupStreamingIterator<V, C, G, H>
 {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap)>>, WriteGroupsError> {
+    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError> {
         match self.chrom_groups.next()? {
             Some((chrom, group)) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
@@ -92,7 +92,7 @@ pub trait StreamingChromValues<V> {
 
 pub struct BedStream<V, B: BufRead> {
     bed: StreamingLineReader<B>,
-    parse: Box<dyn Fn(std::str::SplitWhitespace) -> V + Send>,
+    parse: Box<dyn Fn(std::str::SplitWhitespace) -> io::Result<V> + Send>,
 }
 
 impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
@@ -109,7 +109,7 @@ impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
                 return Ok(None);
             }
         };
-        let v = (self.parse)(split);
+        let v = (self.parse)(split)?;
         Ok(Some((chrom, v)))
     }
 }
@@ -154,15 +154,17 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
         let parse = |mut split: std::str::SplitWhitespace<'_>| {
-            let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-            let end = split.next().expect("Missing end").parse::<u32>().unwrap();
+            let s = split.next().expect("Missing start");
+            let start = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s)))?;
+            let s = split.next().expect("Missing end");
+            let end = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s)))?;
             let rest_strings: Vec<&str> = split.collect();
             let rest = &rest_strings[..].join("\t");
-            BedEntry {
+            Ok(BedEntry {
                 start,
                 end,
                 rest: rest.to_string(),
-            }
+            })
         };
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
@@ -174,10 +176,13 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
 impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
         let parse = |mut split: std::str::SplitWhitespace<'_>| {
-            let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-            let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-            let value = split.next().expect("Missing value").parse::<f32>().unwrap();
-            Value { start, end, value }
+            let s = split.next().expect("Missing start");
+            let start = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s)))?;
+            let s = split.next().expect("Missing end");
+            let end = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s)))?;
+            let s = split.next().expect("Missing value");
+            let value = s.parse::<f32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s)))?;
+            Ok(Value { start, end, value })
         };
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
