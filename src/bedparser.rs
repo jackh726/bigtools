@@ -155,9 +155,13 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
         let parse = |mut split: std::str::SplitWhitespace<'_>| {
             let s = split.next().expect("Missing start");
-            let start = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s)))?;
+            let start = s.parse::<u32>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+            })?;
             let s = split.next().expect("Missing end");
-            let end = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s)))?;
+            let end = s.parse::<u32>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+            })?;
             let rest_strings: Vec<&str> = split.collect();
             let rest = &rest_strings[..].join("\t");
             Ok(BedEntry {
@@ -177,11 +181,17 @@ impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
         let parse = |mut split: std::str::SplitWhitespace<'_>| {
             let s = split.next().expect("Missing start");
-            let start = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s)))?;
+            let start = s.parse::<u32>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+            })?;
             let s = split.next().expect("Missing end");
-            let end = s.parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s)))?;
+            let end = s.parse::<u32>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+            })?;
             let s = split.next().expect("Missing value");
-            let value = s.parse::<f32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s)))?;
+            let value = s.parse::<f32>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
+            })?;
             Ok(Value { start, end, value })
         };
         BedParser::new(BedStream {

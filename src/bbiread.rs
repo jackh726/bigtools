@@ -89,6 +89,7 @@ pub trait BBIRead<R: SeekableRead> {
         start: u32,
         end: u32,
     ) -> io::Result<Vec<Block>> {
+        // TODO: Move anything relying on self out to separate method
         let chrom_ix = {
             let chrom_info = &self.get_info().chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
@@ -329,7 +330,7 @@ fn overlaps(
         && compare_position(chromq, chromq_end, chromb1, chromb1_start) >= 0
 }
 
-fn search_overlapping_blocks<R: SeekableRead>(
+pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
     mut file: &mut ByteOrdered<BufReader<R>, Endianness>,
     chrom_ix: u32,
     start: u32,

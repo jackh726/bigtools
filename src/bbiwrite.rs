@@ -338,8 +338,8 @@ fn calculate_offsets(mut index_offsets: &mut Vec<u64>, nodes: &RTreeChildren, le
     }
 }
 
-fn write_tree(
-    mut file: &mut BufWriter<File>,
+fn write_tree<W: Write>(
+    file: &mut W,
     nodes: &RTreeChildren,
     curr_level: usize,
     dest_level: usize,
@@ -359,30 +359,25 @@ fn write_tree(
             }
             RTreeChildren::Nodes(children) => {
                 for child in children {
-                    next_offset_offset += write_tree(
-                        &mut file,
+                    let size = write_tree(
+                        file,
                         &child.children,
                         curr_level - 1,
                         dest_level,
                         childnode_offset + next_offset_offset,
                         options,
-                    )? * u64::from(options.block_size);
+                    )?;
+                    next_offset_offset += size;
                 }
             }
         }
         return Ok(next_offset_offset);
     }
-    let isleaf = match nodes {
-        RTreeChildren::DataSections(_) => 1,
-        RTreeChildren::Nodes(_) => 0,
-    };
 
-    //eprintln!("Level: {:?}", curr_level);
-    //eprintln!("Writing {}. Isleaf: {} At: {}", "node", isleaf, file.seek(SeekFrom::Current(0))?);
-    file.write_u8(isleaf)?;
-    file.write_u8(0)?;
     match &nodes {
         RTreeChildren::DataSections(sections) => {
+            file.write_u8(1)?;
+            file.write_u8(0)?;
             file.write_u16::<NativeEndian>(sections.len() as u16)?;
             for section in sections {
                 file.write_u32::<NativeEndian>(section.chrom)?;
@@ -395,6 +390,8 @@ fn write_tree(
             return Ok(4 + sections.len() as u64 * 32);
         }
         RTreeChildren::Nodes(children) => {
+            file.write_u8(0)?;
+            file.write_u8(0)?;
             file.write_u16::<NativeEndian>(children.len() as u16)?;
             let full_size = if (curr_level - 1) > 0 {
                 non_leafnode_full_block_size
@@ -409,14 +406,13 @@ fn write_tree(
                 file.write_u32::<NativeEndian>(child.end_base)?;
                 file.write_u64::<NativeEndian>(child_offset)?;
             }
-            let child_size = if (curr_level - 1) > 0 { 24 } else { 32 };
-            return Ok(4 + children.len() as u64 * child_size);
+            return Ok(children.len() as u64 * full_size);
         }
     }
 }
 
-pub(crate) fn write_rtreeindex(
-    file: &mut BufWriter<File>,
+pub(crate) fn write_rtreeindex<W: Write + Seek>(
+    file: &mut W,
     nodes: RTreeChildren,
     levels: usize,
     section_count: u64,
@@ -426,7 +422,7 @@ pub(crate) fn write_rtreeindex(
 
     calculate_offsets(&mut index_offsets, &nodes, levels);
 
-    let end_of_data = file.seek(SeekFrom::Current(0))?;
+    let end_of_data = file.tell()?;
     file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
     file.write_u32::<NativeEndian>(options.block_size)?;
     file.write_u64::<NativeEndian>(section_count)?;
@@ -448,7 +444,7 @@ pub(crate) fn write_rtreeindex(
     file.write_u32::<NativeEndian>(options.items_per_slot)?;
     file.write_u32::<NativeEndian>(0)?;
 
-    let mut next_offset = file.seek(SeekFrom::Current(0))?;
+    let mut next_offset = file.tell()?;
     for level in (0..=levels).rev() {
         if level > 0 {
             next_offset += index_offsets[level - 1];
@@ -729,4 +725,91 @@ pub(crate) fn get_chromprocessing(
             zooms: zoom_infos,
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_rtreeindex() -> io::Result<()> {
+        const MAX_BASES: u32 = 256 * 256 * 256;
+        let mut chrom = 0;
+        let mut start = 0;
+        let iter = std::iter::from_fn(|| {
+            let curr_chrom = chrom;
+            let curr_start = start;
+            start += 1;
+            if start >= MAX_BASES {
+                start = 0;
+                chrom += 1;
+            }
+            Some(Section {
+                chrom: curr_chrom,
+                start: curr_start,
+                end: curr_start + 1,
+                offset: curr_start as u64,
+                size: 1,
+            })
+        });
+        let mut options = BBIWriteOptions::default();
+        options.block_size = 5;
+        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), &options);
+
+        let mut data = Vec::<u8>::new();
+        let mut cursor = Cursor::new(&mut data);
+        let mut bufwriter = BufWriter::new(&mut cursor);
+        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, &options)?;
+
+        drop(bufwriter);
+        drop(cursor);
+
+        let mut cursor = Cursor::new(&mut data);
+        let bufreader = BufReader::new(&mut cursor);
+        let mut file =
+            byteordered::ByteOrdered::runtime(bufreader, byteordered::Endianness::native());
+
+        let magic = file.read_u32()?;
+        if magic != CIR_TREE_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Invalid file format: CIR_TREE_MAGIC does not match.",
+            ));
+        }
+        let _blocksize = file.read_u32()?;
+        let _item_count = file.read_u64()?;
+        let _start_chrom_idx = file.read_u32()?;
+        let _start_base = file.read_u32()?;
+        let _end_chrom_idx = file.read_u32()?;
+        let _end_base = file.read_u32()?;
+        let _end_file_offset = file.read_u64()?;
+        let _item_per_slot = file.read_u32()?;
+        let _reserved = file.read_u32()?;
+
+        let mut blocks = vec![];
+        crate::bbiread::search_overlapping_blocks(&mut file, 0, 0, MAX_BASES, &mut blocks)?;
+
+        let mut chrom = 0;
+        let mut start = 0;
+        let iter = std::iter::from_fn(|| {
+            let curr_chrom = chrom;
+            let curr_start = start;
+            start += 1;
+            if start >= MAX_BASES {
+                start = 0;
+                chrom += 1;
+            }
+            Some(Section {
+                chrom: curr_chrom,
+                start: curr_start,
+                end: curr_start + 1,
+                offset: curr_start as u64,
+                size: 1,
+            })
+        });
+        iter.zip(blocks.into_iter())
+            .for_each(|(a, b)| assert_eq!(a.offset, b.offset));
+        Ok(())
+    }
 }
