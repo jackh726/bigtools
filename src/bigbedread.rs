@@ -349,13 +349,20 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
     let mut entries: Vec<BedEntry> = Vec::new();
 
     let mut read_entry = || -> io::Result<BedEntry> {
-        let _chrom_id = block_data_mut.read_u32()?;
-        assert_eq!(
-            _chrom_id, expected_chrom,
-            "BUG: bigBed had multiple chroms in a section"
-        );
+        let chrom_id = block_data_mut.read_u32()?;
         let chrom_start = block_data_mut.read_u32()?;
         let chrom_end = block_data_mut.read_u32()?;
+        if chrom_start == 0 && chrom_end == 0 {
+            return Ok(BedEntry {
+                start: chrom_start,
+                end: chrom_end,
+                rest: String::new(),
+            })
+        }
+        assert_eq!(
+            chrom_id, expected_chrom,
+            "BUG: bigBed had multiple chroms in a section"
+        );
         let s: Vec<u8> = block_data_mut
             .by_ref()
             .bytes()
