@@ -353,11 +353,7 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
         let chrom_start = block_data_mut.read_u32()?;
         let chrom_end = block_data_mut.read_u32()?;
         if chrom_start == 0 && chrom_end == 0 {
-            return Ok(BedEntry {
-                start: chrom_start,
-                end: chrom_end,
-                rest: String::new(),
-            })
+            return Err(io::Error::new(io::ErrorKind::Other, ""));
         }
         assert_eq!(
             chrom_id, expected_chrom,
@@ -381,12 +377,8 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
         })
     };
     while let Ok(entry) = read_entry() {
-        // TODO: the entire section could be terminated by many 0s. Need to identify a better way of filtering out these
-        if entry.start == 0 && entry.end == 0 {
-            break;
-        }
         if entry.end >= start && entry.start <= end {
-            entries.push(entry)
+            entries.push(entry);
         }
     }
 

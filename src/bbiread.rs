@@ -426,9 +426,10 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     let block_data: Vec<u8> = if uncompress_buf_size > 0 {
         let mut decompressor = Decompressor::new();
         let mut outbuf = vec![0; uncompress_buf_size];
-        decompressor
+        let decompressed = decompressor
             .zlib_decompress(&raw_data, &mut outbuf)
             .unwrap();
+        outbuf.truncate(decompressed);
         outbuf
     } else {
         raw_data
