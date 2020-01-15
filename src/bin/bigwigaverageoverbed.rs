@@ -4,108 +4,7 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use clap::{App, Arg};
 
 use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
-use bigtools::seekableread::{Reopen, SeekableRead};
-use bigtools::streaming_linereader::StreamingLineReader;
-
-struct Options {
-    simple: bool,
-}
-
-fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
-    bedinpath: String,
-    mut bigwigin: BigWigRead<R, S>,
-    bedout: File,
-    options: Options,
-) -> io::Result<()> {
-    let uniquenames = {
-        if !options.simple {
-            true
-        } else {
-            let reader = BufReader::new(File::open(bedinpath.clone())?);
-            let mut lines = reader
-                .lines()
-                .take(10)
-                .map(|line| -> io::Result<Option<String>> {
-                    let l = line?;
-                    let mut split = l.splitn(5, '\t');
-                    let _chrom = split
-                        .next()
-                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _start = split
-                        .next()
-                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let _end = split
-                        .next()
-                        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
-                    let name = split.next();
-                    Ok(match name {
-                        None => None,
-                        Some(name) => Some(name.to_string()),
-                    })
-                })
-                .collect::<io::Result<Vec<_>>>()?;
-            lines.sort();
-            lines.dedup();
-            lines.len() == 10
-        }
-    };
-
-    let bedin = File::open(bedinpath)?;
-    let mut bedstream = StreamingLineReader::new(BufReader::new(bedin));
-    let mut bedoutwriter = BufWriter::new(bedout);
-
-    while let Some(line) = bedstream.read()? {
-        let mut split = line.splitn(5, '\t');
-        let chrom = split.next().expect("Missing chrom");
-        let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-        let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-        let name = split.next();
-        let rest = split.next();
-        let interval = bigwigin
-            .get_interval(chrom, start, end)?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut bases = 0;
-        let mut sum = 0.0;
-        for val in interval {
-            let num_bases = val.end - val.start;
-            bases += num_bases;
-            sum += f64::from(num_bases) * f64::from(val.value);
-        }
-        let size = end - start;
-        let mean0 = sum / f64::from(size);
-        let mean = if bases == 0 {
-            0.0
-        } else {
-            sum / f64::from(bases)
-        };
-        let stats = format!("{}\t{}\t{:.3}\t{:.3}\t{:.3}", size, bases, sum, mean0, mean);
-        if options.simple {
-            if uniquenames {
-                bedoutwriter.write_fmt(format_args!(
-                    "{}\t{}\n",
-                    name.expect("Bad bed format (no name)."),
-                    stats
-                ))?;
-            } else {
-                bedoutwriter
-                    .write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom, start, end, stats))?;
-            }
-        } else {
-            let last = match name {
-                Some(name) => match rest {
-                    Some(rest) => format!("{}\t{}", name, rest.trim_end()),
-                    None => name.trim_end().to_string(),
-                },
-                None => String::from(""),
-            };
-            bedoutwriter.write_fmt(format_args!(
-                "{}\t{}\t{}\t{}\t{}\n",
-                chrom, start, end, last, stats
-            ))?;
-        }
-    }
-    Ok(())
-}
+use bigtools::utils::misc::{BigWigAverageOverBedOptions, Name, bigwig_average_over_bed};
 
 fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigAverageOverBed")
@@ -124,9 +23,9 @@ fn main() -> Result<(), BigWigReadAttachError> {
                 .index(3)
                 .required(true)
             )
-        .arg(Arg::with_name("simple")
-                .short("s")
-                .help("If set, the output bed will either print the name followed by stats (if the fourth column in the first 10 entries), or the chrom,start,end followed by stats. Any other columns in the input bed will be ignored.")
+        .arg(Arg::with_name("allcols")
+                .short("a")
+                .help("If set, the output will be a bed with all columns of the input, with additional states at the end. Otherwise, the ouput will be a tsv with the name (or the chrom, start, and end in the form `chrom:start-end` if names are not unique) followed by stats.")
             )
         .get_matches();
 
@@ -134,12 +33,51 @@ fn main() -> Result<(), BigWigReadAttachError> {
     let bedinpath = matches.value_of("bedin").unwrap().to_owned();
     let bedoutpath = matches.value_of("output").unwrap().to_owned();
 
-    let simple = matches.is_present("simple");
+    let allcols = matches.is_present("allcols");
 
     let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
-    let options = Options { simple };
-    write(bedinpath, inbigwig, outbed, options)?;
+    let mut bedoutwriter = BufWriter::new(outbed);
+
+    let name: Name = {
+        if allcols {
+            Name::None
+        } else {
+            const NAME_COL: usize = 4;
+            const TEST_LINES: usize = 10;
+            let reader = BufReader::new(File::open(bedinpath.clone())?);
+            let mut lines = reader
+                .lines()
+                .take(TEST_LINES)
+                .map(|line| -> io::Result<Option<String>> {
+                    let l = line?;
+                    let cols = l.trim().split('\t').take((NAME_COL + 1).max(3)).collect::<Vec<_>>();
+                    if cols.len() < 3 {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Not enough columns. Expected >= 3."));
+                    }
+                    Ok(cols.get(NAME_COL - 1).map(|s| s.to_string()))
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            lines.sort();
+            lines.dedup();
+            if lines.len() != TEST_LINES {
+                eprintln!("Name column ({}) is not unique. Using interval as the name.", NAME_COL);
+                Name::None
+            } else {
+                Name::Column(std::num::NonZeroUsize::new(NAME_COL).unwrap())
+            }
+        }
+    };
+
+    let options = BigWigAverageOverBedOptions { name, allcols };
+    let bedin = BufReader::new(File::open(bedinpath)?);
+    let iter = bigwig_average_over_bed(bedin, inbigwig, options)?;
+    for entry in iter {
+        let entry = entry?;
+        let name = entry.name;
+        let stats = format!("{}\t{}\t{:.3}\t{:.3}\t{:.3}", entry.size, entry.bases, entry.sum, entry.mean0, entry.mean);
+        write!(&mut bedoutwriter, "{}\t{}\n", name, stats)?
+    }
 
     Ok(())
 }
