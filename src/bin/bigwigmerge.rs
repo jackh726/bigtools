@@ -15,7 +15,7 @@ use bigtools::chromvalues::ChromValues;
 
 use bigtools::idmap::IdMap;
 use bigtools::seekableread::ReopenableFile;
-use bigtools::utils::merge_sections_many;
+use bigtools::utils::merge::merge_sections_many;
 
 pub struct MergingValues {
     iter: std::iter::Peekable<Box<dyn Iterator<Item = Value> + Send>>,
