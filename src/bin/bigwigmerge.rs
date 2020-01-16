@@ -18,6 +18,7 @@ use bigtools::seekableread::ReopenableFile;
 use bigtools::utils::merge::merge_sections_many;
 
 pub struct MergingValues {
+    // We Box<dyn Iterator> because other this would be a mess to try to type
     iter: std::iter::Peekable<Box<dyn Iterator<Item = Value> + Send>>,
 }
 
@@ -70,7 +71,7 @@ pub fn get_merged_vals(
         chrom_map.insert(chrom.clone(), size);
     }
 
-    let iter = chrom_sizes.clone().into_iter().map(|(chrom, (size, bws))| {
+    let iter = chrom_sizes.into_iter().map(|(chrom, (size, bws))| {
         let iters: Vec<_> = bws
             .into_iter()
             .map(|b| b.get_interval_move(&chrom, 1, size))
@@ -167,14 +168,13 @@ fn main() -> Result<(), WriteGroupsError> {
     let mut bigwigs: Vec<BigWigRead<ReopenableFile, File>> = vec![];
 
     if let Some(bws) = matches.values_of("bigwig") {
-        let results = bws
-            .map(|b| BigWigRead::from_file_and_attach(b.to_owned()))
-            .collect::<Result<Vec<_>, _>>();
-        match results {
-            Ok(bws) => bigwigs.extend(bws),
-            Err(e) => {
-                eprintln!("Error: {:?}", e);
-                return Ok(());
+        for name in bws {
+            match BigWigRead::from_file_and_attach(name).map(|mut bw| { bw.close(); bw }) {
+                Ok(bw) => bigwigs.push(bw),
+                Err(e) => {
+                    eprintln!("Error when opening bigwig ({}): {:?}", name, e);
+                    return Ok(());
+                }
             }
         }
     }
@@ -190,7 +190,7 @@ fn main() -> Result<(), WriteGroupsError> {
             let lines = BufReader::new(list_file).lines();
             for line in lines {
                 let name = line?;
-                match BigWigRead::from_file_and_attach(name.clone()) {
+                match BigWigRead::from_file_and_attach(&name).map(|mut bw| { bw.close(); bw }) {
                     Ok(bw) => bigwigs.push(bw),
                     Err(e) => {
                         eprintln!("Error when opening bigwig ({}): {:?}", name, e);

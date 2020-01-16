@@ -119,9 +119,9 @@ fn main() -> Result<(), BigWigReadAttachError> {
             )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
-    let bedinpath = matches.value_of("bedin").unwrap().to_owned();
-    let outputpath = matches.value_of("output").unwrap().to_owned();
+    let bigwigpath = matches.value_of("bigwig").unwrap();
+    let bedinpath = matches.value_of("bedin").unwrap();
+    let outputpath = matches.value_of("output").unwrap();
 
     let withnames = matches.is_present("names");
     let mut delimiter = matches.value_of("delimiter").unwrap_or("\t").to_owned();

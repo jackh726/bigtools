@@ -12,7 +12,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
+    let bigwigpath = matches.value_of("bigwig").unwrap();
 
     let mut bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     println!("Header: {:?}", bigwig.info.header);

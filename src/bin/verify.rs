@@ -20,7 +20,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         )
         .get_matches();
 
-    let bigwigpath = matches.value_of("input").unwrap().to_owned();
+    let bigwigpath = matches.value_of("input").unwrap();
     let _index = matches.is_present("index");
     let _data = matches.is_present("data");
 

@@ -29,9 +29,9 @@ fn main() -> Result<(), BigWigReadAttachError> {
             )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
-    let bedinpath = matches.value_of("bedin").unwrap().to_owned();
-    let bedoutpath = matches.value_of("output").unwrap().to_owned();
+    let bigwigpath = matches.value_of("bigwig").unwrap();
+    let bedinpath = matches.value_of("bedin").unwrap();
+    let bedoutpath = matches.value_of("output").unwrap();
 
     let allcols = matches.is_present("allcols");
 

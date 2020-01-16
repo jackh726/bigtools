@@ -92,8 +92,8 @@ fn main() -> Result<(), BigWigReadAttachError> {
             .default_value("6"))
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap().to_owned();
-    let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
+    let bigwigpath = matches.value_of("bigwig").unwrap();
+    let bedgraphpath = matches.value_of("bedgraph").unwrap();
 
     let nthreads = {
         let nthreads = matches.value_of("nthreads").unwrap();

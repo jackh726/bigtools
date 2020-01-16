@@ -204,8 +204,8 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
 }
 
 impl BigWigRead<ReopenableFile, File> {
-    pub fn from_file_and_attach(path: String) -> Result<Self, BigWigReadAttachError> {
-        let reopen = ReopenableFile { path: path.clone() };
+    pub fn from_file_and_attach(path: &str) -> Result<Self, BigWigReadAttachError> {
+        let reopen = ReopenableFile { path: path.to_string() };
         let b = BigWigRead::from(reopen);
         if b.is_err() {
             eprintln!("Error when opening: {}", path);
