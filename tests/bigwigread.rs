@@ -13,7 +13,7 @@ fn test_valid_read() -> io::Result<()> {
     valid_bigwig.push("valid.bigWig");
 
     let mut bwread =
-        BigWigRead::from_file_and_attach(valid_bigwig.to_string_lossy().to_string()).unwrap();
+        BigWigRead::from_file_and_attach(&valid_bigwig.to_string_lossy()).unwrap();
 
     // Test that chrom tree parsing works
     let chroms = bwread.get_chroms();

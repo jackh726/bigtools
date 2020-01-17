@@ -17,7 +17,7 @@ use crate::tell::Tell;
 // TODO: validate maxsize = 0
 // TODO: add an AtomicBoolean to indicate is_in_memory, to allow Receiver to not need to lock state (and update description)
 
-// A general description of howw a filebufferedchannel works
+// A general description of how a filebufferedchannel works
 //
 // The underlying implementation uses crossbeam_channel::bounded channel pairs to coordinate inter-struct passing of elements. On initial
 // creation of the filebufferedchannel pair, a pair of crossbeam_channel::bounded pairs are created, which allows elements to be sent
@@ -61,6 +61,28 @@ where
     (sender, receiver)
 }
 
+/// Creates a filebufferedchannel lazy sender/receiver pair. Unlike `channel`,
+/// no data will be sent to the receiver until `recv` or `try_recv` is called.
+/// They still will be queued to a maximum `size`. However, if the `Sender`
+/// calls `flush`, then all queued items will be written to disk.
+pub fn lazy_channel<T>(size: usize) -> io::Result<(Sender<T>, Receiver<T>)>
+where
+    T: Serialize + DeserializeOwned,
+{
+    let (channelsender, channelreceiver) = bounded(size);
+    let (buffersender, bufferreceiver) = bounded(size);
+    let state = Arc::new(Mutex::new(ChannelState::new_lazy(size, channelsender, bufferreceiver)?));
+    let sender = Sender {
+        state: state.clone(),
+        sender: buffersender,
+    };
+    let receiver = Receiver {
+        state,
+        receiver: channelreceiver,
+    };
+    Ok((sender, receiver))
+}
+
 pub enum ChannelError {
     IOError(io::Error),
     Disconnected,
@@ -77,6 +99,7 @@ impl From<io::Error> for ChannelError {
 enum ChannelStateStatus<T> {
     InMemory,
     OnDisk {
+        can_send: bool,
         serialize_size: Option<u64>,
         sender: ChannelSender<T>,
         buffer: ChannelReceiver<T>,
@@ -107,6 +130,34 @@ where
         }
     }
 
+    fn new_lazy(maxsize: usize, sender: ChannelSender<T>, buffer: ChannelReceiver<T>) -> io::Result<ChannelState<T>> {
+        let status = ChannelStateStatus::OnDisk {
+            can_send: false,
+            serialize_size: None,
+            sender,
+            buffer,
+            file: tempfile::tempfile()?,
+            readindex: 0,
+            writeindex: 0,
+        };
+        Ok(ChannelState {
+            maxsize,
+            status,
+        })
+    }
+
+    /// If we spawned this channel lazily, then no data has been sent to the
+    /// receiver (all has been stored on disk or in the shared receiving queue).
+    /// If we are in `OnDisk` state, this sets the `can_send` flag as `true`.
+    fn mark_read(&mut self) {
+        match &mut self.status {
+            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::OnDisk { can_send, .. } => {
+                *can_send = true;
+            }
+        }
+    }
+
     /// This will free *some* elements from `Sender`'s `ChannelSender`, either by writing them to the disk (if state is `OnDisk`),
     /// or by converting the `filebufferedchannel` from `InMemory` to `OnDisk` and, in the process, allocating a new buffer channel
     ///
@@ -126,6 +177,7 @@ where
                 let (channelsender, channelreceiver) = bounded(self.maxsize);
                 let sender = std::mem::replace(sender, channelsender);
                 self.status = ChannelStateStatus::OnDisk {
+                    can_send: true,
                     serialize_size: None,
                     sender,
                     buffer: channelreceiver,
@@ -169,17 +221,10 @@ where
 
     /// Result::Ok indicates that at least one element was read and sent to `Receiver` or that `Receiver` was full
     fn read(&mut self) -> ChannelResult<()> {
-        match &self.status {
-            ChannelStateStatus::InMemory => {}
-            ChannelStateStatus::OnDisk { sender, .. } => {
-                if sender.capacity().unwrap() - sender.len() == 0 {
-                    return Ok(());
-                }
-            }
-        }
         match &mut self.status {
             ChannelStateStatus::InMemory => Err(ChannelError::InMemory),
             ChannelStateStatus::OnDisk {
+                ref can_send,
                 file,
                 readindex,
                 writeindex,
@@ -187,6 +232,13 @@ where
                 sender,
                 serialize_size,
             } => {
+                if !can_send {
+                    return Ok(());
+                }
+                if sender.capacity().unwrap() - sender.len() == 0 {
+                    return Ok(());
+                }
+
                 // At this point there are two places elements can be:
                 // 1) On disk
                 // 2) In `buffer`, which has elements that were received from `Sender`, but haven't been buffered to disk yet.
@@ -245,14 +297,6 @@ where
     }
 
     fn read_wait(&mut self) -> ChannelResult<()> {
-        match &self.status {
-            ChannelStateStatus::InMemory => {}
-            ChannelStateStatus::OnDisk { sender, .. } => {
-                if sender.capacity().unwrap() - sender.len() == 0 {
-                    return Ok(());
-                }
-            }
-        }
         match self.read() {
             Ok(_) => Ok(()),
             Err(ChannelError::InMemory) => Err(ChannelError::InMemory),
@@ -320,6 +364,12 @@ impl<T> Sender<T>
 where
     T: Serialize + DeserializeOwned,
 {
+    /// Sends a `T` over the channel. If state is `InMemory`, it will immediately
+    /// be available to the `Receiver`. If state is `OnDisk`, then it will be
+    /// sent the pending queue.
+    /// 
+    /// If the item cannot be sent because the is full, then the channel will first be
+    /// flushed.
     pub fn send(&mut self, t: T) -> Result<(), SendError> {
         if let Err(e) = self.sender.try_send(t) {
             use crossbeam_channel::TrySendError::*;
@@ -334,6 +384,16 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Forces the channel to be flushed. Any queued items will first be sent
+    /// the `Receiver` (if possible), then written to disk. If there are no
+    /// queued items, this is essentially a no-op (but it does still acquire
+    /// a lock). If the channel was created a lazy channel and no read has yet
+    /// occured, then all data sent over the channel will be on disk.
+    pub fn flush(&mut self) -> Result<(), SendError> {
+        let mut state = self.state.lock();
+        Ok(state.clearqueue(&mut self.sender)?)
     }
 }
 
@@ -365,8 +425,9 @@ where
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
+                        // If we were lazy, need to mark can_send as true
+                        state.mark_read();
                         let read_wait = state.read_wait();
-                        //dbg!();
                         drop(state);
                         match read_wait {
                             Ok(_) => Ok(self.receiver.try_recv().expect("Internal error. read_wait() should only return Ok if items were sent to the receiver.")),
@@ -397,6 +458,7 @@ where
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
                         let mut state = self.state.lock();
+                        state.mark_read();
                         let read = state.read();
                         drop(state);
                         match read {
@@ -573,6 +635,47 @@ mod tests {
         while rcount < 175 {
             assert_eq!(Some(rcount), receiver.try_recv().ok());
             rcount += 1;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_lazy() -> Result<(), SendError> {
+        {
+            let (mut sender, mut receiver) = lazy_channel(50).unwrap();
+            for i in 0..45 {
+                sender.send(i)?;
+            }
+            for i in 0..45 {
+                assert_eq!(Some(i), receiver.try_recv().ok());
+            }
+        }
+        {
+            let (mut sender, mut receiver) = lazy_channel(50).unwrap();
+            for i in 0..95 {
+                sender.send(i)?;
+            }
+            for i in 0..95 {
+                assert_eq!(Some(i), receiver.try_recv().ok());
+            }
+        }
+        {
+            let (mut sender, mut receiver) = lazy_channel(50).unwrap();
+            for i in 0..45 {
+                sender.send(i)?;
+            }
+            sender.flush()?;
+            for i in 0..45 {
+                assert_eq!(Some(i), receiver.try_recv().ok());
+            }
+        }
+        {
+            let (mut sender, mut receiver) = lazy_channel(50).unwrap();
+            for i in 0..45 {
+                sender.send(i)?;
+            }
+            sender.flush()?;
+            // TODO: test zero items in memory
         }
         Ok(())
     }

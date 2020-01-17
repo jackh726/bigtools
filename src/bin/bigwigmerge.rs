@@ -34,55 +34,74 @@ impl ChromValues<Value> for MergingValues {
 
 pub fn get_merged_vals(
     bigwigs: Vec<BigWigRead<ReopenableFile, File>>,
+    max_zooms: usize,
 ) -> io::Result<(
     impl Iterator<Item = io::Result<(String, u32, MergingValues)>>,
     HashMap<String, u32>,
 )> {
-    // Get sizes for each and check that all files (that have the chrom) agree
-    // Check that all chrom sizes match for all files
-    let mut chrom_sizes = BTreeMap::new();
-    let mut chrom_map = HashMap::new();
-    for chrom in bigwigs.iter().flat_map(BBIRead::get_chroms).map(|c| c.name) {
-        if chrom_sizes.get(&chrom).is_some() {
-            continue;
+    let (chrom_sizes, chrom_map) = {
+        // NOTE: We don't need to worry about max fds here because chroms are cached.
+        
+        // Get sizes for each and check that all files (that have the chrom) agree
+        // Check that all chrom sizes match for all files
+        let mut chrom_sizes = BTreeMap::new();
+        let mut chrom_map = HashMap::new();
+        for chrom in bigwigs.iter().flat_map(BBIRead::get_chroms).map(|c| c.name) {
+            if chrom_sizes.get(&chrom).is_some() {
+                continue;
+            }
+            let (sizes, bws): (Vec<_>, Vec<_>) = bigwigs
+                .iter()
+                .map(|w| {
+                    let chroms = w.get_chroms();
+                    let res = chroms.iter().find(|v| v.name == chrom);
+                    match res {
+                        Some(s) => Some((s.length, w.clone())),
+                        None => None,
+                    }
+                })
+                .filter_map(|x| x)
+                .unzip();
+            let size = sizes[0];
+            if !sizes.iter().all(|s| *s == size) {
+                eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Invalid input (nonmatching chroms)",
+                ));
+            }
+
+            chrom_sizes.insert(chrom.clone(), (size, bws));
+            chrom_map.insert(chrom.clone(), size);
         }
-        let (sizes, bws): (Vec<_>, Vec<_>) = bigwigs
-            .iter()
-            .map(|w| {
-                let chroms = w.get_chroms();
-                let res = chroms.iter().find(|v| v.name == chrom);
-                match res {
-                    Some(s) => Some((s.length, w.clone())),
-                    None => None,
-                }
-            })
-            .filter_map(|x| x)
-            .unzip();
-        let size = sizes[0];
-        if !sizes.iter().all(|s| *s == size) {
-            eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Invalid input (nonmatching chroms)",
-            ));
+
+        (chrom_sizes, chrom_map)
+    };
+
+    const MAX_FDS: usize = 1000;
+    const PARALLEL_CHROMS: usize = 1;
+    // This might be a *bit* conservative, but is really mostly an estimate
+    let max_bw_fds: usize = MAX_FDS
+        - 1 /* output bigWig (data) */
+        - 1 /* index */
+        - (1 /* data sections */ + 1  /* index sections */ + max_zooms /* zoom data sections */ + max_zooms /* zoom index sections */) * PARALLEL_CHROMS;
+
+    let iter = chrom_sizes.into_iter().map(move |(chrom, (size, bws))| {
+        if bws.len() > max_bw_fds {
+            panic!("Too many bigwigs.");
+        } else {
+            let iters: Vec<_> = bws
+                .into_iter()
+                .map(|b| b.get_interval_move(&chrom, 1, size))
+                .collect::<io::Result<Vec<_>>>()?;
+            let iter: Box<dyn Iterator<Item = Value> + Send> =
+                Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0));
+            let mergingvalues = MergingValues {
+                iter: iter.peekable(),
+            };
+    
+            Ok((chrom, size, mergingvalues))
         }
-
-        chrom_sizes.insert(chrom.clone(), (size, bws));
-        chrom_map.insert(chrom.clone(), size);
-    }
-
-    let iter = chrom_sizes.into_iter().map(|(chrom, (size, bws))| {
-        let iters: Vec<_> = bws
-            .into_iter()
-            .map(|b| b.get_interval_move(&chrom, 1, size))
-            .collect::<io::Result<Vec<_>>>()?;
-        let iter: Box<dyn Iterator<Item = Value> + Send> =
-            Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0));
-        let mergingvalues = MergingValues {
-            iter: iter.peekable(),
-        };
-
-        Ok((chrom, size, mergingvalues))
     });
 
     Ok((iter, chrom_map))
@@ -211,7 +230,7 @@ fn main() -> Result<(), WriteGroupsError> {
         parsed.unwrap()
     };
 
-    let (iter, chrom_map) = get_merged_vals(bigwigs)?;
+    let (iter, chrom_map) = get_merged_vals(bigwigs, 10)?;
 
     match output {
         output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
