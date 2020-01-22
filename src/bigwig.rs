@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 pub(crate) const BIGWIG_MAGIC: u32 = 0x888F_FC26;
 pub(crate) const BIGBED_MAGIC: u32 = 0x8789_F2EB;
 
@@ -29,7 +31,7 @@ pub struct Summary {
     pub sum_squares: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Value {
     pub start: u32,
     pub end: u32,
