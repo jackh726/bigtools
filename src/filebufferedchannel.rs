@@ -670,7 +670,7 @@ mod tests {
             }
         }
         {
-            let (mut sender, mut receiver) = lazy_channel(50).unwrap();
+            let (mut sender, _receiver) = lazy_channel(50).unwrap();
             for i in 0..45 {
                 sender.send(i)?;
             }

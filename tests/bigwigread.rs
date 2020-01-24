@@ -38,3 +38,24 @@ fn test_valid_read() -> io::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_values() -> io::Result<()> {
+    use std::path::PathBuf;
+
+    use bigtools::bigwig::BigWigRead;
+
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.push("resources/test");
+
+    let mut valid_bigwig = dir.clone();
+    valid_bigwig.push("valid.bigWig");
+
+    let mut bwread =
+        BigWigRead::from_file_and_attach(&valid_bigwig.to_string_lossy()).unwrap();
+
+    let vals = bwread.values("chr17", 0, 59899)?;
+    assert_eq!(vals.len(), 59899);
+    assert_eq!(vals[59898], 0.06792);
+    Ok(())
+}

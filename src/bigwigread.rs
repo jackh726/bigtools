@@ -21,12 +21,13 @@ where
     bigwig: &'a mut BigWigRead<R, S>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
+    // TODO: use type_alias_impl_trait to remove Box
+    vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
     start: u32,
     end: u32,
 }
 
-impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
+impl<'a, I, R: 'static, S: 'static> Iterator for IntervalIter<'a, I, R, S>
 where
     I: Iterator<Item = Block> + Send,
     R: Reopen<S>,
@@ -56,7 +57,7 @@ where
                         self.end,
                     ) {
                         Ok(vals) => {
-                            self.vals = Some(vals);
+                            self.vals = Some(Box::new(vals));
                         }
                         Err(e) => {
                             return Some(Err(e));
@@ -78,12 +79,13 @@ where
     bigwig: BigWigRead<R, S>,
     known_offset: u64,
     blocks: I,
+    // TODO: use type_alias_impl_trait to remove Box
     vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
     start: u32,
     end: u32,
 }
 
-impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
+impl<I, R: 'static, S: 'static> Iterator for OwnedIntervalIter<I, R, S>
 where
     I: Iterator<Item = Block> + Send,
     R: Reopen<S>,
@@ -113,7 +115,7 @@ where
                         self.end,
                     ) {
                         Ok(vals) => {
-                            self.vals = Some(vals);
+                            self.vals = Some(Box::new(vals));
                         }
                         Err(e) => {
                             return Some(Err(e));
@@ -298,6 +300,24 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
         })
     }
 
+    /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
+    /// positions with no data in the bigWig will be `std::f32::NAN`.
+    pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
+        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let mut values = vec![std::f32::NAN; (end-start) as usize];
+        use crate::tell::Tell;
+        let mut known_offset = self.ensure_reader()?.tell()?;
+        for block in blocks {
+            let block_values = get_block_values(self, block, &mut known_offset, start, end)?;
+            for block_value in block_values {
+                let block_value_start = (block_value.start - start) as usize;
+                let block_value_end = (block_value.end - start) as usize;
+                for i in &mut values[block_value_start..block_value_end] { *i = block_value.value }
+            }
+        }
+        Ok(values)
+    }
+
     pub fn get_zoom_interval<'a>(
         &'a mut self,
         chrom_name: &str,
@@ -334,7 +354,7 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     known_offset: &mut u64,
     start: u32,
     end: u32,
-) -> io::Result<Box<dyn Iterator<Item = Value> + Send>> {
+) -> io::Result<impl Iterator<Item = Value> + Send> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
     let mut values: Vec<Value> = Vec::new();
 
@@ -399,5 +419,5 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(Box::new(values.into_iter()))
+    Ok(values.into_iter())
 }
