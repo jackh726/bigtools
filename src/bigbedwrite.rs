@@ -224,18 +224,19 @@ impl BigBedWrite {
                         .map(|f| f.start == item_start)
                         .unwrap_or(true));
 
-                    for o in overlap.iter_mut() {
+                    // For each item in `overlap` that overlaps the current
+                    // item, add `1` to the value.
+                    for (i, o) in overlap.iter_mut().enumerate() {
                         o.value += 1.0;
                         if item_end < o.end {
-                            o.end = item_end;
+                            let value = o.value - 1.0;
                             let end = o.end;
-                            overlap.push_back(Value {
+                            o.end = item_end;
+                            overlap.insert(i+1, Value {
                                 start: item_end,
                                 end,
-                                value: 1.0,
+                                value,
                             });
-                            debug_assert_eq!(overlap.back().unwrap().start, item_end);
-                            debug_assert_eq!(overlap.back().unwrap().end, end);
                             break;
                         }
                     }
@@ -304,18 +305,20 @@ impl BigBedWrite {
                 let item_start = current_val.start;
                 let item_end = current_val.end;
                 let overlap = &mut zoom_item.overlap;
-                for o in overlap.iter_mut() {
+
+                // For each item in `overlap` that overlaps the current
+                // item, add `1` to the value.
+                for (i, o) in overlap.iter_mut().enumerate() {
                     o.value += 1.0;
                     if item_end < o.end {
-                        o.end = item_end;
+                        let value = o.value - 1.0;
                         let end = o.end;
-                        overlap.push_back(Value {
+                        o.end = item_end;
+                        overlap.insert(i+1, Value {
                             start: item_end,
                             end,
-                            value: 1.0,
+                            value,
                         });
-                        debug_assert_eq!(overlap.back().unwrap().start, item_end);
-                        debug_assert_eq!(overlap.back().unwrap().end, end);
                         break;
                     }
                 }
