@@ -146,7 +146,7 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
         let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, BedEntry)>> + Send> = Box::new(|s: &str| {
-            let mut split = s.splitn(4, char::is_whitespace);
+            let mut split = s.splitn(4, '\t');
             let chrom = match split.next() {
                 Some(chrom) => chrom,
                 None => return Ok(None),
@@ -176,7 +176,7 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
 impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
         let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, Value)>> + Send> = Box::new(|s: &str| {
-            let mut split = s.splitn(5, char::is_whitespace);
+            let mut split = s.splitn(5, '\t');
             let chrom = match split.next() {
                 Some(chrom) => chrom,
                 None => return Ok(None),
