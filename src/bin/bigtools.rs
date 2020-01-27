@@ -22,11 +22,14 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     let mut bedoutwriter = BufWriter::with_capacity(64 * 1024, handle);
 
     while let Some(line) = bedstream.read()? {
-        let mut split = line.splitn(4, '\t');
-        let chrom = split.next().expect("Missing chrom");
-        let start = split.next().expect("Missing start").parse::<u32>().unwrap();
-        let end = split.next().expect("Missing end").parse::<u32>().unwrap();
-        let _ = split.next();
+        let mut split = line.trim_end().splitn(4, '\t');
+        let chrom = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing chrom: {}", line)))?;
+        let start = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {}", line)))?.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", line))
+        })?;
+        let end = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {}", line)))?.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", line))
+        })?;
         let interval = b
             .get_interval(chrom, start, end);
         let interval = match interval {
@@ -87,6 +90,9 @@ fn main() -> Result<(), BigBedReadAttachError> {
             let b = BigBedRead::from_file_and_attach(bpath)?;
 
             intersect(apath, b, IntersectOptions {})?;
+        }
+        ("", None) => {
+            eprintln!("No command. Use bigtools --help to see help.");
         }
         (subcommand, _) => {
             panic!("BUG: unhandled subcommand: {}", subcommand);
