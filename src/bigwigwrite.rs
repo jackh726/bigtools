@@ -60,7 +60,7 @@ impl BigWigWrite {
 
         let pre_data = file.tell()?;
         // Write data to file and return
-        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos) =
+        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
             block_on(write_vals(vals, file, &self.options))?;
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;
@@ -86,14 +86,6 @@ impl BigWigWrite {
         let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
-        // We *could* actually check the the real max size, but let's just assume at it's as large as the largest possible value
-        // In most cases, I think this is the true max size (unless there is only one section and its less than ITEMS_PER_SLOT in size)
-        let uncompress_buf_size = if self.options.compress {
-            self.options.items_per_slot * (1 + 1 + 2 + 4 + 4 + 4 + 4 + 8 + 8)
-        } else {
-            0
-        };
-
         file.seek(SeekFrom::Start(0))?;
         file.write_u32::<NativeEndian>(BIGWIG_MAGIC)?;
         file.write_u16::<NativeEndian>(4)?; // Actually 3, unsure what version 4 actually adds
@@ -105,7 +97,7 @@ impl BigWigWrite {
         file.write_u16::<NativeEndian>(0)?; // definedFieldCount
         file.write_u64::<NativeEndian>(0)?; // autoSQLOffset
         file.write_u64::<NativeEndian>(total_summary_offset)?;
-        file.write_u32::<NativeEndian>(uncompress_buf_size)?;
+        file.write_u32::<NativeEndian>(uncompress_buf_size as u32)?;
         file.write_u64::<NativeEndian>(0)?; // reserved
 
         debug_assert!(file.seek(SeekFrom::Current(0))? == 64);
@@ -135,11 +127,11 @@ impl BigWigWrite {
     async fn process_group<I>(
         mut zooms_channels: Vec<
             futures::channel::mpsc::Sender<
-                Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+                Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
             >,
         >,
         mut ftx: futures::channel::mpsc::Sender<
-            Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+            Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
         >,
         chrom_id: u32,
         options: BBIWriteOptions,
@@ -386,7 +378,7 @@ async fn encode_section(
     compress: bool,
     items_in_section: Vec<Value>,
     chrom_id: u32,
-) -> io::Result<SectionData> {
+) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
     let mut bytes: Vec<u8> = vec![];
@@ -408,7 +400,7 @@ async fn encode_section(
         bytes.write_f32::<NativeEndian>(item.value)?;
     }
 
-    let out_bytes = if compress {
+    let (out_bytes, uncompress_buf_size) = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
         let mut compressed_data = vec![0; max_sz];
@@ -416,15 +408,15 @@ async fn encode_section(
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
-        compressed_data
+        (compressed_data, bytes.len())
     } else {
-        bytes
+        (bytes, 0)
     };
 
-    Ok(SectionData {
+    Ok((SectionData {
         chrom: chrom_id,
         start,
         end,
         data: out_bytes,
-    })
+    }, uncompress_buf_size))
 }

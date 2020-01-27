@@ -119,7 +119,7 @@ impl<W> From<io::IntoInnerError<W>> for WriteGroupsError {
 
 pub struct TempZoomInfo {
     pub resolution: u32,
-    pub data_write_future: Box<dyn Future<Output = Result<usize, WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future: Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: filebufferedchannel::Receiver<Section>,
 }
@@ -127,18 +127,18 @@ pub struct TempZoomInfo {
 pub(crate) struct ChromProcessingInput {
     pub(crate) zooms_channels: Vec<
         futures::channel::mpsc::Sender<
-            Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+            Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
         >,
     >,
     pub(crate) ftx: futures::channel::mpsc::Sender<
-        Pin<Box<dyn Future<Output = io::Result<SectionData>> + Send>>,
+        Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
     >,
 }
 
 pub struct ChromProcessingOutput {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
-    pub data_write_future: Box<dyn Future<Output = Result<usize, WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future: Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
     pub zooms: Vec<TempZoomInfo>,
 }
 
@@ -215,7 +215,7 @@ pub(crate) fn write_chrom_tree(
 pub(crate) async fn encode_zoom_section(
     compress: bool,
     items_in_section: Vec<ZoomRecord>,
-) -> io::Result<SectionData> {
+) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
     let mut bytes: Vec<u8> = vec![];
@@ -235,7 +235,7 @@ pub(crate) async fn encode_zoom_section(
         bytes.write_f32::<NativeEndian>(item.summary.sum_squares as f32)?;
     }
 
-    let out_bytes = if compress {
+    let (out_bytes, uncompressed_buf_size) = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
         let mut compressed_data = vec![0; max_sz];
@@ -243,17 +243,17 @@ pub(crate) async fn encode_zoom_section(
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
-        compressed_data
+        (compressed_data, bytes.len())
     } else {
-        bytes
+        (bytes, 0)
     };
 
-    Ok(SectionData {
+    Ok((SectionData {
         chrom,
         start,
         end,
         data: out_bytes,
-    })
+    }, uncompressed_buf_size))
 }
 
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
@@ -520,6 +520,7 @@ pub(crate) async fn write_vals<V>(
         BufWriter<File>,
         Box<dyn Iterator<Item = Section> + 'static>,
         Vec<ZoomInfo>,
+        usize,
     ),
     WriteGroupsError,
 >
@@ -549,6 +550,7 @@ where
     let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
+    let mut max_uncompressed_buf_size = 0;
 
     let chrom_ids = loop {
         let next = vals_iter.next()?;
@@ -579,7 +581,8 @@ where
                 }
 
                 // All the futures are actually just handles, so these are purely for the result
-                let (chrom_summary, _num_sections) = try_join!(summary_future, data_write_future)?;
+                let (chrom_summary, (_num_sections, uncompressed_buf_size)) = try_join!(summary_future, data_write_future)?;
+                max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(Box::new(sections.into_iter()));
                 raw_file = data.await_real_file();
 
@@ -591,7 +594,8 @@ where
                 } in zooms.into_iter()
                 {
                     let zoom = zooms_map.get_mut(&resolution).unwrap();
-                    let _num_sections = data_write_future.await?;
+                    let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
+                    max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                     zoom.0.push(Box::new(sections.into_iter()));
                     zoom.2.replace(data.await_real_file());
                 }
@@ -644,18 +648,21 @@ where
         BufWriter::new(raw_file),
         section_iter,
         zoom_infos,
+        max_uncompressed_buf_size,
     ))
 }
 
 pub(crate) async fn write_data<W: Write>(
     mut data_file: W,
     mut section_sender: filebufferedchannel::Sender<Section>,
-    mut frx: Receiver<impl Future<Output = io::Result<SectionData>> + Send>,
-) -> Result<usize, WriteGroupsError> {
+    mut frx: Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
+) -> Result<(usize, usize), WriteGroupsError> {
     let mut current_offset = 0;
     let mut total = 0;
+    let mut max_uncompressed_buf_size = 0;
     while let Some(section_raw) = frx.next().await {
-        let section: SectionData = section_raw.await?;
+        let (section, uncompressed_buf_size): (SectionData, usize) = section_raw.await?;
+        max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
         total += 1;
         let size = section.data.len() as u64;
         data_file.write_all(&section.data)?;
@@ -670,7 +677,7 @@ pub(crate) async fn write_data<W: Write>(
             .expect("Couldn't send section.");
         current_offset += size;
     }
-    Ok(total)
+    Ok((total, max_uncompressed_buf_size))
 }
 
 pub(crate) fn get_chromprocessing(
