@@ -99,7 +99,7 @@ impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
     fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>> {
         let l = self.bed.read()?;
         let line = match l {
-            Some(line) => line,
+            Some(line) => line.trim_end(),
             None => return Ok(None),
         };
         (self.parse)(line)

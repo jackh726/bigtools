@@ -178,7 +178,7 @@ pub fn get_merged_values(
     }
 
     impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, (IdMap)>>, WriteGroupsError> {
+        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError> {
             let next = self.iter.next();
             match next {
                 Some(next) => {
