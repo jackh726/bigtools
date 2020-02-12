@@ -19,7 +19,7 @@ serde = { version = "1.0", features = ["derive"] }
 clap = "2"
 itertools = "0.8.0"
 bincode = "1"
-reqwest = { version = "0.10.0-alpha.2", optional = true }
+reqwest = { version = "0.10.0-alpha.2", optional = true, features = ["blocking"] }
 libdeflater = "0.2.0"
 
 [dev-dependencies]
