@@ -30,6 +30,14 @@ fn main() -> Result<(), WriteGroupsError> {
                 .help("Set the number of threads to use")
                 .takes_value(true)
                 .default_value("6"))
+        .arg(Arg::with_name("nzooms")
+                .short("z")
+                .help("Set the maximum of zooms to create.")
+                .takes_value(true)
+                .default_value("10"))
+        .arg(Arg::with_name("uncompressed")
+                .short("u")
+                .help("Don't use compression."))
         .arg(Arg::with_name("sorted")
                 .short("s")
                 .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
@@ -49,6 +57,16 @@ fn main() -> Result<(), WriteGroupsError> {
         }
         parsed.unwrap()
     };
+    let nzooms = {
+        let nzooms = matches.value_of("nzooms").unwrap();
+        let parsed = nzooms.parse();
+        if parsed.is_err() {
+            eprintln!("Invalid argument for `nzooms`: must be a positive number");
+            return Ok(());
+        }
+        parsed.unwrap()
+    };
+    let uncompressed = { matches.is_present("uncompressed") };
     let input_sort_type = match matches.value_of("sorted") {
         None => InputSortType::ALL,
         Some("all") => InputSortType::ALL,
@@ -67,6 +85,8 @@ fn main() -> Result<(), WriteGroupsError> {
     };
 
     let mut outb = BigBedWrite::create_file(bigwigpath);
+    outb.options.max_zooms = nzooms;
+    outb.options.compress = !uncompressed;
     outb.options.input_sort_type = input_sort_type;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()

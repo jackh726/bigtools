@@ -57,7 +57,7 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
             if take_col != 0 && cols.len() < take_col {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid bed: The column used for the name ({}) extends past the number of columns.", take_col)));
             }
-            let interval_cols = &cols[0..(3.max(take_col) + 1)];
+            let interval_cols = &cols[0..=3.max(take_col)];
             let chrom = interval_cols[0];
             let start = interval_cols[1].parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid start: not an integer"))?;
             let end = interval_cols[2].parse::<u32>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid end: not an integer"))?;

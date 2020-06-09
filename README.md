@@ -18,7 +18,7 @@ Bigtools uses `async/await` internally to allow for efficient, multi-core comput
 
 Bigtools is designed to be as modular as possible. This, in addition to the safety and reliability of Rust, allows both flexibility and correctness as a library. In addition, its extremely easy to quickly create new tools or binaries.. (TODO: mention python wrapper)
 
-## Modern
+### Modern
 
 Bigtools is written in Rust and published to `crates.io`, so binaries can be installed with `cargo install bigtools` or it can be used as a library by simply including it in your `cargo.toml`.
 
