@@ -69,7 +69,7 @@ impl Seek for RemoteFile {
             let cursor_end = cursor.get_ref().len() as u64;
             if self.last_seek >= last_seek && self.last_seek < cursor_end {
                 let new_position = self.last_seek - last_seek;
-                cursor.set_position(dbg!(new_position));
+                cursor.set_position(new_position);
                 return Ok(self.last_seek);
             }
         }

@@ -134,13 +134,23 @@ fn main() -> Result<(), BigWigReadAttachError> {
         eprintln!("File does not exist: {}", bedin.display());
         return Ok(());
     }
-    let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+    
     let out = File::create(outputpath)?;
     let options = Options {
         withnames,
         delimiter,
     };
-    write(&bedin, inbigwig, out, options)?;
+
+    if cfg!(feature = "remote") && bigwigpath.starts_with("http") {
+        use bigtools::remote_file::RemoteFile;
+        let f = RemoteFile::new(bigwigpath);
+        let inbigwig = BigWigRead::from(f)?;
+        write(&bedin, inbigwig, out, options)?;
+    } else {
+        let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+        write(&bedin, inbigwig, out, options)?;
+    }
+
 
     Ok(())
 }
