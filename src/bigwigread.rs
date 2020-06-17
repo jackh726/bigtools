@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::{self, Seek, SeekFrom};
@@ -10,6 +11,7 @@ use crate::bbiread::{
     ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
+use crate::mem_cached_file::{MemCachedRead, CACHE_SIZE};
 use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
 struct IntervalIter<'a, I, R, S>
@@ -158,6 +160,7 @@ where
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    cache: HashMap<u64, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigWigRead<R, S>
@@ -170,6 +173,7 @@ where
             info: self.info.clone(),
             reopen: self.reopen.clone(),
             reader: None,
+            cache: HashMap::new(),
         }
     }
 }
@@ -187,6 +191,19 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
             self.reader.replace(file);
         }
         Ok(self.reader.as_mut().unwrap())
+    }
+
+    fn ensure_mem_cached_reader(
+        &mut self,
+    ) -> io::Result<ByteOrdered<MemCachedRead<ByteOrdered<BufReader<S>, Endianness>>, Endianness>>
+    {
+        self.ensure_reader()?;
+        let endianness = self.reader.as_ref().unwrap().endianness();
+        let inner = self.reader.as_mut().unwrap();
+        Ok(ByteOrdered::runtime(
+            MemCachedRead::new(inner, &mut self.cache),
+            endianness,
+        ))
     }
 
     fn close(&mut self) {
@@ -207,7 +224,9 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
 
 impl BigWigRead<ReopenableFile, File> {
     pub fn from_file_and_attach(path: &str) -> Result<Self, BigWigReadAttachError> {
-        let reopen = ReopenableFile { path: path.to_string() };
+        let reopen = ReopenableFile {
+            path: path.to_string(),
+        };
         let b = BigWigRead::from(reopen);
         if b.is_err() {
             eprintln!("Error when opening: {}", path);
@@ -239,6 +258,7 @@ where
             info,
             reopen,
             reader: None,
+            cache: HashMap::new(),
         })
     }
 
@@ -304,7 +324,7 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
     /// positions with no data in the bigWig will be `std::f32::NAN`.
     pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-        let mut values = vec![std::f32::NAN; (end-start) as usize];
+        let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::tell::Tell;
         let mut known_offset = self.ensure_reader()?.tell()?;
         for block in blocks {
@@ -312,7 +332,9 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
             for block_value in block_values {
                 let block_value_start = (block_value.start - start) as usize;
                 let block_value_end = (block_value.end - start) as usize;
-                for i in &mut values[block_value_start..block_value_end] { *i = block_value.value }
+                for i in &mut values[block_value_start..block_value_end] {
+                    *i = block_value.value
+                }
             }
         }
         Ok(values)

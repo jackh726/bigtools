@@ -12,7 +12,7 @@ pub const CACHE_SIZE: usize = 4 * 1024;
 /// accommodate only caching during a particular bit of logic. For example,
 /// for BigWigs, it makes sense to cache the initial header and the cir tree,
 /// without caching the data section.
-pub(crate) struct MemCachedRead<'a, R: Read + Seek> {
+pub struct MemCachedRead<'a, R: Read + Seek> {
     reader: &'a mut R,
     cache: &'a mut HashMap<u64, [u8; CACHE_SIZE]>,
     current_position: Option<u64>,
@@ -73,6 +73,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
                         let copy_start = offset as usize;
                         let copy_end = read.min(remaining_len + offset as usize);
                         let copy_to_end = (read - offset as usize).min(remaining_len);
+                        self.current_position = Some(current_position + copy_to_end as u64);
                         let to_copy = &temp_buf[copy_start..copy_end];
                         remaining_buf[..copy_to_end].copy_from_slice(&to_copy);
                         total_read += to_copy.len();
@@ -158,6 +159,7 @@ mod tests {
         mem_cached_file.read_exact(&mut test)?;
         let sum: usize = test.iter().map(|i| *i as usize).sum();
         assert_eq!(sum, CACHE_SIZE * 5);
+        // FIXME: test repeated reads
 
         Ok(())
     }

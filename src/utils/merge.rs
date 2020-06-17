@@ -453,7 +453,7 @@ where
                         // See merge_into for what these are
                         // In short: one, two, and three are strictly contained within the current val's start-end, while overhang is anything left over
                         let (one, two, three, overhang) = merge_into(nvq, insert_val);
-                        std::mem::replace(queued, one);
+                        let _ = std::mem::replace(queued, one);
 
                         // If these exist, they don't change any of the queue after the current item
                         if let Some(th) = three {

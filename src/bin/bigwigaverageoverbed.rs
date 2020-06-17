@@ -4,7 +4,7 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use clap::{App, Arg};
 
 use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
-use bigtools::utils::misc::{BigWigAverageOverBedOptions, Name, bigwig_average_over_bed};
+use bigtools::utils::misc::{bigwig_average_over_bed, BigWigAverageOverBedOptions, Name};
 
 fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigAverageOverBed")
@@ -51,9 +51,16 @@ fn main() -> Result<(), BigWigReadAttachError> {
                 .take(TEST_LINES)
                 .map(|line| -> io::Result<Option<String>> {
                     let l = line?;
-                    let cols = l.trim().split('\t').take((NAME_COL + 1).max(3)).collect::<Vec<_>>();
+                    let cols = l
+                        .trim()
+                        .split('\t')
+                        .take((NAME_COL + 1).max(3))
+                        .collect::<Vec<_>>();
                     if cols.len() < 3 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Not enough columns. Expected >= 3."));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Not enough columns. Expected >= 3.",
+                        ));
                     }
                     Ok(cols.get(NAME_COL - 1).map(|s| s.to_string()))
                 })
@@ -61,7 +68,10 @@ fn main() -> Result<(), BigWigReadAttachError> {
             lines.sort();
             lines.dedup();
             if lines.len() != TEST_LINES {
-                eprintln!("Name column ({}) is not unique. Using interval as the name.", NAME_COL);
+                eprintln!(
+                    "Name column ({}) is not unique. Using interval as the name.",
+                    NAME_COL
+                );
                 Name::None
             } else {
                 Name::Column(std::num::NonZeroUsize::new(NAME_COL).unwrap())
@@ -75,7 +85,10 @@ fn main() -> Result<(), BigWigReadAttachError> {
     for entry in iter {
         let entry = entry?;
         let name = entry.name;
-        let stats = format!("{}\t{}\t{:.3}\t{:.3}\t{:.3}", entry.size, entry.bases, entry.sum, entry.mean0, entry.mean);
+        let stats = format!(
+            "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
+            entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
+        );
         write!(&mut bedoutwriter, "{}\t{}\n", name, stats)?
     }
 

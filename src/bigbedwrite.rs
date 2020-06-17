@@ -224,11 +224,14 @@ impl BigBedWrite {
                             let value = o.value - 1.0;
                             let end = o.end;
                             o.end = item_end;
-                            overlap.insert(i+1, Value {
-                                start: item_end,
-                                end,
-                                value,
-                            });
+                            overlap.insert(
+                                i + 1,
+                                Value {
+                                    start: item_end,
+                                    end,
+                                    value,
+                                },
+                            );
                             break;
                         }
                     }
@@ -306,11 +309,14 @@ impl BigBedWrite {
                         let value = o.value - 1.0;
                         let end = o.end;
                         o.end = item_end;
-                        overlap.insert(i+1, Value {
-                            start: item_end,
-                            end,
-                            value,
-                        });
+                        overlap.insert(
+                            i + 1,
+                            Value {
+                                start: item_end,
+                                end,
+                                value,
+                            },
+                        );
                         break;
                     }
                 }
@@ -546,10 +552,13 @@ async fn encode_section(
         (bytes, 0)
     };
 
-    Ok((SectionData {
-        chrom: chrom_id,
-        start,
-        end,
-        data: out_bytes,
-    }, uncompress_buf_size))
+    Ok((
+        SectionData {
+            chrom: chrom_id,
+            start,
+            end,
+            data: out_bytes,
+        },
+        uncompress_buf_size,
+    ))
 }

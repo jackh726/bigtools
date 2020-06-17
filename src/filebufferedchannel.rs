@@ -71,7 +71,11 @@ where
 {
     let (channelsender, channelreceiver) = bounded(size);
     let (buffersender, bufferreceiver) = bounded(size);
-    let state = Arc::new(Mutex::new(ChannelState::new_lazy(size, channelsender, bufferreceiver)?));
+    let state = Arc::new(Mutex::new(ChannelState::new_lazy(
+        size,
+        channelsender,
+        bufferreceiver,
+    )?));
     let sender = Sender {
         state: state.clone(),
         sender: buffersender,
@@ -130,7 +134,11 @@ where
         }
     }
 
-    fn new_lazy(maxsize: usize, sender: ChannelSender<T>, buffer: ChannelReceiver<T>) -> io::Result<ChannelState<T>> {
+    fn new_lazy(
+        maxsize: usize,
+        sender: ChannelSender<T>,
+        buffer: ChannelReceiver<T>,
+    ) -> io::Result<ChannelState<T>> {
         let status = ChannelStateStatus::OnDisk {
             can_send: false,
             serialize_size: None,
@@ -140,10 +148,7 @@ where
             readindex: 0,
             writeindex: 0,
         };
-        Ok(ChannelState {
-            maxsize,
-            status,
-        })
+        Ok(ChannelState { maxsize, status })
     }
 
     /// If we spawned this channel lazily, then no data has been sent to the
@@ -151,7 +156,7 @@ where
     /// If we are in `OnDisk` state, this sets the `can_send` flag as `true`.
     fn mark_read(&mut self) {
         match &mut self.status {
-            ChannelStateStatus::InMemory => {},
+            ChannelStateStatus::InMemory => {}
             ChannelStateStatus::OnDisk { can_send, .. } => {
                 *can_send = true;
             }
@@ -367,7 +372,7 @@ where
     /// Sends a `T` over the channel. If state is `InMemory`, it will immediately
     /// be available to the `Receiver`. If state is `OnDisk`, then it will be
     /// sent the pending queue.
-    /// 
+    ///
     /// If the item cannot be sent because the is full, then the channel will first be
     /// flushed.
     pub fn send(&mut self, t: T) -> Result<(), SendError> {

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -10,6 +11,7 @@ use crate::bbiread::{
     ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
+use crate::mem_cached_file::{MemCachedRead, CACHE_SIZE};
 use crate::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
 struct IntervalIter<'a, I, R, S>
@@ -160,6 +162,7 @@ where
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    cache: HashMap<u64, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigBedRead<R, S>
@@ -172,6 +175,7 @@ where
             info: self.info.clone(),
             reopen: self.reopen.clone(),
             reader: None,
+            cache: HashMap::new(),
         }
     }
 }
@@ -193,6 +197,19 @@ where
             self.reader.replace(file);
         }
         Ok(self.reader.as_mut().unwrap())
+    }
+
+    fn ensure_mem_cached_reader(
+        &mut self,
+    ) -> io::Result<ByteOrdered<MemCachedRead<ByteOrdered<BufReader<S>, Endianness>>, Endianness>>
+    {
+        self.ensure_reader()?;
+        let endianness = self.reader.as_ref().unwrap().endianness();
+        let inner = self.reader.as_mut().unwrap();
+        Ok(ByteOrdered::runtime(
+            MemCachedRead::new(inner, &mut self.cache),
+            endianness,
+        ))
     }
 
     fn close(&mut self) {
@@ -245,6 +262,7 @@ where
             info,
             reopen,
             reader: None,
+            cache: HashMap::new(),
         })
     }
 }

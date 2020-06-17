@@ -43,7 +43,7 @@ pub fn get_merged_vals(
 )> {
     let (chrom_sizes, chrom_map) = {
         // NOTE: We don't need to worry about max fds here because chroms are cached.
-        
+
         // Get sizes for each and check that all files (that have the chrom) agree
         // Check that all chrom sizes match for all files
         let mut chrom_sizes = BTreeMap::new();
@@ -157,7 +157,7 @@ pub fn get_merged_vals(
             let mergingvalues = MergingValues {
                 iter: iter.peekable(),
             };
-    
+
             Ok((chrom, size, mergingvalues))
         }
     });
@@ -246,7 +246,10 @@ fn main() -> Result<(), WriteGroupsError> {
 
     if let Some(bws) = matches.values_of("bigwig") {
         for name in bws {
-            match BigWigRead::from_file_and_attach(name).map(|mut bw| { bw.close(); bw }) {
+            match BigWigRead::from_file_and_attach(name).map(|mut bw| {
+                bw.close();
+                bw
+            }) {
                 Ok(bw) => bigwigs.push(bw),
                 Err(e) => {
                     eprintln!("Error when opening bigwig ({}): {:?}", name, e);
@@ -267,7 +270,10 @@ fn main() -> Result<(), WriteGroupsError> {
             let lines = BufReader::new(list_file).lines();
             for line in lines {
                 let name = line?;
-                match BigWigRead::from_file_and_attach(&name).map(|mut bw| { bw.close(); bw }) {
+                match BigWigRead::from_file_and_attach(&name).map(|mut bw| {
+                    bw.close();
+                    bw
+                }) {
                     Ok(bw) => bigwigs.push(bw),
                     Err(e) => {
                         eprintln!("Error when opening bigwig ({}): {:?}", name, e);

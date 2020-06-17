@@ -23,19 +23,44 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
 
     while let Some(line) = bedstream.read()? {
         let mut split = line.trim_end().splitn(4, '\t');
-        let chrom = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing chrom: {}", line)))?;
-        let start = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {}", line)))?.parse::<u32>().map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", line))
-        })?;
-        let end = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {}", line)))?.parse::<u32>().map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", line))
-        })?;
-        let interval = b
-            .get_interval(chrom, start, end);
+        let chrom = split.next().ok_or(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Missing chrom: {}", line),
+        ))?;
+        let start = split
+            .next()
+            .ok_or(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Missing start: {}", line),
+            ))?
+            .parse::<u32>()
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid start: {:}", line),
+                )
+            })?;
+        let end = split
+            .next()
+            .ok_or(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Missing end: {}", line),
+            ))?
+            .parse::<u32>()
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid end: {:}", line),
+                )
+            })?;
+        let interval = b.get_interval(chrom, start, end);
         let interval = match interval {
             Ok(interval) => interval,
             Err(e) => {
-                eprintln!("An error occured when intersecting {}:{}-{}: {}", chrom, start, end, e);
+                eprintln!(
+                    "An error occured when intersecting {}:{}-{}: {}",
+                    chrom, start, end, e
+                );
                 continue;
             }
         };
@@ -44,7 +69,10 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
             let val = match raw_val {
                 Ok(val) => val,
                 Err(e) => {
-                    eprintln!("An error occured when intersecting {}:{}-{}: {}", chrom, start, end, e);
+                    eprintln!(
+                        "An error occured when intersecting {}:{}-{}: {}",
+                        chrom, start, end, e
+                    );
                     continue;
                 }
             };
@@ -68,15 +96,15 @@ fn main() -> Result<(), BigBedReadAttachError> {
                         .short("a")
                         .help("Each entry in this bed is compared against b for overlaps.")
                         .takes_value(true)
-                        .required(true)
+                        .required(true),
                 )
                 .arg(
                     Arg::with_name("b")
                         .short("b")
                         .help("Each entry in a will be compared against this bigBed for overlaps.")
                         .takes_value(true)
-                        .required(true)
-                )
+                        .required(true),
+                ),
         )
         .get_matches();
 

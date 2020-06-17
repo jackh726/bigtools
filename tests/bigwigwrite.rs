@@ -58,8 +58,7 @@ fn test() -> io::Result<()> {
     );
     outb.write_groups(chrom_map, chsi).unwrap();
 
-    let mut bwread =
-        BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 1);
@@ -130,8 +129,7 @@ fn test_multi() -> io::Result<()> {
     );
     outb.write_groups(chrom_map, chsi).unwrap();
 
-    let mut bwread =
-        BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 6);

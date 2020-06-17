@@ -134,7 +134,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         eprintln!("File does not exist: {}", bedin.display());
         return Ok(());
     }
-    
+
     let out = File::create(outputpath)?;
     let options = Options {
         withnames,
@@ -150,7 +150,6 @@ fn main() -> Result<(), BigWigReadAttachError> {
         let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
         write(&bedin, inbigwig, out, options)?;
     }
-
 
     Ok(())
 }

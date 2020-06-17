@@ -145,27 +145,30 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 
 impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
-        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, BedEntry)>> + Send> = Box::new(|s: &str| {
-            let mut split = s.splitn(4, '\t');
-            let chrom = match split.next() {
-                Some(chrom) => chrom,
-                None => return Ok(None),
-            };
-            let s = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s)))?;
-            let start = s.parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-            })?;
-            let s = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s)))?;
-            let end = s.parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-            })?;
-            let rest = split.next().unwrap_or("").to_string();
-            Ok(Some((chrom, BedEntry {
-                start,
-                end,
-                rest,
-            })))
-        });
+        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, BedEntry)>> + Send> =
+            Box::new(|s: &str| {
+                let mut split = s.splitn(4, '\t');
+                let chrom = match split.next() {
+                    Some(chrom) => chrom,
+                    None => return Ok(None),
+                };
+                let s = split.next().ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing start: {:}", s),
+                ))?;
+                let start = s.parse::<u32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+                })?;
+                let s = split.next().ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing end: {:}", s),
+                ))?;
+                let end = s.parse::<u32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+                })?;
+                let rest = split.next().unwrap_or("").to_string();
+                Ok(Some((chrom, BedEntry { start, end, rest })))
+            });
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
             parse,
@@ -175,26 +178,36 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
 
 impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
-        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, Value)>> + Send> = Box::new(|s: &str| {
-            let mut split = s.splitn(5, '\t');
-            let chrom = match split.next() {
-                Some(chrom) => chrom,
-                None => return Ok(None),
-            };
-            let s = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s)))?;
-            let start = s.parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-            })?;
-            let s = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s)))?;
-            let end = s.parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-            })?;
-            let s = split.next().ok_or(io::Error::new(io::ErrorKind::InvalidData, format!("Missing value: {:}", s)))?;
-            let value = s.parse::<f32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
-            })?;
-            Ok(Some((chrom, Value { start, end, value })))
-        });
+        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, Value)>> + Send> =
+            Box::new(|s: &str| {
+                let mut split = s.splitn(5, '\t');
+                let chrom = match split.next() {
+                    Some(chrom) => chrom,
+                    None => return Ok(None),
+                };
+                let s = split.next().ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing start: {:}", s),
+                ))?;
+                let start = s.parse::<u32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+                })?;
+                let s = split.next().ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing end: {:}", s),
+                ))?;
+                let end = s.parse::<u32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+                })?;
+                let s = split.next().ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing value: {:}", s),
+                ))?;
+                let value = s.parse::<f32>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
+                })?;
+                Ok(Some((chrom, Value { start, end, value })))
+            });
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
             parse,

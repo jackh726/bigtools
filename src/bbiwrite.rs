@@ -119,7 +119,8 @@ impl<W> From<io::IntoInnerError<W>> for WriteGroupsError {
 
 pub struct TempZoomInfo {
     pub resolution: u32,
-    pub data_write_future: Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future:
+        Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: filebufferedchannel::Receiver<Section>,
 }
@@ -138,7 +139,8 @@ pub(crate) struct ChromProcessingInput {
 pub struct ChromProcessingOutput {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
-    pub data_write_future: Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future:
+        Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
     pub zooms: Vec<TempZoomInfo>,
 }
 
@@ -248,12 +250,15 @@ pub(crate) async fn encode_zoom_section(
         (bytes, 0)
     };
 
-    Ok((SectionData {
-        chrom,
-        start,
-        end,
-        data: out_bytes,
-    }, uncompressed_buf_size))
+    Ok((
+        SectionData {
+            chrom,
+            start,
+            end,
+            data: out_bytes,
+        },
+        uncompressed_buf_size,
+    ))
 }
 
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
@@ -581,7 +586,8 @@ where
                 }
 
                 // All the futures are actually just handles, so these are purely for the result
-                let (chrom_summary, (_num_sections, uncompressed_buf_size)) = try_join!(summary_future, data_write_future)?;
+                let (chrom_summary, (_num_sections, uncompressed_buf_size)) =
+                    try_join!(summary_future, data_write_future)?;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(Box::new(sections.into_iter()));
                 raw_file = data.await_real_file();
@@ -595,7 +601,8 @@ where
                 {
                     let zoom = zooms_map.get_mut(&resolution).unwrap();
                     let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
-                    max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
+                    max_uncompressed_buf_size =
+                        max_uncompressed_buf_size.max(uncompressed_buf_size);
                     zoom.0.push(Box::new(sections.into_iter()));
                     zoom.2.replace(data.await_real_file());
                 }

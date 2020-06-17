@@ -413,10 +413,13 @@ async fn encode_section(
         (bytes, 0)
     };
 
-    Ok((SectionData {
-        chrom: chrom_id,
-        start,
-        end,
-        data: out_bytes,
-    }, uncompress_buf_size))
+    Ok((
+        SectionData {
+            chrom: chrom_id,
+            start,
+            end,
+            data: out_bytes,
+        },
+        uncompress_buf_size,
+    ))
 }
