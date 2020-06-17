@@ -10,6 +10,7 @@ pub mod bigwigwrite;
 pub mod chromvalues;
 pub mod filebufferedchannel;
 pub mod idmap;
+pub mod mem_cached_file;
 pub mod seekableread;
 pub mod tell;
 pub mod tempfilebuffer;

@@ -2,8 +2,8 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use reqwest;
-use tokio::runtime;
 use tempfile;
+use tokio::runtime;
 
 use crate::seekableread::Reopen;
 
@@ -54,8 +54,12 @@ impl RemoteFile {
         };
         let basic_rt = match self.runtime.as_mut() {
             None => {
-                self.runtime = Some(runtime::Runtime::new()
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error creating runtime: {}", e)))?);
+                self.runtime = Some(runtime::Runtime::new().map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Error creating runtime: {}", e),
+                    )
+                })?);
                 self.runtime.as_mut().unwrap()
             }
             Some(basic_rt) => basic_rt,
@@ -77,38 +81,38 @@ impl RemoteFile {
             return Ok(bytes_available);
         }
 
-        let read_len = recommended_size.unwrap_or(READ_SIZE as u64).max(READ_SIZE as u64);
+        let read_len = recommended_size
+            .unwrap_or(READ_SIZE as u64)
+            .max(READ_SIZE as u64);
 
         let client = &self.client;
         let url = self.url.clone();
-        let bytes = basic_rt.block_on(
-            async {
-                let r = client
-                    .get(url)
-                    .header(
-                        reqwest::header::RANGE,
-                        format!(
-                            "bytes={}-{}",
-                            block_start,
-                            block_start + read_len as u64 - 1
-                        ),
-                    )
-                    .send()
-                    .await?;
-                r.bytes().await
-            }
-        );
+        let bytes = basic_rt.block_on(async {
+            let r = client
+                .get(url)
+                .header(
+                    reqwest::header::RANGE,
+                    format!(
+                        "bytes={}-{}",
+                        block_start,
+                        block_start + read_len as u64 - 1
+                    ),
+                )
+                .send()
+                .await?;
+            r.bytes().await
+        });
         let bytes = bytes.map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         let bytes = bytes.to_vec();
         cache.seek(SeekFrom::Start(cache_block_start))?;
         let blocks_to_write = if bytes.len() == read_len as usize {
-            bytes.len()/READ_SIZE
+            bytes.len() / READ_SIZE
         } else {
-            (bytes.len()+READ_SIZE-1)/READ_SIZE
+            (bytes.len() + READ_SIZE - 1) / READ_SIZE
         };
         for start in 0..blocks_to_write {
-            let begin = start*READ_SIZE;
-            let end = ((start+1)*READ_SIZE).min(bytes.len());
+            let begin = start * READ_SIZE;
+            let end = ((start + 1) * READ_SIZE).min(bytes.len());
             let block_data = &bytes[begin..end];
             if block_data.len() == READ_SIZE {
                 cache.write_u8(1)?;
@@ -143,11 +147,15 @@ impl Read for RemoteFile {
                 // If we not at the start of the block, then the length that we need
                 // is longer than the length of the buf itself, since we have to
                 // acount for how far into the block we are.
-                let bytes_available = self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
+                let bytes_available =
+                    self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
                 // If we are at the beginning of a block, then skip to where
                 // we need to be.
                 if in_block > 0 {
-                    self.current.as_mut().unwrap().seek(SeekFrom::Start(in_block))?;
+                    self.current
+                        .as_mut()
+                        .unwrap()
+                        .seek(SeekFrom::Start(in_block))?;
                 }
                 bytes_available - in_block.min(bytes_available)
             } else {
@@ -157,13 +165,18 @@ impl Read for RemoteFile {
                 // We don't have enough bytes in the cursor. Let's reload this
                 // block just to ensure that we have the data loaded.
                 if bytes_available < remaining_buf.len() as u64 {
-                    self.last_seek = ((self.last_seek / READ_SIZE as u64) * READ_SIZE as u64) + self.current.as_ref().unwrap().position();
+                    self.last_seek = ((self.last_seek / READ_SIZE as u64) * READ_SIZE as u64)
+                        + self.current.as_ref().unwrap().position();
                     self.current = None;
                     let cursor_start = (self.last_seek / READ_SIZE as u64) * READ_SIZE as u64;
                     let in_block = self.last_seek - cursor_start;
-                    let bytes_available = self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
+                    let bytes_available =
+                        self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
                     if in_block > 0 {
-                        self.current.as_mut().unwrap().seek(SeekFrom::Start(in_block))?;
+                        self.current
+                            .as_mut()
+                            .unwrap()
+                            .seek(SeekFrom::Start(in_block))?;
                     }
                     bytes_available - in_block.min(bytes_available)
                 } else {
@@ -210,13 +223,16 @@ impl Seek for RemoteFile {
                 }
             }
         };
-        if let Some(cursor) = self.current.as_mut() {
+        if let Some(_cursor) = self.current.as_mut() {
+            /*
+            // FIXME: this isn't correct
             let cursor_end = cursor.get_ref().len() as u64;
             if self.last_seek >= last_seek && self.last_seek < cursor_end {
                 let new_position = self.last_seek - last_seek;
                 cursor.set_position(new_position);
                 return Ok(self.last_seek);
             }
+            */
             self.current = None;
         }
         Ok(self.last_seek)
@@ -254,15 +270,17 @@ mod tests {
     use super::*;
     use crate::bigbedread::BigBedRead;
 
-    //#[ignore]
+    #[ignore]
     #[test]
     fn test_remote() {
         let f = RemoteFile::new("https://encode-public.s3.amazonaws.com/2020/01/17/7d2573b1-86f4-4592-a68a-ac3d5d0372d6/ENCFF592UJG.bigBed");
         let mut remote = BigBedRead::from(f).unwrap();
 
         let remote_intervals: Vec<_> = remote
-            .get_interval("chr10", 100000000, 100010000).unwrap()
-            .collect::<Result<_, _>>().unwrap();
+            .get_interval("chr10", 100000000, 100010000)
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
         assert_eq!(remote_intervals.len(), 5);
     }
 }
