@@ -195,13 +195,14 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
 
     fn ensure_mem_cached_reader(
         &mut self,
-    ) -> io::Result<ByteOrdered<MemCachedRead<ByteOrdered<BufReader<S>, Endianness>>, Endianness>>
-    {
+    ) -> io::Result<
+        ByteOrdered<BufReader<MemCachedRead<ByteOrdered<BufReader<S>, Endianness>>>, Endianness>,
+    > {
         self.ensure_reader()?;
         let endianness = self.reader.as_ref().unwrap().endianness();
         let inner = self.reader.as_mut().unwrap();
         Ok(ByteOrdered::runtime(
-            MemCachedRead::new(inner, &mut self.cache),
+            BufReader::new(MemCachedRead::new(inner, &mut self.cache)),
             endianness,
         ))
     }

@@ -80,7 +80,9 @@ pub trait BBIRead<R: SeekableRead> {
 
     fn ensure_mem_cached_reader(
         &mut self,
-    ) -> io::Result<ByteOrdered<MemCachedRead<ByteOrdered<BufReader<R>, Endianness>>, Endianness>>;
+    ) -> io::Result<
+        ByteOrdered<BufReader<MemCachedRead<ByteOrdered<BufReader<R>, Endianness>>>, Endianness>,
+    >;
 
     /// Manually close the open file descriptor (if it exists). If any operations are performed after this is called, the file descriptor will be reopened.
     fn close(&mut self);
