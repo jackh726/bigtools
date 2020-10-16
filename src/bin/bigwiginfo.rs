@@ -5,8 +5,8 @@ use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
 fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigInfo")
         .arg(
-            Arg::with_name("bigwig")
-                .help("the bigwig to get info for")
+            Arg::new("bigwig")
+                .about("the bigwig to get info for")
                 .index(1)
                 .required(true),
         )

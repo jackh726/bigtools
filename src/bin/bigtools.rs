@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
-use clap::{App, Arg, SubCommand};
+use clap::{App, Arg};
 
 use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
 use bigtools::seekableread::{Reopen, SeekableRead};
@@ -89,19 +89,19 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
 fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("BigTools")
         .subcommand(
-            SubCommand::with_name("intersect")
+            App::new("intersect")
                 .about("Intersect all entries of a bed with a bigBed")
                 .arg(
-                    Arg::with_name("a")
-                        .short("a")
-                        .help("Each entry in this bed is compared against b for overlaps.")
+                    Arg::new("a")
+                        .short('a')
+                        .about("Each entry in this bed is compared against b for overlaps.")
                         .takes_value(true)
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name("b")
-                        .short("b")
-                        .help("Each entry in a will be compared against this bigBed for overlaps.")
+                    Arg::new("b")
+                        .short('b')
+                        .about("Each entry in a will be compared against this bigBed for overlaps.")
                         .takes_value(true)
                         .required(true),
                 ),
@@ -109,7 +109,7 @@ fn main() -> Result<(), BigBedReadAttachError> {
         .get_matches();
 
     match matches.subcommand() {
-        ("intersect", Some(matches)) => {
+        Some(("intersect", matches)) => {
             eprintln!("---BigTools intersect---");
 
             let apath = matches.value_of("a").unwrap().to_owned();
@@ -119,10 +119,10 @@ fn main() -> Result<(), BigBedReadAttachError> {
 
             intersect(apath, b, IntersectOptions {})?;
         }
-        ("", None) => {
-            eprintln!("No command. Use bigtools --help to see help.");
+        None => {
+            eprintln!("No command. Use bigtools -.about to see.about.");
         }
-        (subcommand, _) => {
+        Some((subcommand, _)) => {
             panic!("BUG: unhandled subcommand: {}", subcommand);
         }
     }

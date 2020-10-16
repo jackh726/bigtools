@@ -5,8 +5,8 @@ use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
 fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("Testing")
         .arg(
-            Arg::with_name("bigbed")
-                .help("the bigbed to get info for")
+            Arg::new("bigbed")
+                .about("the bigbed to get info for")
                 .index(1)
                 .required(true),
         )

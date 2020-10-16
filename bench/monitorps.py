@@ -33,9 +33,9 @@ import psutil
 
 def main():
     parser = argparse.ArgumentParser(description='Record CPU and memory usage for a process')
-    parser.add_argument('command', type=str, help='the process command')
-    parser.add_argument('--log', type=str, help='output the statistics to a file')
-    parser.add_argument('--interval', type=float, help='how long to wait between each sample (in seconds). By default the process is sampled as often as possible.')
+    parser.add_argument('command', type=str,.about='the process command')
+    parser.add_argument('--log', type=str,.about='output the statistics to a file')
+    parser.add_argument('--interval', type=float,.about='how long to wait between each sample (in seconds). By default the process is sampled as often as possible.')
     args = parser.parse_args()
     start_and_monitor(args.command, args.log, args.interval)
 
