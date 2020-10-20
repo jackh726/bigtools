@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
@@ -187,6 +186,20 @@ where
 {
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
+    }
+
+    fn autosql(&mut self) -> io::Result<String> {
+        self.ensure_reader()?;
+        let reader = self.reader.as_mut().unwrap();
+        reader.seek(SeekFrom::Start(self.info.header.auto_sql_offset))?;
+        let mut buffer = Vec::new();
+        reader.read_until(b'\0', &mut buffer)?;
+        buffer.pop();
+        let autosql = String::from_utf8(buffer).map_err(|_| io::Error::new(
+            io::ErrorKind::Other,
+            "Invalid autosql: not UTF-8",
+        ))?;
+        Ok(autosql)
     }
 
     fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<S>, Endianness>> {

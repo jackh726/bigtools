@@ -8,7 +8,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use futures::future::Either;
 
 use crate::bigwig::ChromGroupRead;
-use crate::bigwig::ChromGroupReadStreamingIterator;
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
 use crate::chromvalues::{ChromGroups, ChromValues};
@@ -57,30 +56,35 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
 }
 
 impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
-    ChromGroupReadStreamingIterator for BedParserChromGroupStreamingIterator<V, C, G, H>
+    Iterator for BedParserChromGroupStreamingIterator<V, C, G, H>
 {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError> {
-        match self.chrom_groups.next()? {
-            Some((chrom, group)) => {
+    type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.chrom_groups.next() {
+            Err(err) => Some(Err(err.into())),
+            Ok(Some((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
                     // TODO: test this correctly fails
                     if !self.allow_out_of_order_chroms && c >= chrom {
-                        return Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                        return Some(Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                     }
                 }
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
-                    None => return Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                    None => return Some(Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom)))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
-                let group = (self.callable)(chrom, chrom_id, length, group)?;
-                Ok(Some(Either::Left(group)))
+                match (self.callable)(chrom, chrom_id, length, group) {
+                    Ok(group) => Some(Ok(Either::Left(group))),
+                    Err(err) => Some(Err(err.into())),
+                }
+                
             }
-            None => match self.chrom_ids.take() {
-                Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
-                None => Ok(None),
+            Ok(None) => match self.chrom_ids.take() {
+                Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
+                None => None,
             },
         }
     }
@@ -238,7 +242,7 @@ pub struct BedParserState<V, S: StreamingChromValues<V>> {
 }
 
 impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
-    fn advance(&mut self) -> io::Result<()> {
+    fn advance(&mut self, replace_current: bool) -> io::Result<()> {
         self.curr_val = self.next_val.take();
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
             ChromOpt::Diff(real_chrom) => {
@@ -262,8 +266,8 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
                 self.next_chrom = ChromOpt::Diff(chrom.to_owned());
             }
         }
-        if self.curr_val.is_none() && self.next_val.is_some() {
-            self.advance()?;
+        if replace_current && self.curr_val.is_none() && self.next_val.is_some() {
+            self.advance(false)?;
         }
         Ok(())
     }
@@ -272,18 +276,60 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
 impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedParser<V, S> {
     fn next(&mut self) -> io::Result<Option<(String, ChromGroup<V, S>)>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        if let ChromOpt::Same = state.next_chrom {
-            panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+        if state.next_val.is_none() {
+            state.advance(false)?;
         }
-        state.advance()?;
 
-        let next_chrom = state.curr_chrom.as_ref();
+        let next_chrom = match &state.next_chrom {
+            ChromOpt::Diff(real_chrom) => {
+                Some(real_chrom)
+            }
+            ChromOpt::Same => {
+                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+            }
+            ChromOpt::None => {
+                None
+            }
+        };
         let ret = match next_chrom {
             None => Ok(None),
             Some(chrom) => {
                 let group = ChromGroup {
                     state: self.state.clone(),
                     curr_state: None,
+                    done: false,
+                };
+                Ok(Some((chrom.to_owned(), group)))
+            }
+        };
+        self.state.swap(Some(state));
+        ret
+    }
+
+    fn peek(&mut self) -> io::Result<Option<(String, ChromGroup<V, S>)>> {
+        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+        if state.next_val.is_none() {
+            state.advance(false)?;
+        }
+
+        let next_chrom = match &state.next_chrom {
+            ChromOpt::Diff(real_chrom) => {
+                Some(real_chrom)
+            }
+            ChromOpt::Same => {
+                state.curr_chrom.as_ref()
+            }
+            ChromOpt::None => {
+                None
+            }
+        };
+        let ret = match next_chrom {
+            None => Ok(None),
+            Some(chrom) => {
+                let group = ChromGroup {
+                    state: self.state.clone(),
+                    curr_state: None,
+                    done: false,
                 };
                 Ok(Some((chrom.to_owned(), group)))
             }
@@ -293,9 +339,15 @@ impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedPars
     }
 }
 
+// The separation here between the "current" state and the shared state comes
+// from the observation that once we *start* on a chromosome, we can't move on
+// to the next until we've exhausted the current. In this *particular*
+// implementation, we don't allow parallel iteration of chromsomes. So, the
+// state is either needed *here* or in the main struct.
 pub struct ChromGroup<V, S: StreamingChromValues<V>> {
     state: Arc<AtomicCell<Option<BedParserState<V, S>>>>,
     curr_state: Option<BedParserState<V, S>>,
+    done: bool,
 }
 
 impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
@@ -307,14 +359,14 @@ impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
             }
             self.curr_state = opt_state;
         }
-        let state = self.curr_state.as_mut().unwrap();
-        if let Some(val) = state.curr_val.take() {
-            return Ok(Some(val));
-        }
-        if let ChromOpt::Diff(_) = state.next_chrom {
+        if self.done {
             return Ok(None);
         }
-        state.advance()?;
+        let state = self.curr_state.as_mut().unwrap();
+        state.advance(true)?;
+        if let ChromOpt::Diff(_) = state.next_chrom {
+            self.done = true;
+        }
         Ok(state.curr_val.take())
     }
 
@@ -326,10 +378,10 @@ impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
             }
             self.curr_state = opt_state;
         }
-        let state = self.curr_state.as_ref().unwrap();
-        if let ChromOpt::Diff(_) = state.next_chrom {
+        if self.done {
             return None;
         }
+        let state = self.curr_state.as_ref().unwrap();
         state.next_val.as_ref()
     }
 }
@@ -357,7 +409,40 @@ mod tests {
         let f = File::open(dir)?;
         let mut bgp = BedParser::from_bed_file(f);
         {
+            let (chrom, mut group) = bgp.peek().unwrap().unwrap();
+            assert_eq!(chrom, "chr17");
+            assert_eq!(
+                &BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test1\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
+        }
+        {
+            let (chrom, mut group) = bgp.peek().unwrap().unwrap();
+            assert_eq!(chrom, "chr17");
+            assert_eq!(
+                &BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test1\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
+        }
+        {
             let (chrom, mut group) = bgp.next()?.unwrap();
+            assert_eq!(chrom, "chr17");
+            assert_eq!(
+                &BedEntry {
+                    start: 1,
+                    end: 100,
+                    rest: "test1\t0".to_string()
+                },
+                group.peek().unwrap()
+            );
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 BedEntry {

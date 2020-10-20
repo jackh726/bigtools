@@ -1,5 +1,4 @@
-//#![feature(test)]
-
+pub mod autosql;
 pub mod bbiread;
 pub mod bbiwrite;
 pub mod bigbedread;

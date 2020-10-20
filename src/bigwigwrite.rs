@@ -4,19 +4,20 @@ use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::{Future, FutureExt};
+use futures::future::{Either, Future, FutureExt};
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::chromvalues::ChromValues;
+use crate::idmap::IdMap;
 use crate::tell::Tell;
 
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
     write_chrom_tree, write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromGroupReadStreamingIterator, ChromProcessingInput, SectionData, WriteGroupsError,
+    ChromProcessingInput, SectionData, WriteGroupsError,
 };
 use crate::bigwig::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 
@@ -39,7 +40,7 @@ impl BigWigWrite {
         vals: V,
     ) -> Result<(), WriteGroupsError>
     where
-        V: ChromGroupReadStreamingIterator + Send,
+        V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
     {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);

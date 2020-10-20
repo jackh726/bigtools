@@ -76,6 +76,8 @@ impl From<io::Error> for BBIFileReadInfoError {
 pub trait BBIRead<R: SeekableRead> {
     fn get_info(&self) -> &BBIFileInfo;
 
+    fn autosql(&mut self) -> io::Result<String>;
+
     fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<R>, Endianness>>;
 
     fn ensure_mem_cached_reader(

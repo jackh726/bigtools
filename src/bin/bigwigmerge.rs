@@ -10,7 +10,6 @@ use itertools::Itertools;
 
 use bigtools::bigwig::BBIWriteOptions;
 use bigtools::bigwig::ChromGroupRead;
-use bigtools::bigwig::ChromGroupReadStreamingIterator;
 use bigtools::bigwig::Value;
 use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
 use bigtools::chromvalues::ChromValues;
@@ -169,20 +168,22 @@ pub fn get_merged_values(
     iter: impl Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send + 'static,
     options: BBIWriteOptions,
     nthreads: usize,
-) -> io::Result<impl ChromGroupReadStreamingIterator + std::marker::Send> {
-    struct ChromGroupReadStreamingIteratorImpl {
+) -> io::Result<impl Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + std::marker::Send> {
+    struct ChromGroupReadImpl {
         pool: futures::executor::ThreadPool,
         options: BBIWriteOptions,
         iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
         chrom_ids: Option<IdMap>,
     }
 
-    impl ChromGroupReadStreamingIterator for ChromGroupReadStreamingIteratorImpl {
-        fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError> {
+    impl Iterator for ChromGroupReadImpl {
+        type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
+
+        fn next(&mut self) -> Option<Self::Item> {
             let next = self.iter.next();
             match next {
-                Some(next) => {
-                    let (chrom, size, mergingvalues) = next?;
+                Some(Err(err)) => Some(Err(err.into())),
+                Some(Ok((chrom, size, mergingvalues))) => {
                     let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
                     let group = BigWigWrite::begin_processing_chrom(
                         chrom,
@@ -191,18 +192,21 @@ pub fn get_merged_values(
                         mergingvalues,
                         self.pool.clone(),
                         self.options.clone(),
-                    )?;
-                    Ok(Some(Either::Left(group)))
+                    );
+                    match group {
+                        Ok(group) => Some(Ok(Either::Left(group))),
+                        Err(err) => Some(Err(err.into())),
+                    }
                 }
                 None => match self.chrom_ids.take() {
-                    Some(chrom_ids) => Ok(Some(Either::Right(chrom_ids))),
-                    None => Ok(None),
+                    Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
+                    None => None,
                 },
             }
         }
     }
 
-    let group_iter = ChromGroupReadStreamingIteratorImpl {
+    let group_iter = ChromGroupReadImpl {
         pool: futures::executor::ThreadPoolBuilder::new()
             .pool_size(nthreads)
             .create()

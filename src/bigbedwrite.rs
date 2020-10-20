@@ -1,28 +1,31 @@
 use std::collections::{HashMap, VecDeque};
+use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::{Future, FutureExt};
+use futures::future::{Either, Future, FutureExt};
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::chromvalues::ChromValues;
+use crate::idmap::IdMap;
 use crate::tell::Tell;
 
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
     write_chrom_tree, write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromGroupReadStreamingIterator, ChromProcessingInput, SectionData, WriteGroupsError,
+    ChromProcessingInput, SectionData, WriteGroupsError,
 };
 use crate::bigwig::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 
 pub struct BigBedWrite {
     pub path: String,
     pub options: BBIWriteOptions,
+    pub autosql: Option<String>,
 }
 
 impl BigBedWrite {
@@ -30,6 +33,7 @@ impl BigBedWrite {
         BigBedWrite {
             path,
             options: BBIWriteOptions::default(),
+            autosql: None,
         }
     }
 
@@ -39,12 +43,20 @@ impl BigBedWrite {
         vals: V,
     ) -> Result<(), WriteGroupsError>
     where
-        V: ChromGroupReadStreamingIterator + Send,
+        V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
     {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
         write_blank_headers(&mut file)?;
+
+        let autosql_offset = file.tell()?;
+        let autosql = self.autosql.clone().unwrap_or_else(|| crate::autosql::BED3.to_string());
+        let autosql = CString::new(autosql.into_bytes()).map_err(|_| io::Error::new(
+            io::ErrorKind::Other,
+            "Invalid autosql: null byte in string",
+        ))?;
+        file.write_all(autosql.as_bytes_with_nul())?;
 
         let total_summary_offset = file.tell()?;
         file.write_all(&[0; 40])?;
@@ -74,10 +86,18 @@ impl BigBedWrite {
             section
         });
 
+        // This deviates slighly from the layout of bigBeds generated from kent tools (but are 100%)
+        // compatible. In kent tools, the chrom tree is written *before* the data.
+        // However, in order to do this, the data must be read *twice*, which we don't want. Luckily,
+        // the chrom tree offset is stored to be seeked to before read, so
+        // it doesn't matter where in the file these are placed. The one caveat to this is in any
+        // caching (most commonly over-the-network): if the caching "chunk" size is large enough to
+        // cover either/both the autosql and chrom tree with the start of the file, then this may
+        // cause two separate "chunks" (and therefore, e.g., network requests), compared to one.
+
         // Since the chrom tree is read before the index, we put this before the full data index
-        // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
-        // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
-        // but requires us to know all the data ahead of time (when writing)
+        // Therefore, there is a higher likelihood that the udc file will only need one read for
+        // chrom tree + full data index.
         let chrom_index_start = file.tell()?;
         write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
 
@@ -98,7 +118,7 @@ impl BigBedWrite {
         // TODO: actually write the correct value
         file.write_u16::<NativeEndian>(3)?; // fieldCount
         file.write_u16::<NativeEndian>(0)?; // definedFieldCount
-        file.write_u64::<NativeEndian>(0)?; // autoSQLOffset
+        file.write_u64::<NativeEndian>(autosql_offset)?; // autoSQLOffset
         file.write_u64::<NativeEndian>(total_summary_offset)?;
         file.write_u32::<NativeEndian>(uncompress_buf_size as u32)?;
         file.write_u64::<NativeEndian>(0)?; // reserved

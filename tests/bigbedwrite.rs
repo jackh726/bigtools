@@ -1,7 +1,7 @@
 use std::io::{self};
 
 #[test]
-fn test() -> io::Result<()> {
+fn bigbedwrite_test() -> io::Result<()> {
     use std::collections::HashMap;
     use std::fs::File;
     use std::path::PathBuf;
@@ -32,8 +32,15 @@ fn test() -> io::Result<()> {
 
     let infile = File::open(bed)?;
     let tempfile = tempfile::NamedTempFile::new()?;
-    let vals_iter = BedParser::from_bed_file(infile);
-    let outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
+    let mut vals_iter = BedParser::from_bed_file(infile);
+    let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
+    outb.autosql = {
+        use bigtools::chromvalues::ChromGroups;
+        use bigtools::chromvalues::ChromValues;
+        let (_, mut group) = vals_iter.peek()?.unwrap();
+        let first = group.peek().unwrap();
+        Some(bigtools::autosql::bed_autosql(&first.rest))
+    };
 
     let options = outb.options.clone();
 
@@ -67,6 +74,11 @@ fn test() -> io::Result<()> {
     assert_eq!(chroms.len(), 3);
     assert_eq!(chroms[0].name, "chr17");
     assert_eq!(chroms[0].length, 83257441);
+
+    assert_eq!(
+        &bwread.autosql().unwrap(),
+        "table bed\n\"Browser Extensible Data\"\n(\n    string chrom;       \"Reference sequence chromosome or scaffold\"\n    uint   chromStart;  \"Start position in chromosome\"\n    uint   chromEnd;    \"End position in chromosome\"\n   string name;        \"Name of item.\"\n   uint score;          \"Score (0-1000)\"\n)",
+    );
 
     let mut intervals = bwread.get_interval("chr17", 0, 83257441)?;
     let first_interval = intervals.next().unwrap().unwrap();

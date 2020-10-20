@@ -183,6 +183,10 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         &self.info
     }
 
+    fn autosql(&mut self) -> io::Result<String> {
+        Ok("".to_string())
+    }
+
     fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<S>, Endianness>> {
         if self.reader.is_none() {
             let endianness = self.info.header.endianness;

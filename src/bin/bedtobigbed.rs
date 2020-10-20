@@ -43,6 +43,10 @@ fn main() -> Result<(), WriteGroupsError> {
                 .about("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
                 .takes_value(true)
                 .default_value("all"))
+        .arg(Arg::new("autosql")
+                .short('a')
+                .about("The path to an .as file containing the autosql that defines the fields in this bigBed")
+                .takes_value(true))
         .get_matches();
 
     let bedpath = matches.value_of("bed").unwrap().to_owned();
@@ -110,8 +114,22 @@ fn main() -> Result<(), WriteGroupsError> {
         .expect("Unable to create thread pool.");
 
     let infile = File::open(bedpath)?;
-    let vals_iter = BedParser::from_bed_file(infile);
+    let mut vals_iter = BedParser::from_bed_file(infile);
     let options = outb.options.clone();
+
+    let autosql = match matches.value_of("autosql") {
+        None => {
+            use bigtools::chromvalues::ChromGroups;
+            use bigtools::chromvalues::ChromValues;
+            let (_, mut group) = vals_iter.peek()?.unwrap();
+            let first = group.peek().unwrap();
+            bigtools::autosql::bed_autosql(&first.rest)
+        }
+        Some(file) => {
+            std::fs::read_to_string(file)?
+        }
+    };
+    outb.autosql = Some(autosql);
 
     let parse_fn = move |chrom, chrom_id, chrom_length, group| {
         BigBedWrite::begin_processing_chrom(

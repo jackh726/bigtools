@@ -149,10 +149,6 @@ pub struct ChromGroupRead {
     pub processing_output: ChromProcessingOutput,
 }
 
-pub trait ChromGroupReadStreamingIterator {
-    fn next(&mut self) -> Result<Option<Either<ChromGroupRead, IdMap>>, WriteGroupsError>;
-}
-
 pub trait BBIWrite {}
 
 pub(crate) const MAX_ZOOM_LEVELS: usize = 10;
@@ -530,7 +526,7 @@ pub(crate) async fn write_vals<V>(
     WriteGroupsError,
 >
 where
-    V: ChromGroupReadStreamingIterator + Send,
+    V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
 {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
@@ -558,9 +554,8 @@ where
     let mut max_uncompressed_buf_size = 0;
 
     let chrom_ids = loop {
-        let next = vals_iter.next()?;
-        match next {
-            Some(Either::Left(read)) => {
+        match vals_iter.next() {
+            Some(Ok(Either::Left(read))) => {
                 let ChromGroupRead {
                     summary_future,
                     processing_output:
@@ -619,7 +614,8 @@ where
                     }
                 }
             }
-            Some(Either::Right(chrom_ids)) => break chrom_ids,
+            Some(Ok(Either::Right(chrom_ids))) => break chrom_ids,
+            Some(Err(err)) => return Err(err.into()),
             None => unreachable!(),
         }
     };
