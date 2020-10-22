@@ -195,7 +195,8 @@ impl BigBedWrite {
                 .collect(),
         };
         let mut total_items = 0;
-        while let Some(current_val) = group.next()? {
+        while let Some(current_val) = group.next() {
+            let current_val = current_val?;
             total_items += 1;
             // TODO: test these correctly fails
             if current_val.start > current_val.end {

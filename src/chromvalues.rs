@@ -6,6 +6,6 @@ pub trait ChromGroups<V, C: ChromValues<V>> {
 }
 
 pub trait ChromValues<V> {
-    fn next(&mut self) -> io::Result<Option<V>>;
+    fn next(&mut self) -> Option<io::Result<V>>;
     fn peek(&mut self) -> Option<&V>;
 }

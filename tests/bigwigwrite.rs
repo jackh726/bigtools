@@ -22,7 +22,7 @@ fn test() -> io::Result<()> {
         let infile = File::open(single_chrom_bedgraph.clone())?;
         let mut vals_iter = BedParser::from_bedgraph_file(infile);
         let (_, mut group) = vals_iter.next()?.unwrap();
-        group.next()?.unwrap()
+        group.next().unwrap().unwrap()
     };
 
     let pool = futures::executor::ThreadPoolBuilder::new()

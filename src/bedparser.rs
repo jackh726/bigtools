@@ -351,7 +351,7 @@ pub struct ChromGroup<V, S: StreamingChromValues<V>> {
 }
 
 impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
-    fn next(&mut self) -> io::Result<Option<V>> {
+    fn next(&mut self) -> Option<io::Result<V>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -360,14 +360,20 @@ impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
             self.curr_state = opt_state;
         }
         if self.done {
-            return Ok(None);
+            return None;
         }
         let state = self.curr_state.as_mut().unwrap();
-        state.advance(true)?;
-        if let ChromOpt::Diff(_) = state.next_chrom {
-            self.done = true;
+        match state.advance(true) {
+            Ok(()) => {
+                if let ChromOpt::Diff(_) = state.next_chrom {
+                    self.done = true;
+                }
+                state.curr_val.take().map(Result::Ok)
+            }
+            Err(e) => {
+                Some(Err(e))
+            }
         }
-        Ok(state.curr_val.take())
     }
 
     fn peek(&mut self) -> Option<&V> {
@@ -433,7 +439,7 @@ mod tests {
             );
         }
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
@@ -450,7 +456,7 @@ mod tests {
                     end: 100,
                     rest: "test1\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &BedEntry {
@@ -475,7 +481,7 @@ mod tests {
                     end: 200,
                     rest: "test2\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &BedEntry {
@@ -492,15 +498,15 @@ mod tests {
                     end: 300,
                     rest: "test3\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr18");
             assert_eq!(
                 BedEntry {
@@ -508,7 +514,7 @@ mod tests {
                     end: 100,
                     rest: "test4\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &BedEntry {
@@ -533,15 +539,15 @@ mod tests {
                     end: 200,
                     rest: "test5\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr19");
             assert_eq!(
                 BedEntry {
@@ -549,12 +555,12 @@ mod tests {
                     end: 100,
                     rest: "test6\t0".to_string()
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         assert!(bgp.next()?.is_none());
         Ok(())
@@ -568,7 +574,7 @@ mod tests {
         let f = File::open(dir)?;
         let mut bgp = BedParser::from_bedgraph_file(f);
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 Value {
@@ -576,7 +582,7 @@ mod tests {
                     end: 100,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &Value {
@@ -601,7 +607,7 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &Value {
@@ -618,15 +624,15 @@ mod tests {
                     end: 300,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr18");
             assert_eq!(
                 Value {
@@ -634,7 +640,7 @@ mod tests {
                     end: 100,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(
                 &Value {
@@ -659,15 +665,15 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next()?.unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr19");
             assert_eq!(
                 Value {
@@ -675,12 +681,12 @@ mod tests {
                     end: 100,
                     value: 0.5
                 },
-                group.next()?.unwrap()
+                group.next().unwrap().unwrap()
             );
             assert_eq!(None, group.peek());
 
-            assert_eq!(None, group.next()?);
-            assert_eq!(None, group.peek());
+            assert!(group.next().is_none());
+            assert!(group.peek().is_none());
         }
         assert!(bgp.next()?.is_none());
         Ok(())

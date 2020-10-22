@@ -24,8 +24,8 @@ pub struct MergingValues {
 }
 
 impl ChromValues<Value> for MergingValues {
-    fn next(&mut self) -> io::Result<Option<Value>> {
-        Ok(self.iter.next())
+    fn next(&mut self) -> Option<io::Result<Value>> {
+        self.iter.next().map(Result::Ok)
     }
 
     fn peek(&mut self) -> Option<&Value> {
@@ -105,7 +105,8 @@ pub fn get_merged_vals(
                         iter: iter.peekable(),
                     };
                     let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
-                    while let Some(val) = mergingvalues.next()? {
+                    while let Some(val) = mergingvalues.next() {
+                        let val = val?;
                         sender.send(val).unwrap();
                     }
                     Ok(receiver)
@@ -128,7 +129,8 @@ pub fn get_merged_vals(
                             iter: iter.peekable(),
                         };
                         let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
-                        while let Some(val) = mergingvalues.next()? {
+                        while let Some(val) = mergingvalues.next() {
+                            let val = val?;
                             sender.send(val).unwrap();
                         }
                         Ok(receiver)
@@ -318,7 +320,8 @@ fn main() -> Result<(), WriteGroupsError> {
 
             for v in iter {
                 let (chrom, _, mut values) = v?;
-                while let Some(val) = values.next()? {
+                while let Some(val) = values.next() {
+                    let val = val?;
                     writer.write_fmt(format_args!(
                         "{}\t{}\t{}\t{}\n",
                         chrom, val.start, val.end, val.value

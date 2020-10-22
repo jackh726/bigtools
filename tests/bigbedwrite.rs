@@ -22,7 +22,7 @@ fn bigbedwrite_test() -> io::Result<()> {
         let infile = File::open(bed.clone())?;
         let mut vals_iter = BedParser::from_bed_file(infile);
         let (_, mut group) = vals_iter.next()?.unwrap();
-        group.next()?.unwrap()
+        group.next().unwrap().unwrap()
     };
 
     let pool = futures::executor::ThreadPoolBuilder::new()
