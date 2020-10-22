@@ -21,7 +21,8 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     let handle = stdout.lock();
     let mut bedoutwriter = BufWriter::with_capacity(64 * 1024, handle);
 
-    while let Some(line) = bedstream.read()? {
+    while let Some(line) = bedstream.read() {
+        let line = line?;
         let mut split = line.trim_end().splitn(4, '\t');
         let chrom = split.next().ok_or(io::Error::new(
             io::ErrorKind::InvalidData,

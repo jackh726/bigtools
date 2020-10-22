@@ -56,7 +56,8 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     let mut bedstream = StreamingLineReader::new(BufReader::new(bedin));
     let mut outwriter = BufWriter::new(out);
 
-    while let Some(line) = bedstream.read()? {
+    while let Some(line) = bedstream.read() {
+        let line = line?;
         let mut split = line.trim().splitn(5, '\t');
         let chrom = split.next().expect("Missing chrom");
         let start = split.next().expect("Missing start").parse::<u32>().unwrap();

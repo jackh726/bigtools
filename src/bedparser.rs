@@ -101,13 +101,9 @@ pub struct BedStream<V, B: BufRead> {
 
 impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
     fn next<'a>(&'a mut self) -> Option<io::Result<(&'a str, V)>> {
-        let l = match self.bed.read() {
-            Ok(l) => l,
+        let line = match self.bed.read()? {
+            Ok(line) => line.trim_end(),
             Err(e) => return Some(Err(e)),
-        };
-        let line = match l {
-            Some(line) => line.trim_end(),
-            None => return None,
         };
         (self.parse)(line)
     }
@@ -249,7 +245,7 @@ enum ChromOpt {
 }
 
 #[derive(Debug)]
-pub struct BedParserState<V, S: StreamingChromValues<V>> {
+struct BedParserState<V, S: StreamingChromValues<V>> {
     stream: S,
     curr_chrom: Option<String>,
     curr_val: Option<V>,

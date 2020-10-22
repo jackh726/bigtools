@@ -14,13 +14,13 @@ impl<B: BufRead> StreamingLineReader<B> {
         }
     }
 
-    pub fn read<'a>(&'a mut self) -> io::Result<Option<&'a str>> {
+    pub fn read<'a>(&'a mut self) -> Option<io::Result<&'a str>> {
         self.current_line.clear();
-        let size = self.buf_read.read_line(&mut self.current_line)?;
-        if size == 0 {
-            return Ok(None);
+        match self.buf_read.read_line(&mut self.current_line) {
+            Ok(size) if size == 0 => None,
+            Ok(_) => Some(Ok(&self.current_line)),
+            Err(e) => Some(Err(e)),
         }
-        Ok(Some(&self.current_line))
     }
 }
 
@@ -39,13 +39,13 @@ mod tests {
         let f = File::open(dir)?;
         let bf = BufReader::new(f);
         let mut slr = StreamingLineReader::new(bf);
-        assert_eq!("chr17\t1\t100\t0.5\n", slr.read()?.unwrap());
-        assert_eq!("chr17\t101\t200\t0.5\n", slr.read()?.unwrap());
-        assert_eq!("chr17\t201\t300\t0.5\n", slr.read()?.unwrap());
-        assert_eq!("chr18\t1\t100\t0.5\n", slr.read()?.unwrap());
-        assert_eq!("chr18\t101\t200\t0.5\n", slr.read()?.unwrap());
-        assert_eq!("chr19\t1\t100\t0.5\n", slr.read()?.unwrap());
-        assert!(slr.read()?.is_none());
+        assert_eq!("chr17\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr17\t101\t200\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr17\t201\t300\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr18\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr18\t101\t200\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr19\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
+        assert!(slr.read().is_none());
         Ok(())
     }
 }

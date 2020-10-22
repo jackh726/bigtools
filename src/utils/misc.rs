@@ -36,12 +36,12 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
         if error {
             return None;
         }
-        let line = match bedstream.read() {
+        let line = match bedstream.read()? {
             Err(e) => {
                 error = true;
                 return Some(Err(e));
             }
-            Ok(line) => line?,
+            Ok(line) => line,
         };
         return match (|| {
             let take_col = match options.name {
