@@ -91,20 +91,23 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
 }
 
 pub trait StreamingChromValues<V> {
-    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>>;
+    fn next<'a>(&'a mut self) -> Option<io::Result<(&'a str, V)>>;
 }
 
 pub struct BedStream<V, B: BufRead> {
     bed: StreamingLineReader<B>,
-    parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, V)>> + Send>,
+    parse: Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, V)>> + Send>,
 }
 
 impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
-    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>> {
-        let l = self.bed.read()?;
+    fn next<'a>(&'a mut self) -> Option<io::Result<(&'a str, V)>> {
+        let l = match self.bed.read() {
+            Ok(l) => l,
+            Err(e) => return Some(Err(e)),
+        };
         let line = match l {
             Some(line) => line.trim_end(),
-            None => return Ok(None),
+            None => return None,
         };
         (self.parse)(line)
     }
@@ -118,13 +121,14 @@ pub struct BedIteratorStream<V: Clone, I: Iterator<Item = io::Result<(String, V)
 impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues<V>
     for BedIteratorStream<V, I>
 {
-    fn next<'a>(&'a mut self) -> io::Result<Option<(&'a str, V)>> {
+    fn next<'a>(&'a mut self) -> Option<io::Result<(&'a str, V)>> {
         use std::ops::Deref;
         self.curr = match self.iter.next() {
-            None => return Ok(None),
-            Some(v) => Some(v?),
+            None => return None,
+            Some(Err(e)) => return Some(Err(e)),
+            Some(Ok(v)) => Some(v),
         };
-        Ok(self.curr.as_ref().map(|v| (v.0.deref(), v.1.clone())))
+        self.curr.as_ref().map(|v| Ok((v.0.deref(), v.1.clone())))
     }
 }
 
@@ -149,29 +153,35 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 
 impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
-        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, BedEntry)>> + Send> =
+        let parse: Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, BedEntry)>> + Send> =
             Box::new(|s: &str| {
                 let mut split = s.splitn(4, '\t');
                 let chrom = match split.next() {
                     Some(chrom) => chrom,
-                    None => return Ok(None),
+                    None => return None,
                 };
-                let s = split.next().ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Missing start: {:}", s),
-                ))?;
-                let start = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-                })?;
-                let s = split.next().ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Missing end: {:}", s),
-                ))?;
-                let end = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-                })?;
-                let rest = split.next().unwrap_or("").to_string();
-                Ok(Some((chrom, BedEntry { start, end, rest })))
+                let res = (|| {
+                    let s = split.next().ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Missing start: {:}", s),
+                    ))?;
+                    let start = s.parse::<u32>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+                    })?;
+                    let s = split.next().ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Missing end: {:}", s),
+                    ))?;
+                    let end = s.parse::<u32>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+                    })?;
+                    let rest = split.next().unwrap_or("").to_string();
+                    Ok((start, end, rest))
+                })();
+                match res {
+                    Err(e) => Some(Err(e)),
+                    Ok((start, end, rest)) => Some(Ok((chrom, BedEntry { start, end, rest }))),
+                }
             });
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
@@ -182,35 +192,41 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
 
 impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
-        let parse: Box<dyn for<'a> Fn(&'a str) -> io::Result<Option<(&'a str, Value)>> + Send> =
+        let parse: Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, Value)>> + Send> =
             Box::new(|s: &str| {
                 let mut split = s.splitn(5, '\t');
                 let chrom = match split.next() {
                     Some(chrom) => chrom,
-                    None => return Ok(None),
+                    None => return None,
                 };
-                let s = split.next().ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Missing start: {:}", s),
-                ))?;
-                let start = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-                })?;
-                let s = split.next().ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Missing end: {:}", s),
-                ))?;
-                let end = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-                })?;
-                let s = split.next().ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Missing value: {:}", s),
-                ))?;
-                let value = s.parse::<f32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
-                })?;
-                Ok(Some((chrom, Value { start, end, value })))
+                let res = (|| {
+                    let s = split.next().ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Missing start: {:}", s),
+                    ))?;
+                    let start = s.parse::<u32>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+                    })?;
+                    let s = split.next().ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Missing end: {:}", s),
+                    ))?;
+                    let end = s.parse::<u32>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+                    })?;
+                    let s = split.next().ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Missing value: {:}", s),
+                    ))?;
+                    let value = s.parse::<f32>().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
+                    })?;
+                    Ok((start, end, value))
+                })();
+                match res {
+                    Err(e) => Some(Err(e)),
+                    Ok((start, end, value)) => Some(Ok((chrom, Value { start, end, value }))),
+                }
             });
         BedParser::new(BedStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
@@ -254,7 +270,8 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
             }
         }
 
-        if let Some((chrom, v)) = self.stream.next()? {
+        if let Some(next) = self.stream.next() {
+            let (chrom, v) = next?;
             self.next_val.replace(v);
             if let Some(curr_chrom) = &self.curr_chrom {
                 if curr_chrom != chrom {
