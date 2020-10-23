@@ -6,8 +6,6 @@ use clap::{App, Arg};
 
 use futures::future::Either;
 
-use itertools::Itertools;
-
 use bigtools::bigwig::BBIWriteOptions;
 use bigtools::bigwig::ChromGroupRead;
 use bigtools::bigwig::Value;
@@ -51,7 +49,7 @@ pub fn get_merged_vals(
             if chrom_sizes.get(&chrom).is_some() {
                 continue;
             }
-            let (sizes, bws): (Vec<_>, Vec<_>) = bigwigs
+            let (sizes, bws): (Vec<u32>, Vec<BigWigRead<ReopenableFile, File>>) = bigwigs
                 .iter()
                 .map(|w| {
                     let chroms = w.get_chroms();
@@ -90,52 +88,54 @@ pub fn get_merged_vals(
     let iter = chrom_sizes.into_iter().map(move |(chrom, (size, bws))| {
         if bws.len() > max_bw_fds {
             eprintln!("Number of bigWigs to merge would exceed the maximum number of file descriptors. Splitting into chunks.");
-            let mut merges: Vec<filebufferedchannel::Receiver<Value>> = bws
-                .into_iter()
-                .chunks(max_bw_fds)
-                .into_iter()
-                .map(|chunk| -> io::Result<filebufferedchannel::Receiver<Value>> {
+            let merge = |iter: Box<dyn Iterator<Item = Value> + Send>| -> io::Result<filebufferedchannel::Receiver<Value>> {
+                let mut mergingvalues = MergingValues {
+                    iter: iter.peekable(),
+                };
+                let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
+                // This is synchronous
+                while let Some(val) = mergingvalues.next() {
+                    let val = val?;
+                    sender.send(val).unwrap();
+                }
+                Ok(receiver)
+            };
+            let mut merges: Vec<filebufferedchannel::Receiver<Value>> = {
+                let len = bws.len();
+                let mut vals = bws.into_iter().peekable();
+                let mut merges: Vec<filebufferedchannel::Receiver<Value>> = Vec::with_capacity(len/max_bw_fds+1);
+
+                while vals.peek().is_some() {
+                    let chunk = vals.by_ref().take(max_bw_fds);
                     let merged_iter = chunk
-                        .into_iter()
                         .map(|b| b.get_interval_move(&chrom, 1, size))
                         .collect::<io::Result<Vec<_>>>()?;
                     let iter: Box<dyn Iterator<Item = Value> + Send> =
                         Box::new(merge_sections_many(merged_iter).filter(|x| x.value != 0.0));
-                    let mut mergingvalues = MergingValues {
-                        iter: iter.peekable(),
-                    };
-                    let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
-                    while let Some(val) = mergingvalues.next() {
-                        let val = val?;
-                        sender.send(val).unwrap();
-                    }
-                    Ok(receiver)
-                })
-                .collect::<io::Result<_>>()?;
+                    let merged = merge(iter)?;
+                    merges.push(merged);
+                }
+                merges
+            };
 
             while merges.len() > max_bw_fds {
-                merges = merges
-                    .into_iter()
-                    .chunks(max_bw_fds)
-                    .into_iter()
-                    .map(|chunk| -> io::Result<filebufferedchannel::Receiver<Value>> {
+                merges = {
+                    let len = merges.len();
+                    let mut vals = merges.into_iter().peekable();
+                    let mut merges: Vec<filebufferedchannel::Receiver<Value>> = Vec::with_capacity(len/max_bw_fds+1);
+    
+                    while vals.peek().is_some() {
+                        let chunk = vals.by_ref().take(max_bw_fds);
                         let merged_iter = chunk
-                            .into_iter()
-                            .map(|b| b.into_iter().map(Ok))
-                            .collect::<Vec<_>>();
+                            .map(|b| Ok(b.into_iter().map(Ok)))
+                            .collect::<io::Result<Vec<_>>>()?;
                         let iter: Box<dyn Iterator<Item = Value> + Send> =
                             Box::new(merge_sections_many(merged_iter).filter(|x| x.value != 0.0));
-                        let mut mergingvalues = MergingValues {
-                            iter: iter.peekable(),
-                        };
-                        let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
-                        while let Some(val) = mergingvalues.next() {
-                            let val = val?;
-                            sender.send(val).unwrap();
-                        }
-                        Ok(receiver)
-                    })
-                    .collect::<io::Result<_>>()?;
+                        let merged = merge(iter)?;
+                        merges.push(merged);
+                    }
+                    merges
+                };
             }
 
             let merged_iter = merges
@@ -311,9 +311,6 @@ fn main() -> Result<(), WriteGroupsError> {
         output if output.ends_with(".bedGraph") => {
             // TODO: convert to multi-threaded
             use std::io::Write;
-
-            let mut chroms: Vec<String> = chrom_map.keys().map(|c| c.to_string()).collect();
-            chroms.sort();
 
             let bedgraph = File::create(output)?;
             let mut writer = io::BufWriter::new(bedgraph);

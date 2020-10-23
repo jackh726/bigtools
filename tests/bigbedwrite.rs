@@ -35,8 +35,6 @@ fn bigbedwrite_test() -> io::Result<()> {
     let mut vals_iter = BedParser::from_bed_file(infile);
     let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
     outb.autosql = {
-        use bigtools::chromvalues::ChromGroups;
-        use bigtools::chromvalues::ChromValues;
         let (_, mut group) = vals_iter.peek()?.unwrap();
         let first = group.peek().unwrap();
         Some(bigtools::autosql::bed_autosql(&first.rest))

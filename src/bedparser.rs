@@ -119,10 +119,9 @@ impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
 {
     fn next<'a>(&'a mut self) -> Option<io::Result<(&'a str, V)>> {
         use std::ops::Deref;
-        self.curr = match self.iter.next() {
-            None => return None,
-            Some(Err(e)) => return Some(Err(e)),
-            Some(Ok(v)) => Some(v),
+        self.curr = match self.iter.next()? {
+            Err(e) => return Some(Err(e)),
+            Ok(v) => Some(v),
         };
         self.curr.as_ref().map(|v| Ok((v.0.deref(), v.1.clone())))
     }
