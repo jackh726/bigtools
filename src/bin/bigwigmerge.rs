@@ -18,16 +18,33 @@ use bigtools::utils::merge::merge_sections_many;
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
-    iter: std::iter::Peekable<Box<dyn Iterator<Item = Value> + Send>>,
+    iter: std::iter::Peekable<Box<dyn Iterator<Item = io::Result<Value>> + Send>>,
+}
+
+impl MergingValues {
+    pub fn new<I: 'static>(iters: Vec<I>) -> Self
+    where
+        I: Iterator<Item = io::Result<Value>> + Send,
+    {
+        let iter: Box<dyn Iterator<Item = io::Result<Value>> + Send> =
+            Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0).map(Result::Ok));
+        MergingValues {
+            iter: iter.peekable(),
+        }
+    }
 }
 
 impl ChromValues<Value> for MergingValues {
     fn next(&mut self) -> Option<io::Result<Value>> {
-        self.iter.next().map(Result::Ok)
+        self.iter.next()
     }
 
     fn peek(&mut self) -> Option<&Value> {
-        self.iter.peek()
+        match self.iter.peek() {
+            Some(Ok(v)) => Some(v),
+            Some(Err(_)) => None,
+            None => None,
+        }
     }
 }
 
@@ -88,76 +105,44 @@ pub fn get_merged_vals(
     let iter = chrom_sizes.into_iter().map(move |(chrom, (size, bws))| {
         if bws.len() > max_bw_fds {
             eprintln!("Number of bigWigs to merge would exceed the maximum number of file descriptors. Splitting into chunks.");
-            let merge = |iter: Box<dyn Iterator<Item = Value> + Send>| -> io::Result<filebufferedchannel::Receiver<Value>> {
-                let mut mergingvalues = MergingValues {
-                    iter: iter.peekable(),
-                };
-                let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
-                // This is synchronous
-                while let Some(val) = mergingvalues.next() {
-                    let val = val?;
-                    sender.send(val).unwrap();
-                }
-                Ok(receiver)
-            };
-            let mut merges: Vec<filebufferedchannel::Receiver<Value>> = {
-                let len = bws.len();
-                let mut vals = bws.into_iter().peekable();
-                let mut merges: Vec<filebufferedchannel::Receiver<Value>> = Vec::with_capacity(len/max_bw_fds+1);
 
-                while vals.peek().is_some() {
-                    let chunk = vals.by_ref().take(max_bw_fds);
-                    let merged_iter = chunk
-                        .map(|b| b.get_interval_move(&chrom, 1, size))
-                        .collect::<io::Result<Vec<_>>>()?;
-                    let iter: Box<dyn Iterator<Item = Value> + Send> =
-                        Box::new(merge_sections_many(merged_iter).filter(|x| x.value != 0.0));
-                    let merged = merge(iter)?;
-                    merges.push(merged);
-                }
-                merges
-            };
+            let mut merges: Vec<Box<dyn Iterator<Item = io::Result<Value>> + Send>> = bws
+                .into_iter()
+                .map(|b| {
+                    let iter = b.get_interval_move(&chrom, 1, size)?;
+                    Ok(Box::new(iter) as Box<_>)
+                })
+                .collect::<io::Result<Vec<_>>>()?;
 
             while merges.len() > max_bw_fds {
                 merges = {
                     let len = merges.len();
                     let mut vals = merges.into_iter().peekable();
-                    let mut merges: Vec<filebufferedchannel::Receiver<Value>> = Vec::with_capacity(len/max_bw_fds+1);
+                    let mut merges: Vec<Box<dyn Iterator<Item = io::Result<Value>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
     
                     while vals.peek().is_some() {
-                        let chunk = vals.by_ref().take(max_bw_fds);
-                        let merged_iter = chunk
-                            .map(|b| Ok(b.into_iter().map(Ok)))
-                            .collect::<io::Result<Vec<_>>>()?;
-                        let iter: Box<dyn Iterator<Item = Value> + Send> =
-                            Box::new(merge_sections_many(merged_iter).filter(|x| x.value != 0.0));
-                        let merged = merge(iter)?;
-                        merges.push(merged);
+                        let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
+                        let mut mergingvalues = MergingValues::new(chunk);
+                        let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
+                        while let Some(val) = mergingvalues.next() {
+                            let val = val?;
+                            sender.send(val).unwrap();
+                        }
+
+                        merges.push(Box::new(receiver.into_iter().map(Result::Ok)));
                     }
                     merges
                 };
             }
 
-            let merged_iter = merges
-                .into_iter()
-                .map(|b| b.into_iter().map(Ok))
-                .collect::<Vec<_>>();
-            let iter: Box<dyn Iterator<Item = Value> + Send> =
-                Box::new(merge_sections_many(merged_iter).filter(|x| x.value != 0.0));
-            let mergingvalues = MergingValues {
-                iter: iter.peekable(),
-            };
+            let mergingvalues = MergingValues::new(merges);
             Ok((chrom, size, mergingvalues))
         } else {
             let iters: Vec<_> = bws
                 .into_iter()
                 .map(|b| b.get_interval_move(&chrom, 1, size))
                 .collect::<io::Result<Vec<_>>>()?;
-            let iter: Box<dyn Iterator<Item = Value> + Send> =
-                Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0));
-            let mergingvalues = MergingValues {
-                iter: iter.peekable(),
-            };
+            let mergingvalues = MergingValues::new(iters);
 
             Ok((chrom, size, mergingvalues))
         }
@@ -166,59 +151,41 @@ pub fn get_merged_vals(
     Ok((iter, chrom_map))
 }
 
-pub fn get_merged_values(
-    iter: impl Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send + 'static,
+struct ChromGroupReadImpl {
+    pool: futures::executor::ThreadPool,
     options: BBIWriteOptions,
-    nthreads: usize,
-) -> io::Result<impl Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + std::marker::Send> {
-    struct ChromGroupReadImpl {
-        pool: futures::executor::ThreadPool,
-        options: BBIWriteOptions,
-        iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
-        chrom_ids: Option<IdMap>,
-    }
+    iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
+    chrom_ids: Option<IdMap>,
+}
 
-    impl Iterator for ChromGroupReadImpl {
-        type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
+impl Iterator for ChromGroupReadImpl {
+    type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
 
-        fn next(&mut self) -> Option<Self::Item> {
-            let next = self.iter.next();
-            match next {
-                Some(Err(err)) => Some(Err(err.into())),
-                Some(Ok((chrom, size, mergingvalues))) => {
-                    let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
-                    let group = BigWigWrite::begin_processing_chrom(
-                        chrom,
-                        chrom_id,
-                        size,
-                        mergingvalues,
-                        self.pool.clone(),
-                        self.options.clone(),
-                    );
-                    match group {
-                        Ok(group) => Some(Ok(Either::Left(group))),
-                        Err(err) => Some(Err(err.into())),
-                    }
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next();
+        match next {
+            Some(Err(err)) => Some(Err(err.into())),
+            Some(Ok((chrom, size, mergingvalues))) => {
+                let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
+                let group = BigWigWrite::begin_processing_chrom(
+                    chrom,
+                    chrom_id,
+                    size,
+                    mergingvalues,
+                    self.pool.clone(),
+                    self.options.clone(),
+                );
+                match group {
+                    Ok(group) => Some(Ok(Either::Left(group))),
+                    Err(err) => Some(Err(err.into())),
                 }
-                None => match self.chrom_ids.take() {
-                    Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
-                    None => None,
-                },
             }
+            None => match self.chrom_ids.take() {
+                Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
+                None => None,
+            },
         }
     }
-
-    let group_iter = ChromGroupReadImpl {
-        pool: futures::executor::ThreadPoolBuilder::new()
-            .pool_size(nthreads)
-            .create()
-            .expect("Unable to create thread pool."),
-        options,
-        iter: Box::new(iter),
-        chrom_ids: Some(IdMap::default()),
-    };
-
-    Ok(group_iter)
 }
 
 fn main() -> Result<(), WriteGroupsError> {
@@ -305,7 +272,15 @@ fn main() -> Result<(), WriteGroupsError> {
     match output {
         output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
             let outb = BigWigWrite::create_file(output);
-            let all_values = get_merged_values(iter, outb.options.clone(), nthreads)?;
+            let all_values = ChromGroupReadImpl {
+                pool: futures::executor::ThreadPoolBuilder::new()
+                    .pool_size(nthreads)
+                    .create()
+                    .expect("Unable to create thread pool."),
+                options: outb.options.clone(),
+                iter: Box::new(iter),
+                chrom_ids: Some(IdMap::default()),
+            };
             outb.write_groups(chrom_map, all_values)?;
         }
         output if output.ends_with(".bedGraph") => {
