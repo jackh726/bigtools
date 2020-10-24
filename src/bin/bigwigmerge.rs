@@ -27,7 +27,7 @@ impl MergingValues {
         I: Iterator<Item = io::Result<Value>> + Send,
     {
         let iter: Box<dyn Iterator<Item = io::Result<Value>> + Send> =
-            Box::new(merge_sections_many(iters).filter(|x| x.value != 0.0).map(Result::Ok));
+            Box::new(merge_sections_many(iters).filter(|x| x.as_ref().map(|v| v.value != 0.0).unwrap_or(true)));
         MergingValues {
             iter: iter.peekable(),
         }

@@ -311,7 +311,7 @@ struct ValueIter<I>
 where
     I: Iterator<Item = io::Result<Value>> + Send,
 {
-    error: io::Result<()>,
+    error: bool,
     sections: Vec<(I, Option<Value>)>,
     next_sections: Option<Box<dyn Iterator<Item = Value> + Send>>,
     last_val: Option<Value>,
@@ -322,14 +322,17 @@ impl<I> Iterator for ValueIter<I>
 where
     I: Iterator<Item = io::Result<Value>> + Send,
 {
-    type Item = Value;
+    type Item = io::Result<Value>;
 
-    fn next(&mut self) -> Option<Value> {
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.error {
+            return None;
+        }
         if let Some(buf) = &mut self.next_sections {
             let next = buf.next();
             match next {
                 None => self.next_sections = None,
-                Some(_) => return next,
+                Some(val) => return Some(Ok(val)),
             }
         }
 
@@ -348,8 +351,8 @@ where
                         None => match section.next() {
                             Some(Ok(x)) => x,
                             Some(Err(e)) => {
-                                self.error = Err(e);
-                                continue 'section;
+                                self.error = true;
+                                return Some(Err(e));
                             }
                             None => continue 'sections,
                         },
@@ -488,22 +491,21 @@ where
             if !next_sections.is_empty() {
                 // TODO: will split values across boundary line
                 self.next_sections = Some(Box::new(next_sections.into_iter()));
-                return self.next_sections.as_mut().unwrap().next();
+                return self.next_sections.as_mut().unwrap().next().map(Result::Ok);
             }
             if all_none {
-                return self.last_val.take();
+                return self.last_val.take().map(Result::Ok);
             }
         }
     }
 }
 
-pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item = Value> + Send
+pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item = io::Result<Value>> + Send
 where
     I: Iterator<Item = io::Result<Value>> + Send,
 {
     ValueIter {
-        // TODO: this isn't used right now
-        error: Ok(()),
+        error: false,
         sections: sections.into_iter().map(|s| (s, None)).collect(),
         next_sections: None,
         last_val: None,
@@ -532,6 +534,7 @@ mod tests {
         let mut last_end = 0;
         let mut last_val = None;
         for val in merged {
+            let val = val.unwrap();
             assert!(last_end <= val.start);
             if let Some(last_val) = last_val {
                 assert!(last_val != val.value);
