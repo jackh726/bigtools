@@ -10,7 +10,7 @@ fn test() -> io::Result<()> {
 
     use bigtools::bedparser::{self, BedParser};
     use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
-    use bigtools::chromvalues::{ChromGroups, ChromValues};
+    use bigtools::chromvalues::ChromValues;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");

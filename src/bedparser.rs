@@ -10,7 +10,7 @@ use futures::future::Either;
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
-use crate::chromvalues::{ChromGroups, ChromValues};
+use crate::chromvalues::ChromValues;
 use crate::idmap::IdMap;
 use crate::streaming_linereader::StreamingLineReader;
 
@@ -19,44 +19,39 @@ pub type ChromGroupReadFunction<C> =
 
 pub struct BedParserChromGroupStreamingIterator<
     V,
-    C: ChromValues<V> + Send,
-    G: ChromGroups<V, C>,
+    S: StreamingChromValues<V>,
     H: BuildHasher,
 > {
     allow_out_of_order_chroms: bool,
-    chrom_groups: G,
-    callable: ChromGroupReadFunction<C>,
+    chrom_groups: BedParser<V, S>,
+    callable: ChromGroupReadFunction<ChromGroup<V,S>>,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
-    _v: std::marker::PhantomData<V>,
-    _s: std::marker::PhantomData<C>,
 }
 
-impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
-    BedParserChromGroupStreamingIterator<V, C, G, H>
+impl<V, S: StreamingChromValues<V>, H: BuildHasher>
+    BedParserChromGroupStreamingIterator<V, S, H>
 {
     pub fn new(
-        vals: G,
+        chrom_groups: BedParser<V, S>,
         chrom_map: HashMap<String, u32, H>,
-        callable: ChromGroupReadFunction<C>,
+        callable: ChromGroupReadFunction<ChromGroup<V, S>>,
         allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserChromGroupStreamingIterator {
             allow_out_of_order_chroms,
-            chrom_groups: vals,
+            chrom_groups,
             callable,
             last_chrom: None,
             chrom_ids: Some(IdMap::default()),
             chrom_map,
-            _v: std::marker::PhantomData,
-            _s: std::marker::PhantomData,
         }
     }
 }
 
-impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
-    Iterator for BedParserChromGroupStreamingIterator<V, C, G, H>
+impl<V, S: StreamingChromValues<V>, H: BuildHasher>
+    Iterator for BedParserChromGroupStreamingIterator<V, S, H>
 {
     type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -285,43 +280,11 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
     }
 }
 
-impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedParser<V, S> {
-    fn next(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
-        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        if state.next_val.is_none() {
-            match state.advance(false) {
-                Ok(()) => {},
-                Err(e) => return Some(Err(e.into())),
-            }
-        }
-
-        let next_chrom = match &state.next_chrom {
-            ChromOpt::Diff(real_chrom) => {
-                Some(real_chrom)
-            }
-            ChromOpt::Same => {
-                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-            }
-            ChromOpt::None => {
-                None
-            }
-        };
-        let ret = match next_chrom {
-            None => None,
-            Some(chrom) => {
-                let group = ChromGroup {
-                    state: self.state.clone(),
-                    curr_state: None,
-                    done: false,
-                };
-                Some(Ok((chrom.to_owned(), group)))
-            }
-        };
-        self.state.swap(Some(state));
-        ret
-    }
-
-    fn peek(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
+impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
+    // This is *valid* to call multiple times for the same chromosome (assuming the
+    // `ChromGroup` has been dropped), since calling this function doesn't
+    // actually advance the state (it will only set `next_val` if it currently is none).
+    pub fn next(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
             match state.advance(false) {
@@ -433,7 +396,7 @@ mod tests {
         let f = File::open(dir)?;
         let mut bgp = BedParser::from_bed_file(f);
         {
-            let (chrom, mut group) = bgp.peek().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
@@ -445,7 +408,7 @@ mod tests {
             );
         }
         {
-            let (chrom, mut group) = bgp.peek().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
