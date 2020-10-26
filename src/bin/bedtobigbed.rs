@@ -121,7 +121,7 @@ fn main() -> Result<(), WriteGroupsError> {
         None => {
             use bigtools::chromvalues::ChromGroups;
             use bigtools::chromvalues::ChromValues;
-            let (_, mut group) = vals_iter.peek()?.unwrap();
+            let (_, mut group) = vals_iter.peek().unwrap()?;
             let first = group.peek().unwrap();
             bigtools::autosql::bed_autosql(&first.rest)
         }

@@ -21,7 +21,7 @@ fn bigbedwrite_test() -> io::Result<()> {
     let first = {
         let infile = File::open(bed.clone())?;
         let mut vals_iter = BedParser::from_bed_file(infile);
-        let (_, mut group) = vals_iter.next()?.unwrap();
+        let (_, mut group) = vals_iter.next().unwrap()?;
         group.next().unwrap().unwrap()
     };
 
@@ -35,7 +35,7 @@ fn bigbedwrite_test() -> io::Result<()> {
     let mut vals_iter = BedParser::from_bed_file(infile);
     let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
     outb.autosql = {
-        let (_, mut group) = vals_iter.peek()?.unwrap();
+        let (_, mut group) = vals_iter.peek().unwrap()?;
         let first = group.peek().unwrap();
         Some(bigtools::autosql::bed_autosql(&first.rest))
     };

@@ -61,8 +61,8 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
     type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.chrom_groups.next() {
-            Err(err) => Some(Err(err.into())),
-            Ok(Some((chrom, group))) => {
+            Some(Err(err)) => Some(Err(err.into())),
+            Some(Ok((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
@@ -82,7 +82,7 @@ impl<V, C: ChromValues<V> + Send, G: ChromGroups<V, C>, H: BuildHasher>
                 }
                 
             }
-            Ok(None) => match self.chrom_ids.take() {
+            None => match self.chrom_ids.take() {
                 Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
                 None => None,
             },
@@ -286,10 +286,13 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
 }
 
 impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedParser<V, S> {
-    fn next(&mut self) -> io::Result<Option<(String, ChromGroup<V, S>)>> {
+    fn next(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
-            state.advance(false)?;
+            match state.advance(false) {
+                Ok(()) => {},
+                Err(e) => return Some(Err(e.into())),
+            }
         }
 
         let next_chrom = match &state.next_chrom {
@@ -304,24 +307,27 @@ impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedPars
             }
         };
         let ret = match next_chrom {
-            None => Ok(None),
+            None => None,
             Some(chrom) => {
                 let group = ChromGroup {
                     state: self.state.clone(),
                     curr_state: None,
                     done: false,
                 };
-                Ok(Some((chrom.to_owned(), group)))
+                Some(Ok((chrom.to_owned(), group)))
             }
         };
         self.state.swap(Some(state));
         ret
     }
 
-    fn peek(&mut self) -> io::Result<Option<(String, ChromGroup<V, S>)>> {
+    fn peek(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
-            state.advance(false)?;
+            match state.advance(false) {
+                Ok(()) => {},
+                Err(e) => return Some(Err(e.into())),
+            }
         }
 
         let next_chrom = match &state.next_chrom {
@@ -336,14 +342,14 @@ impl<V, S: StreamingChromValues<V>> ChromGroups<V, ChromGroup<V, S>> for BedPars
             }
         };
         let ret = match next_chrom {
-            None => Ok(None),
+            None => None,
             Some(chrom) => {
                 let group = ChromGroup {
                     state: self.state.clone(),
                     curr_state: None,
                     done: false,
                 };
-                Ok(Some((chrom.to_owned(), group)))
+                Some(Ok((chrom.to_owned(), group)))
             }
         };
         self.state.swap(Some(state));
@@ -574,7 +580,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next()?.is_none());
+        assert!(bgp.next().is_none());
         Ok(())
     }
 
@@ -700,7 +706,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next()?.is_none());
+        assert!(bgp.next().is_none());
         Ok(())
     }
 }
