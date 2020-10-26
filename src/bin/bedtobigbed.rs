@@ -124,9 +124,7 @@ fn main() -> Result<(), WriteGroupsError> {
             let first = group.peek().unwrap();
             bigtools::autosql::bed_autosql(&first.rest)
         }
-        Some(file) => {
-            std::fs::read_to_string(file)?
-        }
+        Some(file) => std::fs::read_to_string(file)?,
     };
     outb.autosql = Some(autosql);
 

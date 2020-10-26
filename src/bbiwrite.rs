@@ -526,7 +526,7 @@ pub(crate) async fn write_vals<V>(
     WriteGroupsError,
 >
 where
-    V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
+    V: Iterator<Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
 {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (

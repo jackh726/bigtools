@@ -195,10 +195,8 @@ where
         let mut buffer = Vec::new();
         reader.read_until(b'\0', &mut buffer)?;
         buffer.pop();
-        let autosql = String::from_utf8(buffer).map_err(|_| io::Error::new(
-            io::ErrorKind::Other,
-            "Invalid autosql: not UTF-8",
-        ))?;
+        let autosql = String::from_utf8(buffer)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid autosql: not UTF-8"))?;
         Ok(autosql)
     }
 

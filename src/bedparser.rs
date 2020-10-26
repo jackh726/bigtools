@@ -17,22 +17,16 @@ use crate::streaming_linereader::StreamingLineReader;
 pub type ChromGroupReadFunction<C> =
     Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;
 
-pub struct BedParserChromGroupStreamingIterator<
-    V,
-    S: StreamingChromValues<V>,
-    H: BuildHasher,
-> {
+pub struct BedParserChromGroupStreamingIterator<V, S: StreamingChromValues<V>, H: BuildHasher> {
     allow_out_of_order_chroms: bool,
     chrom_groups: BedParser<V, S>,
-    callable: ChromGroupReadFunction<ChromGroup<V,S>>,
+    callable: ChromGroupReadFunction<ChromGroup<V, S>>,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
 }
 
-impl<V, S: StreamingChromValues<V>, H: BuildHasher>
-    BedParserChromGroupStreamingIterator<V, S, H>
-{
+impl<V, S: StreamingChromValues<V>, H: BuildHasher> BedParserChromGroupStreamingIterator<V, S, H> {
     pub fn new(
         chrom_groups: BedParser<V, S>,
         chrom_map: HashMap<String, u32, H>,
@@ -50,8 +44,8 @@ impl<V, S: StreamingChromValues<V>, H: BuildHasher>
     }
 }
 
-impl<V, S: StreamingChromValues<V>, H: BuildHasher>
-    Iterator for BedParserChromGroupStreamingIterator<V, S, H>
+impl<V, S: StreamingChromValues<V>, H: BuildHasher> Iterator
+    for BedParserChromGroupStreamingIterator<V, S, H>
 {
     type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -75,7 +69,6 @@ impl<V, S: StreamingChromValues<V>, H: BuildHasher>
                     Ok(group) => Some(Ok(Either::Left(group))),
                     Err(err) => Some(Err(err.into())),
                 }
-                
             }
             None => match self.chrom_ids.take() {
                 Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
@@ -288,21 +281,15 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
             match state.advance(false) {
-                Ok(()) => {},
+                Ok(()) => {}
                 Err(e) => return Some(Err(e.into())),
             }
         }
 
         let next_chrom = match &state.next_chrom {
-            ChromOpt::Diff(real_chrom) => {
-                Some(real_chrom)
-            }
-            ChromOpt::Same => {
-                state.curr_chrom.as_ref()
-            }
-            ChromOpt::None => {
-                None
-            }
+            ChromOpt::Diff(real_chrom) => Some(real_chrom),
+            ChromOpt::Same => state.curr_chrom.as_ref(),
+            ChromOpt::None => None,
         };
         let ret = match next_chrom {
             None => None,
@@ -351,9 +338,7 @@ impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
                 }
                 state.curr_val.take().map(Result::Ok)
             }
-            Err(e) => {
-                Some(Err(e))
-            }
+            Err(e) => Some(Err(e)),
         }
     }
 

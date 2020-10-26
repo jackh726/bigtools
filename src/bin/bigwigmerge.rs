@@ -26,8 +26,10 @@ impl MergingValues {
     where
         I: Iterator<Item = io::Result<Value>> + Send,
     {
-        let iter: Box<dyn Iterator<Item = io::Result<Value>> + Send> =
-            Box::new(merge_sections_many(iters).filter(|x| x.as_ref().map(|v| v.value != 0.0).unwrap_or(true)));
+        let iter: Box<dyn Iterator<Item = io::Result<Value>> + Send> = Box::new(
+            merge_sections_many(iters)
+                .filter(|x| x.as_ref().map(|v| v.value != 0.0).unwrap_or(true)),
+        );
         MergingValues {
             iter: iter.peekable(),
         }
@@ -119,7 +121,7 @@ pub fn get_merged_vals(
                     let len = merges.len();
                     let mut vals = merges.into_iter().peekable();
                     let mut merges: Vec<Box<dyn Iterator<Item = io::Result<Value>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
-    
+
                     while vals.peek().is_some() {
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
                         let mut mergingvalues = MergingValues::new(chunk);

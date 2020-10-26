@@ -40,7 +40,7 @@ impl BigWigWrite {
         vals: V,
     ) -> Result<(), WriteGroupsError>
     where
-        V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
+        V: Iterator<Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
     {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);

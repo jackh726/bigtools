@@ -43,7 +43,7 @@ impl BigBedWrite {
         vals: V,
     ) -> Result<(), WriteGroupsError>
     where
-        V: Iterator<Item=Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
+        V: Iterator<Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
     {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
@@ -51,11 +51,13 @@ impl BigBedWrite {
         write_blank_headers(&mut file)?;
 
         let autosql_offset = file.tell()?;
-        let autosql = self.autosql.clone().unwrap_or_else(|| crate::autosql::BED3.to_string());
-        let autosql = CString::new(autosql.into_bytes()).map_err(|_| io::Error::new(
-            io::ErrorKind::Other,
-            "Invalid autosql: null byte in string",
-        ))?;
+        let autosql = self
+            .autosql
+            .clone()
+            .unwrap_or_else(|| crate::autosql::BED3.to_string());
+        let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "Invalid autosql: null byte in string")
+        })?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
         let total_summary_offset = file.tell()?;
