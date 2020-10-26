@@ -31,7 +31,7 @@ checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
 
 [[package]]
 name = "bigtools"
-version = "0.1.3-dev"
+version = "0.1.3"
 dependencies = [
  "bincode",
  "byteorder",
