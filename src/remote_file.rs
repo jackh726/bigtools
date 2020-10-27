@@ -1,9 +1,7 @@
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-use reqwest;
 use tempfile;
-use tokio::runtime;
 
 use crate::seekableread::Reopen;
 
@@ -15,22 +13,18 @@ const READ_SIZE: usize = 20 * 1024; // 20 KB chunks
 /// tiling, so all or no data for a given block is available.
 
 pub struct RemoteFile {
-    url: reqwest::Url,
+    url: String,
     last_seek: u64,
     current: Option<Cursor<Vec<u8>>>,
-    runtime: Option<tokio::runtime::Runtime>,
-    client: reqwest::Client,
     cache: Option<File>,
 }
 
 impl RemoteFile {
     pub fn new(url: &str) -> RemoteFile {
         RemoteFile {
-            url: reqwest::Url::parse(url).unwrap(),
+            url: url.to_string(),
             last_seek: 0,
             current: None,
-            runtime: None,
-            client: reqwest::Client::new(),
             cache: None,
         }
     }
@@ -51,18 +45,6 @@ impl RemoteFile {
                 self.cache.as_mut().unwrap()
             }
             Some(cache) => cache,
-        };
-        let basic_rt = match self.runtime.as_mut() {
-            None => {
-                self.runtime = Some(runtime::Runtime::new().map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Error creating runtime: {}", e),
-                    )
-                })?);
-                self.runtime.as_mut().unwrap()
-            }
-            Some(basic_rt) => basic_rt,
         };
         use byteorder::ReadBytesExt;
         use byteorder::WriteBytesExt;
@@ -85,25 +67,24 @@ impl RemoteFile {
             .unwrap_or(READ_SIZE as u64)
             .max(READ_SIZE as u64);
 
-        let client = &self.client;
-        let url = self.url.clone();
-        let bytes = basic_rt.block_on(async {
-            let r = client
-                .get(url)
-                .header(
-                    reqwest::header::RANGE,
-                    format!(
-                        "bytes={}-{}",
-                        block_start,
-                        block_start + read_len as u64 - 1
-                    ),
-                )
-                .send()
-                .await?;
-            r.bytes().await
-        });
-        let bytes = bytes.map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-        let bytes = bytes.to_vec();
+        let resp = attohttpc::get(&self.url)
+            .header(
+                "range",
+                format!(
+                    "bytes={}-{}",
+                    block_start,
+                    block_start + read_len as u64 - 1
+                ),
+            )
+            .send()?;
+        let bytes = if resp.is_success() {
+            resp.bytes()?
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Unable to connect to server to receive file."),
+            ));
+        };
         cache.seek(SeekFrom::Start(cache_block_start))?;
         let blocks_to_write = if bytes.len() == read_len as usize {
             bytes.len() / READ_SIZE
@@ -245,8 +226,6 @@ impl Clone for RemoteFile {
             url: self.url.clone(),
             last_seek: 0,
             current: None,
-            runtime: None,
-            client: self.client.clone(),
             cache: None,
         }
     }
@@ -258,8 +237,6 @@ impl Reopen<RemoteFile> for RemoteFile {
             url: self.url.clone(),
             last_seek: 0,
             current: None,
-            runtime: None,
-            client: self.client.clone(),
             cache: None,
         })
     }
