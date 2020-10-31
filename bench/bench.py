@@ -9,67 +9,41 @@ import urllib.request
 from monitorps import monitor
 
 timeregex = re.compile(r'(\d.*)user (\d.*)system (\d.*)elapsed')
+ucsctoolspath = None
+bigtoolspath = None
+reps = 3
 
 def download_test_data():
     print("Downloading test data")
     if not os.path.exists("./workdir"):
         os.makedirs("./workdir")
-    if not os.path.exists('./workdir/ENCFF937MNZ.bigWig'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF937MNZ/@@download/ENCFF937MNZ.bigWig', './workdir/ENCFF937MNZ.bigWig')
-    if not os.path.exists('./workdir/ENCFF447DHW.bigWig'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF447DHW/@@download/ENCFF447DHW.bigWig', './workdir/ENCFF447DHW.bigWig')
-    if not os.path.exists('./workdir/ENCFF841DHZ.bigWig'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF841DHZ/@@download/ENCFF841DHZ.bigWig', './workdir/ENCFF841DHZ.bigWig')
-    if not os.path.exists('./workdir/ENCFF518WII.bigWig'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF518WII/@@download/ENCFF518WII.bigWig', './workdir/ENCFF518WII.bigWig')
-    if not os.path.exists('./workdir/ENCFF646AZP.bed'):
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF646AZP/@@download/ENCFF646AZP.bed.gz', './workdir/ENCFF646AZP.bed.gz')
-        subprocess.check_call(['gunzip', './workdir/ENCFF646AZP.bed.gz'])
-    if not os.path.exists('./workdir/hg38.chrom.sizes'):
-        urllib.request.urlretrieve('https://raw.githubusercontent.com/ENCODE-DCC/encValData/562ab5bf03deff9bb5340991fd5c844162b82914/GRCh38/GRCh38_EBV.chrom.sizes', './workdir/hg38.chrom.sizes')
-    print("Done downlaoding test data")
+    if not os.path.exists("./workdir/output"):
+        os.makedirs("./workdir/output")
+    def download(url, name):
+        filename = name.replace('.gz', '')
+        if not os.path.exists(f'./workdir/{filename}'):
+            print(f"Downloading {name}")
+            urllib.request.urlretrieve(url, f'./workdir/{name}')
+            if name.endswith(".gz"):
+                subprocess.check_call(['gunzip', './workdir/ENCFF646AZP.bed.gz'])
+
+    download('https://www.encodeproject.org/files/ENCFF937MNZ/@@download/ENCFF937MNZ.bigWig', 'ENCFF937MNZ.bigWig')
+    download('https://www.encodeproject.org/files/ENCFF447DHW/@@download/ENCFF447DHW.bigWig', 'ENCFF447DHW.bigWig')
+    download('https://www.encodeproject.org/files/ENCFF841DHZ/@@download/ENCFF841DHZ.bigWig', 'ENCFF841DHZ.bigWig')
+    download('https://www.encodeproject.org/files/ENCFF518WII/@@download/ENCFF518WII.bigWig', 'ENCFF518WII.bigWig')
+    download('https://www.encodeproject.org/files/ENCFF646AZP/@@download/ENCFF646AZP.bed.gz', 'ENCFF646AZP.bed.gz')
+    download('https://www.encodeproject.org/files/ENCFF076CIO/@@download/ENCFF076CIO.bed.gz', 'ENCFF076CIO.bed.gz')
+    download('https://raw.githubusercontent.com/ENCODE-DCC/encValData/562ab5bf03deff9bb5340991fd5c844162b82914/GRCh38/GRCh38_EBV.chrom.sizes', 'hg38.chrom.sizes')
+    print("Done downloading test data")
 
 
-
-# from https://stackoverflow.com/a/13889698
-def start_running(command):
-    time_read_pipe, time_write_pipe = os.pipe()
-    want_read_pipe, want_write_pipe = os.pipe()
-    runner_pid = os.fork()
-    if runner_pid != 0:
-        os.close(time_write_pipe)
-        os.close(want_read_pipe)
-        def finish_running():
-            os.write(want_write_pipe, 'x')
-            os.close(want_write_pipe)
-            time = os.read(time_read_pipe, struct.calcsize('f'))
-            os.close(time_read_pipe)
-            time = struct.unpack('f', time)[0]
-            return time
-        return finish_running
-    os.close(time_read_pipe)
-    os.close(want_write_pipe)
-    sub_pid = os.fork()
-    if sub_pid == 0:
-        os.close(time_write_pipe)
-        os.close(want_read_pipe)
-        os.execvp(command[0], command)
-    os.wait()
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    os.read(want_read_pipe, 1)
-    os.write(time_write_pipe, struct.pack('f', usage.ru_utime))
-    sys.exit(0)
-
-def time(exeargs_all, bench, program):
+def time(exeargs_all, bench, program, rep):
     total_seconds = 0
     for i, exeargs in enumerate(exeargs_all):
-        exeargs.insert(0, 'time')
+        exeargs.insert(0, '/usr/bin/time')
         exeargs = " ".join(exeargs)
         print(exeargs)
-        if len(exeargs_all) > 1:
-            logfile = './workdir/{}_{}_{}.log'.format(bench, program, i)
-        else:
-            logfile = './workdir/{}_{}.log'.format(bench, program)
+        logfile = f'./workdir/output/{bench}_{program}_{rep}_{i}.log'
         with subprocess.Popen(exeargs, stderr=subprocess.PIPE, stdout=subprocess.PIPE, shell=True) as process:
             monitor(process.pid, logfile, 0.1)
             out, err = process.communicate()
@@ -87,38 +61,51 @@ def time(exeargs_all, bench, program):
 
     return total_seconds
 
-def compare(bench, ucsc, bigtools, bigtoolsst=None):
+def compare(comp, bench, ucsc, bigtools_mt=None, bigtools_st=None):
+    global reps
     print('Benchmarking {}'.format(bench))
-    ucsctime = time(ucsc, bench, 'ucsc')
-    print("ucsc: {}".format(round(ucsctime,3)))
-    bigtoolstime = time(bigtools, bench, 'bigwig')
-    print("bigtools: {}".format(round(bigtoolstime,3)))
-    if bigtoolsst is not None:
-        bigtoolssttime = time(bigtoolsst, bench, 'bigwigst')
-        print("bigtools (st): {}".format(round(bigtoolssttime,3)))
+    for i in range(0, reps):
+        print(f"Rep {i+1}...")
+        ucsctime = time(ucsc, bench, 'ucsc', i)
+        print("ucsc: {}".format(round(ucsctime,3)))
+        comp.write(f"{bench}\tucsc\t{round(ucsctime,3)}\n")
+        if bigtools_mt is not None:
+            bigtoolstime = time(bigtools_mt, bench, 'bigtools-mt', i)
+            print("bigtools-mt: {}".format(round(bigtoolstime,3)))
+            comp.write(f"{bench}\tbigtools-mt\t{round(bigtoolstime,3)}\n")
+        if bigtools_st is not None:
+            bigtoolssttime = time(bigtools_st, bench, 'bigtools-st', i)
+            print("bigtools-st: {}".format(round(bigtoolssttime,3)))
+            comp.write(f"{bench}\tbigtools-st\t{round(bigtoolssttime,3)}\n")
 
-def bigwigaverageoverbed():
+def bigwigaverageoverbed(comp):
+    global ucsctoolspath
+    global bigtoolspath
     # For ucsc, we have to convert narrowPeak to bed first, including adding a unique name
     ucsc = [
         ['cat ./workdir/ENCFF646AZP.bed | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' > ./workdir/ENCFF646AZP_cut.bed'],
         ['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP_cut.bed', './workdir/test_out_ucsc.bed']
         ]
-    bigtools = [['{}/bigwigaverageoverbed'.format(bigtoolspath), '-s' , './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP.bed', './workdir/test_out_bigtools.bed']]
-    compare('bigwigaverageoverbed', ucsc, bigtools)
+    bigtools_st = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP.bed', './workdir/test_out_bigtools.bed']]
+    compare(comp, 'bigwigaverageoverbed', ucsc, None, bigtools_st)
 
-def bigwigmerge():
+def bigwigmerge(comp):
+    global ucsctoolspath
+    global bigtoolspath
     ucsc = [['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph']]
     bigtools = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bedGraph', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
-    compare('bigwigmerge_bedgraph', ucsc, bigtools)
+    compare(comp, 'bigwigmerge_bedgraph', ucsc, bigtools)
     ucsc = [
         ['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', './workdir/test_out_ucsc.bedGraph'],
         ['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/test_out_ucsc.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']
         ]
     bigtools = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig']]
-    bigtoolsst = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '-t 1']]
-    compare('bigwigmerge_bigwig', ucsc, bigtools, bigtoolsst)
+    bigtools_st = [['{}/bigwigmerge'.format(bigtoolspath), './workdir/test_out_bigtools.bigWig', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '-t 1']]
+    compare(comp, 'bigwigmerge_bigwig', ucsc, bigtools, bigtools_st)
 
-def bedgraphtobigwig():
+def bedgraphtobigwig(comp):
+    global ucsctoolspath
+    global bigtoolspath
     # Need to generate bedGraph first, just use ucsc since it's what we're comparing against
     if not os.path.exists('./workdir/ENCFF518WII.bedGraph'):
         process = subprocess.check_call('{}/bigWigToBedGraph ./workdir/ENCFF518WII.bigWig ./workdir/ENCFF518WII.bedGraph'.format(ucsctoolspath), shell=True)
@@ -126,31 +113,46 @@ def bedgraphtobigwig():
         process = subprocess.check_call('{}/bigWigToBedGraph ./workdir/ENCFF841DHZ.bigWig ./workdir/ENCFF841DHZ.bedGraph'.format(ucsctoolspath), shell=True)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
     bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig']]
-    bigtoolsst = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
-    compare('bedgraphtobigwig_small', ucsc, bigtools, bigtoolsst)
+    bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
+    compare(comp, 'bedgraphtobigwig_small', ucsc, bigtools, bigtools_st)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
     bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig']]
-    bigtoolsst = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
-    compare('bedgraphtobigwig_medium', ucsc, bigtools, bigtoolsst)
+    bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
+    compare(comp, 'bedgraphtobigwig_medium', ucsc, bigtools, bigtools_st)
 
-def bigwigtobedgraph():
+def bedtobigbed(comp):
+    global ucsctoolspath
+    global bigtoolspath
+    if not os.path.exists('./workdir/ENCFF076CIO.sorted.bed'):
+        process = subprocess.check_call('cat ./workdir/ENCFF076CIO.bed | cut -f1-3 | sort -k1,1 -k2,2n > ./workdir/ENCFF076CIO.sorted.bed', shell=True)
+    ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigBed']]
+    bigtools = [['{}/bedtobigbed'.format(bigtoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigBed']]
+    bigtools_st = [['{}/bedtobigbed'.format(bigtoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigBed', '-t 1']]
+    compare(comp, 'bedtobigbed', ucsc, bigtools, bigtools_st)
+
+def bigwigtobedgraph(comp):
+    global ucsctoolspath
+    global bigtoolspath
     ucsc = [['{}/bigWigToBedGraph'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_ucsc.bedGraph']]
     bigtools = [['{}/bigwigtobedgraph'.format(bigtoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph']]
-    bigtoolsst = [['{}/bigwigtobedgraph'.format(bigtoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 1']]
-    compare('bigwigtobedgraph', ucsc, bigtools, bigtoolsst)
+    bigtools_st = [['{}/bigwigtobedgraph'.format(bigtoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 1']]
+    compare(comp, 'bigwigtobedgraph', ucsc, bigtools, bigtools_st)
 
 
 def main():
     global ucsctoolspath
     global bigtoolspath
-    ucsctoolspath = sys.argv[1]
-    bigtoolspath = sys.argv[2]
+    global reps
+    ucsctoolspath = sys.argv[1] if len(sys.argv) > 1 else "/bin"
+    bigtoolspath = sys.argv[2] if len(sys.argv) > 2 else "/usr/local/bin"
+    reps = 3
     download_test_data()
-    bigwigaverageoverbed()
-    bigwigmerge()
-    bedgraphtobigwig()
-    # TODO: bedtobigbed
-    bigwigtobedgraph()
+    with open("./workdir/output/comparison.txt", "w") as comp:
+        bigwigaverageoverbed(comp)
+        bigwigmerge(comp)
+        bedgraphtobigwig(comp)
+        bedtobigbed(comp)
+        bigwigtobedgraph(comp)
 
 if __name__ == '__main__':
     main()

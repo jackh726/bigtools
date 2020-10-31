@@ -216,7 +216,7 @@ pub(crate) async fn encode_zoom_section(
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
-    let mut bytes: Vec<u8> = vec![];
+    let mut bytes: Vec<u8> = vec![0u8; items_in_section.len() * 32];
 
     let start = items_in_section[0].start;
     let end = items_in_section[items_in_section.len() - 1].end;

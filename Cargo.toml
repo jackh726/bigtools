@@ -28,7 +28,7 @@ rand = "0.6.5"
 [profile.release]
 lto = false
 debug-assertions = true
-
+debug = true
 
 [profile.dev]
 opt-level = 3

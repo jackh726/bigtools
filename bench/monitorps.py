@@ -33,9 +33,9 @@ import psutil
 
 def main():
     parser = argparse.ArgumentParser(description='Record CPU and memory usage for a process')
-    parser.add_argument('command', type=str,.about='the process command')
-    parser.add_argument('--log', type=str,.about='output the statistics to a file')
-    parser.add_argument('--interval', type=float,.about='how long to wait between each sample (in seconds). By default the process is sampled as often as possible.')
+    parser.add_argument('command', type=str, help='the process command')
+    parser.add_argument('--log', type=str, help='output the statistics to a file')
+    parser.add_argument('--interval', type=float, help='how long to wait between each sample (in seconds). By default the process is sampled as often as possible.')
     args = parser.parse_args()
     start_and_monitor(args.command, args.log, args.interval)
 
@@ -71,36 +71,40 @@ def monitor(pid, logfile, interval):
             current_mem_real = 0
             current_mem_virt = 0
 
-            with pr.oneshot():
-                pr_status = pr.status()
-                # Check if process status indicates we should exit
-                if pr_status in [psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD]:
-                    break
+            # Process may finish at any point
+            try:
+                with pr.oneshot():
+                    pr_status = pr.status()
+                    # Check if process status indicates we should exit
+                    if pr_status in [psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD]:
+                        break
 
-                current_cpu += pr.cpu_percent()
-                mem = pr.memory_info()
-                current_mem_real += mem.rss / 1024. ** 2
-                current_mem_virt += mem.vms / 1024. ** 2
-            
-            for child in pr.children(recursive=True):
-                if child.pid in children:
-                    child_p = children[child.pid]
-                else:
-                    children[child.pid] = child
-                    child_p = child
-
-                with child_p.oneshot():
-                    current_cpu += child_p.cpu_percent()
-                    mem = child_p.memory_info()
+                    current_cpu += pr.cpu_percent()
+                    mem = pr.memory_info()
                     current_mem_real += mem.rss / 1024. ** 2
                     current_mem_virt += mem.vms / 1024. ** 2
+                
+                for child in pr.children(recursive=True):
+                    if child.pid in children:
+                        child_p = children[child.pid]
+                    else:
+                        children[child.pid] = child
+                        child_p = child
 
-            f.write("{0:12.3f} {1:12.3f} {2:12.3f} {3:12.3f}\n".format(
-                current_time - start_time,
-                current_cpu,
-                current_mem_real,
-                current_mem_virt))
-            f.flush()
+                    with child_p.oneshot():
+                        current_cpu += child_p.cpu_percent()
+                        mem = child_p.memory_info()
+                        current_mem_real += mem.rss / 1024. ** 2
+                        current_mem_virt += mem.vms / 1024. ** 2
+
+                f.write("{0:12.3f} {1:12.3f} {2:12.3f} {3:12.3f}\n".format(
+                    current_time - start_time,
+                    current_cpu,
+                    current_mem_real,
+                    current_mem_virt))
+                f.flush()
+            except:
+                break
 
             if interval is not None:
                 time.sleep(interval)

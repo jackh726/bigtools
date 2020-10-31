@@ -144,14 +144,14 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
                     None => return None,
                 };
                 let res = (|| {
-                    let s = split.next().ok_or(io::Error::new(
+                    let s = split.next().ok_or_else(|| io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Missing start: {:}", s),
                     ))?;
                     let start = s.parse::<u32>().map_err(|_| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
                     })?;
-                    let s = split.next().ok_or(io::Error::new(
+                    let s = split.next().ok_or_else(|| io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Missing end: {:}", s),
                     ))?;
@@ -183,21 +183,21 @@ impl BedParser<Value, BedStream<Value, BufReader<File>>> {
                     None => return None,
                 };
                 let res = (|| {
-                    let s = split.next().ok_or(io::Error::new(
+                    let s = split.next().ok_or_else(|| io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Missing start: {:}", s),
                     ))?;
                     let start = s.parse::<u32>().map_err(|_| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
                     })?;
-                    let s = split.next().ok_or(io::Error::new(
+                    let s = split.next().ok_or_else(|| io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Missing end: {:}", s),
                     ))?;
                     let end = s.parse::<u32>().map_err(|_| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
                     })?;
-                    let s = split.next().ok_or(io::Error::new(
+                    let s = split.next().ok_or_else(|| io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Missing value: {:}", s),
                     ))?;
