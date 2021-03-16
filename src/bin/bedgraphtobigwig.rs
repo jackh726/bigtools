@@ -51,23 +51,25 @@ fn main() -> Result<(), WriteGroupsError> {
     let bigwigpath = matches.value_of("output").unwrap().to_owned();
     let nthreads = {
         let nthreads = matches.value_of("nthreads").unwrap();
-        let parsed = nthreads.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nthreads`: must be a positive number");
-            return Ok(());
+        match nthreads.parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("Invalid argument for `nthreads`: must be a positive number");
+                return Ok(());
+            }
         }
-        parsed.unwrap()
     };
     let nzooms = {
         let nzooms = matches.value_of("nzooms").unwrap();
-        let parsed = nzooms.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nzooms`: must be a positive number");
-            return Ok(());
+        match nzooms.parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!("Invalid argument for `nzooms`: must be a positive number");
+                return Ok(());
+            }
         }
-        parsed.unwrap()
     };
-    let uncompressed = { matches.is_present("uncompressed") };
+    let uncompressed = matches.is_present("uncompressed");
     let input_sort_type = match matches.value_of("sorted") {
         None => InputSortType::ALL,
         Some("all") => InputSortType::ALL,
