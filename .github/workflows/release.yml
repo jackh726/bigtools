@@ -1,0 +1,45 @@
+on:
+  release:
+    types: [created]
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: bigtools-linux-gnu-noremote
+            remote: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: bigtools-linux-gnu
+            remote: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Build project
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release --locked --target ${{ matrix.target }} --no-default-features ${{ matrix.remote && '--features remote' || '' }}
+      - name: Zip build artifacts
+        uses: papeloto/action-zip@v1
+        with:
+          files: |
+            target/release/bedgraphtobigwig;
+            target/release/bedtobigbed;
+            target/release/bigtools;
+            target/release/bigwigaverageoverbed;
+            target/release/bigwiginfo;
+            target/release/bigwigmerge;
+            target/release/bigwigtobedgraph;
+            target/release/bigwigvaluesoverbed
+          dest: ${{ matrix.asset_name }}.zip
+      - name: Asset upload
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ${{ github.workspace }}/${{ matrix.asset_name }}.zip
+

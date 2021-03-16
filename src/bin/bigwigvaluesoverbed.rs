@@ -142,12 +142,20 @@ fn main() -> Result<(), BigWigReadAttachError> {
         delimiter,
     };
 
-    if cfg!(feature = "remote") && bigwigpath.starts_with("http") {
-        use bigtools::remote_file::RemoteFile;
-        let f = RemoteFile::new(bigwigpath);
-        let inbigwig = BigWigRead::from(f)?;
-        write(&bedin, inbigwig, out, options)?;
-    } else {
+    #[cfg(feature = "remote")]
+    {
+        if bigwigpath.starts_with("http") {
+            use bigtools::remote_file::RemoteFile;
+            let f = RemoteFile::new(bigwigpath);
+            let inbigwig = BigWigRead::from(f)?;
+            write(&bedin, inbigwig, out, options)?;
+        } else {
+            let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+            write(&bedin, inbigwig, out, options)?;
+        }
+    }
+    #[cfg(not(feature = "remote"))]
+    {
         let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
         write(&bedin, inbigwig, out, options)?;
     }
