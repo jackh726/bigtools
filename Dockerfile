@@ -8,8 +8,6 @@ RUN cd /bigtools && cargo install --path .
 
 FROM python:3.8.6
 
-COPY --from=build /usr/local/cargo/bin/ /usr/local/bin/
-
 RUN git clone https://github.com/ucscGenomeBrowser/kent.git && \
     cd kent/src/lib && make && cd ../jkOwnLib && make && cd ../htslib && make && \
     mkdir -p /root/bin/x86_64 && cd ../utils/bedGraphToBigWig \
@@ -23,6 +21,8 @@ RUN git clone https://github.com/ucscGenomeBrowser/kent.git && \
 RUN apt-get update && apt-get install -y time && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir psutil
+
+COPY --from=build /usr/local/cargo/bin/ /usr/local/bin/
 
 COPY ./bench /app
 

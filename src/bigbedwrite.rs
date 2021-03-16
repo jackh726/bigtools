@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
@@ -13,6 +13,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::chromvalues::ChromValues;
 use crate::idmap::IdMap;
+use crate::indexlist::IndexList;
 use crate::tell::Tell;
 
 use crate::bbiwrite::{
@@ -172,12 +173,12 @@ impl BigBedWrite {
         struct ZoomItem {
             size: u32,
             live_info: Option<(ZoomRecord, u64)>,
-            overlap: VecDeque<Value>,
+            overlap: IndexList<Value>,
             records: Vec<ZoomRecord>,
         }
         struct EntriesSection {
             items: Vec<BedEntry>,
-            overlap: VecDeque<Value>,
+            overlap: IndexList<Value>,
             zoom_items: Vec<ZoomItem>,
         }
 
@@ -185,13 +186,13 @@ impl BigBedWrite {
 
         let mut state_val = EntriesSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
-            overlap: VecDeque::new(),
+            overlap: IndexList::new(),
             zoom_items: std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
                 .take(options.max_zooms as usize)
                 .map(|size| ZoomItem {
                     size,
                     live_info: None,
-                    overlap: VecDeque::new(),
+                    overlap: IndexList::new(),
                     records: Vec::with_capacity(options.items_per_slot as usize),
                 })
                 .collect(),
@@ -227,7 +228,7 @@ impl BigBedWrite {
             }
 
             let add_interval_to_summary =
-                move |overlap: &mut VecDeque<Value>,
+                move |overlap: &mut IndexList<Value>,
                       summary: &mut Option<Summary>,
                       item_start: u32,
                       item_end: u32,
@@ -235,44 +236,51 @@ impl BigBedWrite {
                     // If any overlaps exists, it must be starting at the current start (else it would have to be after the current entry)
                     // If the overlap starts before, the entry wasn't correctly cut last iteration
                     debug_assert!(overlap
-                        .front()
+                        .head()
                         .map(|f| f.start == item_start)
                         .unwrap_or(true));
 
                     // For each item in `overlap` that overlaps the current
                     // item, add `1` to the value.
-                    for (i, o) in overlap.iter_mut().enumerate() {
-                        o.value += 1.0;
-                        if item_end < o.end {
-                            let value = o.value - 1.0;
-                            let end = o.end;
-                            o.end = item_end;
-                            overlap.insert(
-                                i + 1,
-                                Value {
-                                    start: item_end,
-                                    end,
-                                    value,
-                                },
-                            );
-                            break;
+                    let mut index = overlap.head_index();
+                    while let Some(i) = index {
+                        match overlap.get_mut(i.clone()) {
+                            None => break,
+                            Some(o) => {
+                                o.value += 1.0;
+                                if item_end < o.end {
+                                    let value = o.value - 1.0;
+                                    let end = o.end;
+                                    o.end = item_end;
+                                    overlap.insert_after(
+                                        i,
+                                        Value {
+                                            start: item_end,
+                                            end,
+                                            value,
+                                        },
+                                    );
+                                    break;
+                                }
+                                index = overlap.next_index(i);
+                            }
                         }
                     }
 
-                    debug_assert!(overlap.back().map(|o| o.end >= item_start).unwrap_or(true));
+                    debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
 
-                    if overlap.back().map(|o| o.end).unwrap_or(item_start) == item_start {
+                    if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
                         overlap.push_back(Value {
                             start: item_start,
                             end: item_end,
                             value: 1.0,
-                        })
+                        });
                     }
 
                     let next_start = next_start_opt.unwrap_or(u32::max_value());
 
                     while overlap
-                        .front()
+                        .head()
                         .map(|f| f.start < next_start)
                         .unwrap_or(false)
                     {
@@ -326,38 +334,45 @@ impl BigBedWrite {
 
                 // For each item in `overlap` that overlaps the current
                 // item, add `1` to the value.
-                for (i, o) in overlap.iter_mut().enumerate() {
-                    o.value += 1.0;
-                    if item_end < o.end {
-                        let value = o.value - 1.0;
-                        let end = o.end;
-                        o.end = item_end;
-                        overlap.insert(
-                            i + 1,
-                            Value {
-                                start: item_end,
-                                end,
-                                value,
-                            },
-                        );
-                        break;
+                let mut index = overlap.head_index();
+                while let Some(i) = index {
+                    match overlap.get_mut(i.clone()) {
+                        None => break,
+                        Some(o) => {
+                            o.value += 1.0;
+                            if item_end < o.end {
+                                let value = o.value - 1.0;
+                                let end = o.end;
+                                o.end = item_end;
+                                overlap.insert_after(
+                                    i,
+                                    Value {
+                                        start: item_end,
+                                        end,
+                                        value,
+                                    },
+                                );
+                                break;
+                            }
+                            index = overlap.next_index(i);
+                        }
                     }
                 }
 
-                debug_assert!(overlap.back().map(|o| o.end >= item_start).unwrap_or(true));
+                debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
 
-                if overlap.back().map(|o| o.end).unwrap_or(item_start) == item_start {
+                if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
                     overlap.push_back(Value {
                         start: item_start,
                         end: item_end,
                         value: 1.0,
-                    })
+                    });
                 }
 
                 let next_start = group.peek().map(|v| v.start).unwrap_or(u32::max_value());
 
                 while overlap
-                    .front()
+                    .head()
                     .map(|f| f.start < next_start)
                     .unwrap_or(false)
                 {
@@ -459,9 +474,13 @@ impl BigBedWrite {
 
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
             }
+
             state_val.items.push(current_val);
             if group.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize {
-                let items = std::mem::replace(&mut state_val.items, vec![]);
+                let items = std::mem::replace(
+                    &mut state_val.items,
+                    Vec::with_capacity(options.items_per_slot as usize),
+                );
                 let handle = pool
                     .spawn_with_handle(encode_section(options.compress, items, chrom_id))
                     .expect("Couldn't spawn.");
@@ -549,11 +568,14 @@ async fn encode_section(
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
-    let mut bytes: Vec<u8> = vec![0u8; items_in_section.len()*30];
+    let mut bytes = Vec::with_capacity(items_in_section.len() * 30);
 
     let start = items_in_section[0].start;
     let end = items_in_section[items_in_section.len() - 1].end;
 
+    // FIXME: Each of these calls end up calling `Vec::reserve`
+    // We could instead use a `Cursor<&mut [u8]>`, but we would need to be a bit
+    // more careful here around safety
     for item in items_in_section.iter() {
         bytes.write_u32::<NativeEndian>(chrom_id)?;
         bytes.write_u32::<NativeEndian>(item.start)?;

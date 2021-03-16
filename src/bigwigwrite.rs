@@ -383,7 +383,7 @@ async fn encode_section(
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
-    let mut bytes: Vec<u8> = vec![0u8; 24 + (items_in_section.len() * 24)];
+    let mut bytes = Vec::with_capacity(24 + (items_in_section.len() * 24));
 
     let start = items_in_section[0].start;
     let end = items_in_section[items_in_section.len() - 1].end;

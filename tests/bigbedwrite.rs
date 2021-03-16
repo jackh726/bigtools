@@ -39,6 +39,7 @@ fn bigbedwrite_test() -> io::Result<()> {
         let first = group.peek().unwrap();
         Some(bigtools::autosql::bed_autosql(&first.rest))
     };
+    outb.options.compress = false;
 
     let options = outb.options.clone();
 
