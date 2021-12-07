@@ -30,10 +30,10 @@ impl<'a, R: Read + Seek> MemCachedRead<'a, R> {
 
 impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut remaining_buf = &mut buf[..];
+        let mut remaining_buf = buf;
         let mut total_read = 0;
         loop {
-            if remaining_buf.len() == 0 {
+            if remaining_buf.is_empty() {
                 break;
             }
             let current_position = match self.current_position {
@@ -75,7 +75,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
                         let copy_to_end = (read - offset as usize).min(remaining_len);
                         self.current_position = Some(current_position + copy_to_end as u64);
                         let to_copy = &temp_buf[copy_start..copy_end];
-                        remaining_buf[..copy_to_end].copy_from_slice(&to_copy);
+                        remaining_buf[..copy_to_end].copy_from_slice(to_copy);
                         total_read += to_copy.len();
                     }
                     break;

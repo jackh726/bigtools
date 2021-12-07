@@ -14,7 +14,7 @@ impl<B: BufRead> StreamingLineReader<B> {
         }
     }
 
-    pub fn read<'a>(&'a mut self) -> Option<io::Result<&'a str>> {
+    pub fn read(&mut self) -> Option<io::Result<&'_ str>> {
         self.current_line.clear();
         match self.buf_read.read_line(&mut self.current_line) {
             Ok(size) if size == 0 => None,

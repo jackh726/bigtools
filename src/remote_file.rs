@@ -82,7 +82,7 @@ impl RemoteFile {
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Unable to connect to server to receive file."),
+                "Unable to connect to server to receive file.".to_string(),
             ));
         };
         cache.seek(SeekFrom::Start(cache_block_start))?;
@@ -101,7 +101,7 @@ impl RemoteFile {
                 cache.write_u8(2)?;
                 cache.write_u64::<byteorder::BigEndian>(block_data.len() as u64)?;
             }
-            cache.write(block_data)?;
+            cache.write_all(block_data)?;
         }
         let len = bytes.len() as u64;
         self.current = Some(Cursor::new(bytes));
@@ -180,7 +180,7 @@ impl Read for RemoteFile {
             remaining_buf = &mut remaining_buf[skip..];
             total_read -= read - skip;
             self.current = None;
-            self.last_seek = self.last_seek + skip as u64;
+            self.last_seek += skip as u64;
         }
         Ok(total_read)
     }

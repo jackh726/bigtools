@@ -34,7 +34,7 @@ pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
             ) -> io::Result<()> {
                 for raw_val in bigbed.get_interval(&chrom.name, 0, chrom.length)? {
                     let val = raw_val?;
-                    let end = if val.rest.len() > 0 {
+                    let end = if !val.rest.is_empty() {
                         format!("\t{}\n", val.rest)
                     } else {
                         "\n".to_string()

@@ -45,7 +45,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         } else {
             const NAME_COL: usize = 4;
             const TEST_LINES: usize = 10;
-            let reader = BufReader::new(File::open(bedinpath.clone())?);
+            let reader = BufReader::new(File::open(bedinpath)?);
             let mut lines = reader
                 .lines()
                 .take(TEST_LINES)
@@ -89,7 +89,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
             "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
             entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
         );
-        write!(&mut bedoutwriter, "{}\t{}\n", name, stats)?
+        writeln!(&mut bedoutwriter, "{}\t{}", name, stats)?
     }
 
     Ok(())

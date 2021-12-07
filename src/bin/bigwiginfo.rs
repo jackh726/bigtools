@@ -25,7 +25,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         } else {
             let mut bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
             println!("Header: {:?}", bigwig.info.header);
-            println!("Summary: {:?}", bigwig.get_summary());    
+            println!("Summary: {:?}", bigwig.get_summary());
         }
     }
     #[cfg(not(feature = "remote"))]

@@ -73,6 +73,9 @@ impl From<io::Error> for BBIFileReadInfoError {
     }
 }
 
+pub type MemCachedReeader<'a, R> =
+    ByteOrdered<BufReader<MemCachedRead<'a, ByteOrdered<BufReader<R>, Endianness>>>, Endianness>;
+
 pub trait BBIRead<R: SeekableRead> {
     fn get_info(&self) -> &BBIFileInfo;
 
@@ -80,11 +83,7 @@ pub trait BBIRead<R: SeekableRead> {
 
     fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<R>, Endianness>>;
 
-    fn ensure_mem_cached_reader(
-        &mut self,
-    ) -> io::Result<
-        ByteOrdered<BufReader<MemCachedRead<ByteOrdered<BufReader<R>, Endianness>>>, Endianness>,
-    >;
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReeader<'_, R>>;
 
     /// Manually close the open file descriptor (if it exists). If any operations are performed after this is called, the file descriptor will be reopened.
     fn close(&mut self);

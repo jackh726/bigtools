@@ -112,7 +112,7 @@ fn main() -> Result<(), WriteGroupsError> {
         .create()
         .expect("Unable to create thread pool.");
 
-    let infile = File::open(bedgraphpath.clone())?;
+    let infile = File::open(bedgraphpath)?;
     let vals_iter = BedParser::from_bedgraph_file(infile);
     let options = outb.options.clone();
 
@@ -126,10 +126,7 @@ fn main() -> Result<(), WriteGroupsError> {
             options.clone(),
         )
     };
-    let allow_out_of_order_chroms = match &outb.options.input_sort_type {
-        InputSortType::ALL => false,
-        _ => true,
-    };
+    let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),

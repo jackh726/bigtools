@@ -1052,7 +1052,7 @@ where
         // iterate through entries from the front of the list
         while let Some(index) = next {
             // this should always be occupied because the index comes from a previous list items `next` field
-            let ref entry = match &self.contents[index] {
+            let entry = match &self.contents[index] {
                 Entry::Free { .. } => panic!("Corrupt list"),
                 Entry::Occupied(entry) => entry,
             };

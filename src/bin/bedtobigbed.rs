@@ -138,10 +138,7 @@ fn main() -> Result<(), WriteGroupsError> {
             options.clone(),
         )
     };
-    let allow_out_of_order_chroms = match &outb.options.input_sort_type {
-        InputSortType::ALL => false,
-        _ => true,
-    };
+    let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),

@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
-use std::pin::Pin;
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::{Either, Future, FutureExt};
+use futures::future::{Either, FutureExt};
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
 
@@ -19,7 +18,7 @@ use crate::tell::Tell;
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
     write_chrom_tree, write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromProcessingInput, SectionData, WriteGroupsError,
+    ChromProcessingInput, ChromProcessingInputSectionChannel, SectionData, WriteGroupsError,
 };
 use crate::bigwig::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 
@@ -151,14 +150,8 @@ impl BigBedWrite {
     }
 
     async fn process_group<I>(
-        mut zooms_channels: Vec<
-            futures::channel::mpsc::Sender<
-                Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-            >,
-        >,
-        mut ftx: futures::channel::mpsc::Sender<
-            Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-        >,
+        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+        mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -396,7 +389,7 @@ impl BigBedWrite {
                                     zoom_item.records.push(zoom2);
                                 }
                                 if !zoom_item.records.is_empty() {
-                                    let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                                    let items = std::mem::take(&mut zoom_item.records);
                                     let handle = pool
                                         .spawn_with_handle(encode_zoom_section(
                                             options.compress,
@@ -460,7 +453,7 @@ impl BigBedWrite {
                         add_start = std::cmp::max(add_end, removed_start);
                         // Write section if full
                         if zoom_item.records.len() == options.items_per_slot as usize {
-                            let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                            let items = std::mem::take(&mut zoom_item.records);
                             let handle = pool
                                 .spawn_with_handle(encode_zoom_section(options.compress, items))
                                 .expect("Couldn't spawn.");

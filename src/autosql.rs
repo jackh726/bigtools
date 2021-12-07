@@ -9,10 +9,10 @@ table bed3
 "#;
 
 pub fn bed_autosql(rest: &str) -> String {
-    let extra_fields = if rest.len() == 0 {
+    let extra_fields = if rest.is_empty() {
         0
     } else {
-        rest.split("\t").count()
+        rest.split('\t').count()
     };
     let mut def = "\
 table bed
@@ -23,7 +23,7 @@ table bed
     uint   chromEnd;    \"End position in chromosome\"
 "
     .to_string();
-    const FIELDS: &[&'static str] = &[
+    const FIELDS: &[&str] = &[
         "   string name;        \"Name of item.\"\n",
         "   uint score;          \"Score (0-1000)\"\n",
         "   char[1] strand;     \"+ or - for strand\"\n",
@@ -46,6 +46,6 @@ table bed
             i + 3 + 1
         ))
     }
-    def.push_str(")");
-    return def;
+    def.push(')');
+    def
 }

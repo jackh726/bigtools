@@ -43,7 +43,7 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
             }
             Ok(line) => line,
         };
-        return match (|| {
+        match (|| {
             let take_col = match options.name {
                 Name::None => 0,
                 Name::Column(col) => col.get(),
@@ -112,7 +112,7 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
                 Some(Err(e))
             }
             Ok(v) => Some(Ok(v)),
-        };
+        }
     });
 
     Ok(iter)

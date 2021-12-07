@@ -8,7 +8,7 @@ use byteordered::{ByteOrdered, Endianness};
 
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, Block, ChromAndSize,
-    ZoomIntervalIter,
+    MemCachedReeader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -197,11 +197,7 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok(self.reader.as_mut().unwrap())
     }
 
-    fn ensure_mem_cached_reader(
-        &mut self,
-    ) -> io::Result<
-        ByteOrdered<BufReader<MemCachedRead<ByteOrdered<BufReader<S>, Endianness>>>, Endianness>,
-    > {
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReeader<'_, S>> {
         self.ensure_reader()?;
         let endianness = self.reader.as_ref().unwrap().endianness();
         let inner = self.reader.as_mut().unwrap();

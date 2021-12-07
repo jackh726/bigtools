@@ -40,10 +40,7 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
                         .next()
                         .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
                     let name = split.next();
-                    Ok(match name {
-                        None => None,
-                        Some(name) => Some(name.to_string()),
-                    })
+                    Ok(name.map(|name| name.to_string()))
                 })
                 .collect::<io::Result<Vec<_>>>()?;
             lines.sort();
@@ -148,10 +145,10 @@ fn main() -> Result<(), BigWigReadAttachError> {
             use bigtools::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
             let inbigwig = BigWigRead::from(f)?;
-            write(&bedin, inbigwig, out, options)?;
+            write(bedin, inbigwig, out, options)?;
         } else {
             let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
-            write(&bedin, inbigwig, out, options)?;
+            write(bedin, inbigwig, out, options)?;
         }
     }
     #[cfg(not(feature = "remote"))]

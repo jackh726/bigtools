@@ -9,6 +9,7 @@ use crate::bigwig::Value;
 ///
 /// # Panics
 /// Panics if the two Values do not overlap.
+#[allow(clippy::comparison_chain)]
 pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value>, Option<Value>) {
     if one.end <= two.start {
         panic!("No overlap.");

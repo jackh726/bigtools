@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
-use std::pin::Pin;
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::{Either, Future, FutureExt};
+use futures::future::{Either, FutureExt};
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
 
@@ -17,7 +16,7 @@ use crate::tell::Tell;
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
     write_chrom_tree, write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromProcessingInput, SectionData, WriteGroupsError,
+    ChromProcessingInput, ChromProcessingInputSectionChannel, SectionData, WriteGroupsError,
 };
 use crate::bigwig::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 
@@ -126,14 +125,8 @@ impl BigWigWrite {
     }
 
     async fn process_group<I>(
-        mut zooms_channels: Vec<
-            futures::channel::mpsc::Sender<
-                Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-            >,
-        >,
-        mut ftx: futures::channel::mpsc::Sender<
-            Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-        >,
+        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+        mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -237,7 +230,7 @@ impl BigWigWrite {
                     {
                         // If this is the first iteration of the loop, then we haven't added the current value yet...
                         debug_assert_ne!(loop_i, 1);
-                        let items = std::mem::replace(&mut zoom_item.records, vec![]);
+                        let items = std::mem::take(&mut zoom_item.records);
                         let handle = pool
                             .spawn_with_handle(encode_zoom_section(options.compress, items))
                             .expect("Couldn't spawn.");
@@ -295,7 +288,7 @@ impl BigWigWrite {
             }
             state_val.items.push(current_val);
             if group.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize {
-                let items = std::mem::replace(&mut state_val.items, vec![]);
+                let items = std::mem::take(&mut state_val.items);
                 let handle = pool
                     .spawn_with_handle(encode_section(options.compress, items, chrom_id))
                     .expect("Couldn't spawn.");

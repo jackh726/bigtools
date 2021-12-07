@@ -73,12 +73,9 @@ pub fn get_merged_vals(
                 .map(|w| {
                     let chroms = w.get_chroms();
                     let res = chroms.iter().find(|v| v.name == chrom);
-                    match res {
-                        Some(s) => Some((s.length, w.clone())),
-                        None => None,
-                    }
+                    res.map(|s| (s.length, w.clone()))
                 })
-                .filter_map(|x| x)
+                .flatten()
                 .unzip();
             let size = sizes[0];
             if !sizes.iter().all(|s| *s == size) {
@@ -182,10 +179,10 @@ impl Iterator for ChromGroupReadImpl {
                     Err(err) => Some(Err(err.into())),
                 }
             }
-            None => match self.chrom_ids.take() {
-                Some(chrom_ids) => Some(Ok(Either::Right(chrom_ids))),
-                None => None,
-            },
+            None => self
+                .chrom_ids
+                .take()
+                .map(|chrom_ids| Ok(Either::Right(chrom_ids))),
         }
     }
 }

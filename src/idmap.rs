@@ -1,18 +1,9 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct IdMap {
     map: HashMap<String, u32>,
     next_id: u32,
-}
-
-impl Default for IdMap {
-    fn default() -> IdMap {
-        IdMap {
-            map: std::collections::HashMap::new(),
-            next_id: 0,
-        }
-    }
 }
 
 impl IdMap {

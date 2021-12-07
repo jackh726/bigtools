@@ -59,7 +59,7 @@ pub(crate) enum RTreeChildren {
     Nodes(Vec<RTreeNode>),
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum InputSortType {
     ALL,
     START,
@@ -125,15 +125,12 @@ pub struct TempZoomInfo {
     pub sections: filebufferedchannel::Receiver<Section>,
 }
 
+pub(crate) type ChromProcessingInputSectionChannel = futures::channel::mpsc::Sender<
+    Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
+>;
 pub(crate) struct ChromProcessingInput {
-    pub(crate) zooms_channels: Vec<
-        futures::channel::mpsc::Sender<
-            Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-        >,
-    >,
-    pub(crate) ftx: futures::channel::mpsc::Sender<
-        Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
-    >,
+    pub(crate) zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+    pub(crate) ftx: ChromProcessingInputSectionChannel,
 }
 
 pub struct ChromProcessingOutput {
@@ -270,9 +267,7 @@ where
     let block_size = options.block_size as usize;
     let mut total_sections = 0;
 
-    let sections: Vec<_> = sections_stream.collect();
-    let chunks = sections
-        .into_iter()
+    let chunks = sections_stream
         .inspect(|_| total_sections += 1)
         .chunks(block_size);
     let mut current_nodes: Vec<RTreeChildren> = chunks
@@ -326,14 +321,14 @@ const NODEHEADER_SIZE: u64 = 1 + 1 + 2;
 const NON_LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8;
 const LEAFNODE_SIZE: u64 = 4 + 4 + 4 + 4 + 8 + 8;
 
-fn calculate_offsets(mut index_offsets: &mut Vec<u64>, nodes: &RTreeChildren, level: usize) {
+fn calculate_offsets(index_offsets: &mut Vec<u64>, nodes: &RTreeChildren, level: usize) {
     match nodes {
         RTreeChildren::DataSections(_) => (),
         RTreeChildren::Nodes(children) => {
             index_offsets[level - 1] += NODEHEADER_SIZE;
             for child in children {
                 index_offsets[level - 1] += NON_LEAFNODE_SIZE;
-                calculate_offsets(&mut index_offsets, &child.children, level - 1);
+                calculate_offsets(index_offsets, &child.children, level - 1);
             }
         }
     }
@@ -388,7 +383,7 @@ fn write_tree<W: Write>(
                 file.write_u64::<NativeEndian>(section.offset)?;
                 file.write_u64::<NativeEndian>(section.size)?;
             }
-            return Ok(4 + sections.len() as u64 * 32);
+            Ok(4 + sections.len() as u64 * 32)
         }
         RTreeChildren::Nodes(children) => {
             file.write_u8(0)?;
@@ -407,7 +402,7 @@ fn write_tree<W: Write>(
                 file.write_u32::<NativeEndian>(child.end_base)?;
                 file.write_u64::<NativeEndian>(child_offset)?;
             }
-            return Ok(children.len() as u64 * full_size);
+            Ok(children.len() as u64 * full_size)
         }
     }
 }
@@ -615,7 +610,7 @@ where
                 }
             }
             Some(Ok(Either::Right(chrom_ids))) => break chrom_ids,
-            Some(Err(err)) => return Err(err.into()),
+            Some(Err(err)) => return Err(err),
             None => unreachable!(),
         }
     };
