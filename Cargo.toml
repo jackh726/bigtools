@@ -2,7 +2,7 @@
 name = "bigtools"
 version = "0.1.6-dev"
 authors = ["Jack Huey <jackh726@gmail.com>"]
-edition = "2018"
+edition = "2021"
 license = "MIT"
 description = "A library and associated tools for reading and writing bigwigs and bigbeds"
 keywords = ["bigwig", "bio"]
