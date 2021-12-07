@@ -45,7 +45,7 @@ pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
                     ))?;
                 }
                 Ok(())
-            };
+            }
             let handle = pool
                 .spawn_with_handle(file_future(bigbed, chrom, writer))
                 .expect("Couldn't spawn.");

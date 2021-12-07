@@ -22,13 +22,13 @@ pub struct Block {
 pub struct BBIHeader {
     pub endianness: Endianness,
 
-    pub(crate) version: u16,
+    pub(crate) _version: u16,
     pub(crate) zoom_levels: u16,
     pub(crate) chromosome_tree_offset: u64,
     pub(crate) full_data_offset: u64,
     pub(crate) full_index_offset: u64,
-    pub(crate) field_count: u16,
-    pub(crate) defined_field_count: u16,
+    pub(crate) _field_count: u16,
+    pub(crate) _defined_field_count: u16,
     pub(crate) auto_sql_offset: u64,
     pub(crate) total_summary_offset: u64,
     pub(crate) uncompress_buf_size: u32,
@@ -177,15 +177,15 @@ pub(crate) fn read_info<R: SeekableRead>(
         _ => return Err(BBIFileReadInfoError::UnknownMagic),
     };
 
-    let version = file.read_u16()?;
+    let _version = file.read_u16()?;
 
     // TODO: should probably handle versions < 3
     let zoom_levels = file.read_u16()?;
     let chromosome_tree_offset = file.read_u64()?;
     let full_data_offset = file.read_u64()?;
     let full_index_offset = file.read_u64()?;
-    let field_count = file.read_u16()?;
-    let defined_field_count = file.read_u16()?;
+    let _field_count = file.read_u16()?;
+    let _defined_field_count = file.read_u16()?;
     let auto_sql_offset = file.read_u64()?;
     let total_summary_offset = file.read_u64()?;
     let uncompress_buf_size = file.read_u32()?;
@@ -193,13 +193,13 @@ pub(crate) fn read_info<R: SeekableRead>(
 
     let header = BBIHeader {
         endianness: file.endianness(),
-        version,
+        _version,
         zoom_levels,
         chromosome_tree_offset,
         full_data_offset,
         full_index_offset,
-        field_count,
-        defined_field_count,
+        _field_count,
+        _defined_field_count,
         auto_sql_offset,
         total_summary_offset,
         uncompress_buf_size,
