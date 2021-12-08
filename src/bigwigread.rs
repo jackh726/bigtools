@@ -428,8 +428,8 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
                 }
             }
             _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
                     format!("Unknown bigwig section type: {}", section_type),
                 ))
             }

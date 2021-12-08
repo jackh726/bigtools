@@ -113,8 +113,8 @@ pub trait BBIRead<R: SeekableRead> {
             match chrom {
                 Some(c) => c.id,
                 None => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
                         format!("{} not found.", chrom_name),
                     ))
                 }
@@ -124,8 +124,8 @@ pub trait BBIRead<R: SeekableRead> {
         let mut file = self.ensure_mem_cached_reader()?;
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
                 "Invalid file format: CIR_TREE_MAGIC does not match.",
             ));
         }

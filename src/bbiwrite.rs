@@ -484,7 +484,7 @@ pub(crate) fn write_zooms(
 
         zoom_file.seek(SeekFrom::Start(0))?;
         let mut buf_reader = BufReader::new(zoom_file);
-        std::io::copy(&mut buf_reader, &mut file)?;
+        io::copy(&mut buf_reader, &mut file)?;
         let zoom_index_offset = file.tell()?;
         //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.0, zoom_data_offset, zoom_index_offset);
         assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
@@ -734,6 +734,8 @@ pub(crate) fn get_chromprocessing(
 
 #[cfg(test)]
 mod tests {
+    use byteordered::{ByteOrdered, Endianness};
+
     use super::*;
     use std::io::Cursor;
 
@@ -772,13 +774,12 @@ mod tests {
 
         let mut cursor = Cursor::new(&mut data);
         let bufreader = BufReader::new(&mut cursor);
-        let mut file =
-            byteordered::ByteOrdered::runtime(bufreader, byteordered::Endianness::native());
+        let mut file = ByteOrdered::runtime(bufreader, Endianness::native());
 
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
                 "Invalid file format: CIR_TREE_MAGIC does not match.",
             ));
         }

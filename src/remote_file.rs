@@ -80,8 +80,8 @@ impl RemoteFile {
         let bytes = if resp.is_success() {
             resp.bytes()?
         } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
                 "Unable to connect to server to receive file.".to_string(),
             ));
         };
