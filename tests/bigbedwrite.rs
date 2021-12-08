@@ -64,7 +64,7 @@ fn bigbedwrite_test() -> io::Result<()> {
         Box::new(parse_fn),
         false,
     );
-    outb.write_groups(chrom_map, chsi).unwrap();
+    outb.write(chrom_map, chsi).unwrap();
 
     let mut bwread =
         BigBedRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap();

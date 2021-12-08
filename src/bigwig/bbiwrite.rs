@@ -7,7 +7,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 
 use futures::channel::mpsc::{channel, Receiver};
 use futures::executor::ThreadPool;
-use futures::future::{Either, Future, FutureExt};
+use futures::future::{Future, FutureExt};
 use futures::stream::StreamExt;
 use futures::task::SpawnExt;
 use futures::try_join;
@@ -503,7 +503,17 @@ pub(crate) fn write_zooms(
     Ok(zoom_entries)
 }
 
-pub(crate) async fn write_vals<V>(
+pub enum ChromDataState<D: ChromData> {
+    Read(ChromGroupRead, D),
+    Finished(IdMap),
+    Error(WriteGroupsError),
+}
+
+pub trait ChromData: Sized {
+    fn advance(self) -> ChromDataState<Self>;
+}
+
+pub(crate) async fn write_vals<V: ChromData>(
     mut vals_iter: V,
     file: BufWriter<File>,
     options: &BBIWriteOptions,
@@ -517,10 +527,7 @@ pub(crate) async fn write_vals<V>(
         usize,
     ),
     WriteGroupsError,
->
-where
-    V: Iterator<Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
-{
+> {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
         Vec<Box<dyn Iterator<Item = Section>>>,
@@ -547,8 +554,9 @@ where
     let mut max_uncompressed_buf_size = 0;
 
     let chrom_ids = loop {
-        match vals_iter.next() {
-            Some(Ok(Either::Left(read))) => {
+        match vals_iter.advance() {
+            ChromDataState::Read(read, iter) => {
+                vals_iter = iter;
                 let ChromGroupRead {
                     summary_future,
                     processing_output:
@@ -607,9 +615,8 @@ where
                     }
                 }
             }
-            Some(Ok(Either::Right(chrom_ids))) => break chrom_ids,
-            Some(Err(err)) => return Err(err),
-            None => unreachable!(),
+            ChromDataState::Finished(chrom_ids) => break chrom_ids,
+            ChromDataState::Error(err) => return Err(err),
         }
     };
 

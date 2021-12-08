@@ -3,15 +3,15 @@ use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::{Either, FutureExt};
+use futures::future::FutureExt;
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::utils::chromvalues::ChromValues;
-use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
+use crate::ChromData;
 
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
@@ -33,14 +33,11 @@ impl BigWigWrite {
         }
     }
 
-    pub fn write_groups<V>(
-        &self,
+    pub fn write<V: ChromData>(
+        self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-    ) -> Result<(), WriteGroupsError>
-    where
-        V: Iterator<Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>> + Send,
-    {
+    ) -> Result<(), WriteGroupsError> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 

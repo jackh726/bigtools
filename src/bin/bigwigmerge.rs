@@ -2,12 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
+use bigtools::{ChromData, ChromDataState};
 use clap::{App, Arg};
 
-use futures::future::Either;
-
 use bigtools::bigwig::BBIWriteOptions;
-use bigtools::bigwig::ChromGroupRead;
 use bigtools::bigwig::Value;
 use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
 use bigtools::utils::chromvalues::ChromValues;
@@ -157,13 +155,11 @@ struct ChromGroupReadImpl {
     chrom_ids: Option<IdMap>,
 }
 
-impl Iterator for ChromGroupReadImpl {
-    type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl ChromData for ChromGroupReadImpl {
+    fn advance(mut self) -> ChromDataState<Self> {
         let next = self.iter.next();
         match next {
-            Some(Err(err)) => Some(Err(err.into())),
+            Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, size, mergingvalues))) => {
                 let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
                 let group = BigWigWrite::begin_processing_chrom(
@@ -175,14 +171,14 @@ impl Iterator for ChromGroupReadImpl {
                     self.options.clone(),
                 );
                 match group {
-                    Ok(group) => Some(Ok(Either::Left(group))),
-                    Err(err) => Some(Err(err.into())),
+                    Ok(group) => ChromDataState::Read(group, self),
+                    Err(err) => ChromDataState::Error(err.into()),
                 }
             }
-            None => self
-                .chrom_ids
-                .take()
-                .map(|chrom_ids| Ok(Either::Right(chrom_ids))),
+            None => {
+                let chrom_ids = self.chrom_ids.take().unwrap();
+                ChromDataState::Finished(chrom_ids)
+            }
         }
     }
 }
@@ -280,7 +276,7 @@ fn main() -> Result<(), WriteGroupsError> {
                 iter: Box::new(iter),
                 chrom_ids: Some(IdMap::default()),
             };
-            outb.write_groups(chrom_map, all_values)?;
+            outb.write(chrom_map, all_values)?;
         }
         output if output.ends_with(".bedGraph") => {
             // TODO: convert to multi-threaded

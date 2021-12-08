@@ -56,7 +56,7 @@ fn test() -> io::Result<()> {
         Box::new(parse_fn),
         false,
     );
-    outb.write_groups(chrom_map, chsi).unwrap();
+    outb.write(chrom_map, chsi).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
 
@@ -127,7 +127,7 @@ fn test_multi() -> io::Result<()> {
         Box::new(parse_fn),
         false,
     );
-    outb.write_groups(chrom_map, chsi).unwrap();
+    outb.write(chrom_map, chsi).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
 

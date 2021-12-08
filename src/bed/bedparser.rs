@@ -5,7 +5,6 @@ use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
-use futures::future::Either;
 
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::WriteGroupsError;
@@ -13,6 +12,7 @@ use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
+use crate::{ChromData, ChromDataState};
 
 pub type ChromGroupReadFunction<C> =
     Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;
@@ -44,36 +44,35 @@ impl<V, S: StreamingChromValues<V>, H: BuildHasher> BedParserChromGroupStreaming
     }
 }
 
-impl<V, S: StreamingChromValues<V>, H: BuildHasher> Iterator
+impl<V, S: StreamingChromValues<V>, H: BuildHasher> ChromData
     for BedParserChromGroupStreamingIterator<V, S, H>
 {
-    type Item = Result<Either<ChromGroupRead, IdMap>, WriteGroupsError>;
-    fn next(&mut self) -> Option<Self::Item> {
+    fn advance(mut self) -> ChromDataState<Self> {
         match self.chrom_groups.next() {
-            Some(Err(err)) => Some(Err(err.into())),
+            Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
                     // TODO: test this correctly fails
                     if !self.allow_out_of_order_chroms && c >= chrom {
-                        return Some(Err(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                     }
                 }
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
-                    None => return Some(Err(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom)))),
+                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
                 match (self.callable)(chrom, chrom_id, length, group) {
-                    Ok(group) => Some(Ok(Either::Left(group))),
-                    Err(err) => Some(Err(err.into())),
+                    Ok(group) => ChromDataState::Read(group, self),
+                    Err(err) => ChromDataState::Error(err.into()),
                 }
             }
-            None => self
-                .chrom_ids
-                .take()
-                .map(|chrom_ids| Ok(Either::Right(chrom_ids))),
+            None => {
+                let chrom_ids = self.chrom_ids.take().unwrap();
+                ChromDataState::Finished(chrom_ids)
+            }
         }
     }
 }

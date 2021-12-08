@@ -145,7 +145,7 @@ fn main() -> Result<(), WriteGroupsError> {
         Box::new(parse_fn),
         allow_out_of_order_chroms,
     );
-    outb.write_groups(chrom_map, chsi)?;
+    outb.write(chrom_map, chsi)?;
 
     Ok(())
 }
