@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::vec::Vec;
@@ -163,9 +162,8 @@ pub trait BBIRead<R: SeekableRead> {
     }
 }
 
-pub(crate) fn read_info<R: SeekableRead>(
-    file: BufReader<R>,
-) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+    let file = BufReader::new(file);
     let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
     let magic = file.read_u32()?;
@@ -187,6 +185,11 @@ pub(crate) fn read_info<R: SeekableRead>(
     let _version = file.read_u16()?;
 
     // TODO: should probably handle versions < 3
+    assert!(
+        _version >= 3,
+        "Unable to read bigWigs or bigBeds with a version < 3"
+    );
+
     let zoom_levels = file.read_u16()?;
     let chromosome_tree_offset = file.read_u64()?;
     let full_data_offset = file.read_u64()?;
@@ -399,19 +402,6 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
         search_overlapping_blocks(file, chrom_ix, start, end, blocks)?;
     }
     Ok(())
-}
-
-pub fn get_filetype(path: &str) -> io::Result<Option<BBIFile>> {
-    let mut file = ByteOrdered::runtime(File::open(path)?, Endianness::Little);
-    let magic = file.read_u32()?;
-    let file_type = match magic {
-        _ if magic == BIGWIG_MAGIC.to_be() => Some(BBIFile::BigWig),
-        _ if magic == BIGWIG_MAGIC.to_le() => Some(BBIFile::BigWig),
-        _ if magic == BIGBED_MAGIC.to_be() => Some(BBIFile::BigBed),
-        _ if magic == BIGBED_MAGIC.to_le() => Some(BBIFile::BigBed),
-        _ => None,
-    };
-    Ok(file_type)
 }
 
 /// Gets the data (uncompressed, if applicable) from a given block

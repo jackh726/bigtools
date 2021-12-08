@@ -256,14 +256,8 @@ where
     S: SeekableRead,
 {
     pub fn from(reopen: R) -> Result<Self, BigBedReadAttachError> {
-        let fp = reopen.reopen()?;
-        let file = BufReader::new(fp);
-        let info = match read_info(file) {
-            Err(e) => {
-                return Err(e.into());
-            }
-            Ok(info) => info,
-        };
+        let file = reopen.reopen()?;
+        let info = read_info(file)?;
         match info.filetype {
             BBIFile::BigBed => {}
             _ => return Err(BigBedReadAttachError::NotABigBed),
@@ -276,13 +270,7 @@ where
             cache: HashMap::new(),
         })
     }
-}
 
-impl<R: 'static, S: 'static> BigBedRead<R, S>
-where
-    R: Reopen<S>,
-    S: SeekableRead,
-{
     pub fn get_interval<'a>(
         &'a mut self,
         chrom_name: &str,

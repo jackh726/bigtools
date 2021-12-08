@@ -24,12 +24,12 @@ where
     known_offset: u64,
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
-    vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
+    vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
     start: u32,
     end: u32,
 }
 
-impl<'a, I, R: 'static, S: 'static> Iterator for IntervalIter<'a, I, R, S>
+impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
 where
     I: Iterator<Item = Block> + Send,
     R: Reopen<S>,
@@ -59,7 +59,7 @@ where
                         self.end,
                     ) {
                         Ok(vals) => {
-                            self.vals = Some(Box::new(vals));
+                            self.vals = Some(vals);
                         }
                         Err(e) => {
                             return Some(Err(e));
@@ -87,7 +87,7 @@ where
     end: u32,
 }
 
-impl<I, R: 'static, S: 'static> Iterator for OwnedIntervalIter<I, R, S>
+impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
 where
     I: Iterator<Item = Block> + Send,
     R: Reopen<S>,
@@ -117,7 +117,7 @@ where
                         self.end,
                     ) {
                         Ok(vals) => {
-                            self.vals = Some(Box::new(vals));
+                            self.vals = Some(vals);
                         }
                         Err(e) => {
                             return Some(Err(e));
@@ -242,14 +242,8 @@ where
     S: SeekableRead,
 {
     pub fn from(reopen: R) -> Result<Self, BigWigReadAttachError> {
-        let fp = reopen.reopen()?;
-        let file = BufReader::new(fp);
-        let info = match read_info(file) {
-            Err(e) => {
-                return Err(e.into());
-            }
-            Ok(info) => info,
-        };
+        let file = reopen.reopen()?;
+        let info = read_info(file)?;
         match info.filetype {
             BBIFile::BigWig => {}
             _ => return Err(BigWigReadAttachError::NotABigWig),
@@ -284,25 +278,6 @@ where
             sum_squares,
         })
     }
-}
-
-impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
-    pub fn get_interval_move(
-        mut self,
-        chrom_name: &str,
-        start: u32,
-        end: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send> {
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-        Ok(OwnedIntervalIter {
-            bigwig: self,
-            known_offset: 0,
-            blocks: blocks.into_iter(),
-            vals: None,
-            start,
-            end,
-        })
-    }
 
     pub fn get_interval<'a>(
         &'a mut self,
@@ -321,24 +296,21 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
         })
     }
 
-    /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
-    /// positions with no data in the bigWig will be `std::f32::NAN`.
-    pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
+    pub fn get_interval_move(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-        let mut values = vec![std::f32::NAN; (end - start) as usize];
-        use crate::tell::Tell;
-        let mut known_offset = self.ensure_reader()?.tell()?;
-        for block in blocks {
-            let block_values = get_block_values(self, block, &mut known_offset, start, end)?;
-            for block_value in block_values {
-                let block_value_start = (block_value.start - start) as usize;
-                let block_value_end = (block_value.end - start) as usize;
-                for i in &mut values[block_value_start..block_value_end] {
-                    *i = block_value.value
-                }
-            }
-        }
-        Ok(values)
+        Ok(OwnedIntervalIter {
+            bigwig: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+            start,
+            end,
+        })
     }
 
     pub fn get_zoom_interval<'a>(
@@ -369,6 +341,26 @@ impl<R: Reopen<S> + 'static, S: SeekableRead + 'static> BigWigRead<R, S> {
         let blocks = self.search_cir_tree(chrom_name, start, end)?;
         Ok(ZoomIntervalIter::new(self, blocks.into_iter(), start, end))
     }
+
+    /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
+    /// positions with no data in the bigWig will be `std::f32::NAN`.
+    pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
+        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let mut values = vec![std::f32::NAN; (end - start) as usize];
+        use crate::tell::Tell;
+        let mut known_offset = self.ensure_reader()?.tell()?;
+        for block in blocks {
+            let block_values = get_block_values(self, block, &mut known_offset, start, end)?;
+            for block_value in block_values {
+                let block_value_start = (block_value.start - start) as usize;
+                let block_value_end = (block_value.end - start) as usize;
+                for i in &mut values[block_value_start..block_value_end] {
+                    *i = block_value.value
+                }
+            }
+        }
+        Ok(values)
+    }
 }
 
 fn get_block_values<R: Reopen<S>, S: SeekableRead>(
@@ -377,7 +369,7 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     known_offset: &mut u64,
     start: u32,
     end: u32,
-) -> io::Result<impl Iterator<Item = Value> + Send> {
+) -> io::Result<Box<dyn Iterator<Item = Value> + Send>> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
     let mut values: Vec<Value> = Vec::new();
 
@@ -442,5 +434,5 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(values.into_iter())
+    Ok(Box::new(values.into_iter()))
 }
