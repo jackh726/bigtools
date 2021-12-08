@@ -7,8 +7,8 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, Block, ChromAndSize,
-    MemCachedReeader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
+    ChromAndSize, MemCachedReader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -160,7 +160,7 @@ where
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
-    cache: HashMap<u64, [u8; CACHE_SIZE]>,
+    cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigWigRead<R, S>
@@ -187,7 +187,7 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok("".to_string())
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<S>, Endianness>> {
+    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
         if self.reader.is_none() {
             let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
@@ -197,12 +197,12 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok(self.reader.as_mut().unwrap())
     }
 
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReeader<'_, S>> {
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
         self.ensure_reader()?;
         let endianness = self.reader.as_ref().unwrap().endianness();
         let inner = self.reader.as_mut().unwrap();
         Ok(ByteOrdered::runtime(
-            BufReader::new(MemCachedRead::new(inner, &mut self.cache)),
+            MemCachedRead::new(inner, &mut self.cache),
             endianness,
         ))
     }
