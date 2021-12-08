@@ -77,7 +77,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
                     // The last position in the file that we want to read
                     let position_end = current_position + remaining_buf.len() as u64;
                     // The cache block with that position
-                    let last_block = (position_end as f64 / CACHE_SIZE as f64).ceil() as usize;
+                    let last_block = (position_end as f64 / CACHE_SIZE as f64) as usize;
 
                     // The actual end block is the last one where the cache
                     // doesn't contain an entry for the next block
@@ -88,7 +88,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
                         .unwrap_or(first_block);
 
                     // The end block with the last position we want to read
-                    let block_end = last_block * CACHE_SIZE;
+                    let block_end = last_block * CACHE_SIZE + CACHE_SIZE + 1;
 
                     // The read length is from the beginning of the start block
                     // to the end of the end block
