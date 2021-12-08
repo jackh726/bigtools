@@ -22,9 +22,9 @@ use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use crate::bigwig::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
 
 pub(crate) struct ZoomInfo {
-    pub(crate) resolution: u32,
-    pub(crate) data: File,
-    pub(crate) sections: Box<dyn Iterator<Item = Section>>,
+    resolution: u32,
+    data: File,
+    sections: Box<dyn Iterator<Item = Section>>,
 }
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ pub(crate) struct SectionData {
     pub(crate) data: Vec<u8>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Section {
     pub(crate) chrom: u32,
     pub(crate) start: u32,
@@ -46,11 +46,11 @@ pub struct Section {
 
 #[derive(Debug)]
 pub(crate) struct RTreeNode {
-    pub(crate) start_chrom_idx: u32,
-    pub(crate) start_base: u32,
-    pub(crate) end_chrom_idx: u32,
-    pub(crate) end_base: u32,
-    pub(crate) children: RTreeChildren,
+    start_chrom_idx: u32,
+    start_base: u32,
+    end_chrom_idx: u32,
+    end_base: u32,
+    children: RTreeChildren,
 }
 
 #[derive(Debug)]
@@ -146,9 +146,7 @@ pub struct ChromGroupRead {
     pub processing_output: ChromProcessingOutput,
 }
 
-pub trait BBIWrite {}
-
-pub(crate) const MAX_ZOOM_LEVELS: usize = 10;
+const MAX_ZOOM_LEVELS: usize = 10;
 
 pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> {
     file.seek(SeekFrom::Start(0))?;
@@ -650,7 +648,7 @@ where
     ))
 }
 
-pub(crate) async fn write_data<W: Write>(
+async fn write_data<W: Write>(
     mut data_file: W,
     mut section_sender: filebufferedchannel::Sender<Section>,
     mut frx: Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
