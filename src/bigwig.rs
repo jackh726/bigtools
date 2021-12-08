@@ -1,3 +1,10 @@
+pub mod bbiread;
+pub mod bbiwrite;
+pub mod bigbedread;
+pub mod bigbedwrite;
+pub mod bigwigread;
+pub mod bigwigwrite;
+
 use serde::{Deserialize, Serialize};
 
 pub(crate) const BIGWIG_MAGIC: u32 = 0x888F_FC26;
@@ -51,11 +58,9 @@ pub enum BBIFile {
     BigBed,
 }
 
-pub use crate::bbiread::*;
-pub use crate::bbiwrite::*;
-
-pub use crate::bigwigread::*;
-pub use crate::bigwigwrite::*;
-
-pub use crate::bigbedread::*;
-pub use crate::bigbedwrite::*;
+pub use bbiread::*;
+pub use bbiwrite::*;
+pub use bigbedread::*;
+pub use bigbedwrite::*;
+pub use bigwigread::*;
+pub use bigwigwrite::*;

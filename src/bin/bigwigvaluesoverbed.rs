@@ -5,8 +5,8 @@ use std::path::Path;
 use clap::{App, Arg};
 
 use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
-use bigtools::seekableread::{Reopen, SeekableRead};
-use bigtools::streaming_linereader::StreamingLineReader;
+use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct Options {
     withnames: bool,
@@ -142,7 +142,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
     #[cfg(feature = "remote")]
     {
         if bigwigpath.starts_with("http") {
-            use bigtools::remote_file::RemoteFile;
+            use bigtools::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
             let inbigwig = BigWigRead::from(f)?;
             write(bedin, inbigwig, out, options)?;

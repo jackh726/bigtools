@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bedparser::{self, BedParser};
+use bigtools::bed::bedparser::{self, BedParser};
 use bigtools::bigwig::{BigBedWrite, WriteGroupsError};
 
 fn main() -> Result<(), WriteGroupsError> {
@@ -119,10 +119,10 @@ fn main() -> Result<(), WriteGroupsError> {
 
     let autosql = match matches.value_of("autosql") {
         None => {
-            use bigtools::chromvalues::ChromValues;
+            use bigtools::utils::chromvalues::ChromValues;
             let (_, mut group) = vals_iter.next().unwrap()?;
             let first = group.peek().unwrap();
-            bigtools::autosql::bed_autosql(&first.rest)
+            bigtools::bed::autosql::bed_autosql(&first.rest)
         }
         Some(file) => std::fs::read_to_string(file)?,
     };

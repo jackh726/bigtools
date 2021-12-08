@@ -8,9 +8,9 @@ fn test() -> io::Result<()> {
 
     use tempfile;
 
-    use bigtools::bedparser::{self, BedParser};
+    use bigtools::bed::bedparser::{self, BedParser};
     use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
-    use bigtools::chromvalues::ChromValues;
+    use bigtools::utils::chromvalues::ChromValues;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
@@ -82,7 +82,7 @@ fn test_multi() -> io::Result<()> {
 
     use tempfile;
 
-    use bigtools::bedparser::{self, BedParser};
+    use bigtools::bed::bedparser::{self, BedParser};
     use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -10,9 +10,9 @@ use futures::future::Either;
 use crate::bigwig::ChromGroupRead;
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
-use crate::chromvalues::ChromValues;
-use crate::idmap::IdMap;
-use crate::streaming_linereader::StreamingLineReader;
+use crate::utils::chromvalues::ChromValues;
+use crate::utils::idmap::IdMap;
+use crate::utils::streaming_linereader::StreamingLineReader;
 
 pub type ChromGroupReadFunction<C> =
     Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;

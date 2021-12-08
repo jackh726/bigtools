@@ -10,11 +10,11 @@ use bigtools::bigwig::BBIWriteOptions;
 use bigtools::bigwig::ChromGroupRead;
 use bigtools::bigwig::Value;
 use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
-use bigtools::chromvalues::ChromValues;
-use bigtools::filebufferedchannel;
-use bigtools::idmap::IdMap;
-use bigtools::seekableread::ReopenableFile;
+use bigtools::utils::chromvalues::ChromValues;
+use bigtools::utils::filebufferedchannel;
+use bigtools::utils::idmap::IdMap;
 use bigtools::utils::merge::merge_sections_many;
+use bigtools::utils::seekableread::ReopenableFile;
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type

@@ -2,8 +2,8 @@ use std::io::{self, BufRead};
 use std::num::NonZeroUsize;
 
 use crate::bigwig::BigWigRead;
-use crate::seekableread::{Reopen, SeekableRead};
-use crate::streaming_linereader::StreamingLineReader;
+use crate::utils::file::seekableread::{Reopen, SeekableRead};
+use crate::utils::file::streaming_linereader::StreamingLineReader;
 
 pub enum Name {
     None,

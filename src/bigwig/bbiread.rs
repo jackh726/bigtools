@@ -8,8 +8,8 @@ use crate::bigwig::{
     BBIFile, Summary, ZoomHeader, ZoomRecord, BIGBED_MAGIC, BIGWIG_MAGIC, CHROM_TREE_MAGIC,
     CIR_TREE_MAGIC,
 };
-use crate::mem_cached_file::MemCachedRead;
-use crate::seekableread::SeekableRead;
+use crate::utils::mem_cached_file::MemCachedRead;
+use crate::utils::seekableread::SeekableRead;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Block {

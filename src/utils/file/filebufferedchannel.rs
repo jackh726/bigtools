@@ -11,7 +11,7 @@ use bincode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::tell::Tell;
+use crate::utils::tell::Tell;
 
 // TODO: check if crossbeam_channel need or if std::sync::mpsc okay
 // TODO: validate maxsize = 0

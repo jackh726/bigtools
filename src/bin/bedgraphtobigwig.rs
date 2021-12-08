@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bedparser::{self, BedParser};
+use bigtools::bed::bedparser::{self, BedParser};
 use bigtools::bigwig::{BigWigWrite, WriteGroupsError};
 
 fn main() -> Result<(), WriteGroupsError> {

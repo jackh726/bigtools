@@ -4,8 +4,8 @@ use std::io::{self, BufReader, BufWriter, Write};
 use clap::{App, Arg};
 
 use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
-use bigtools::seekableread::{Reopen, SeekableRead};
-use bigtools::streaming_linereader::StreamingLineReader;
+use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct IntersectOptions {}
 

@@ -6,8 +6,8 @@ use clap::{App, Arg};
 use futures::task::SpawnExt;
 
 use bigtools::bigwig::{BBIRead, BigBedRead, BigBedReadAttachError, ChromAndSize};
-use bigtools::seekableread::{Reopen, SeekableRead};
-use bigtools::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     bigbed: BigBedRead<R, S>,

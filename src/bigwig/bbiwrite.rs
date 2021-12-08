@@ -14,10 +14,10 @@ use futures::try_join;
 
 use serde::{Deserialize, Serialize};
 
-use crate::filebufferedchannel;
-use crate::idmap::IdMap;
-use crate::tell::Tell;
-use crate::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use crate::utils::filebufferedchannel;
+use crate::utils::idmap::IdMap;
+use crate::utils::tell::Tell;
+use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 use crate::bigwig::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
 

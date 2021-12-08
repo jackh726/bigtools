@@ -8,9 +8,9 @@ fn bigbedwrite_test() -> io::Result<()> {
 
     use tempfile;
 
-    use bigtools::bedparser::{self, BedParser};
+    use bigtools::bed::bedparser::{self, BedParser};
     use bigtools::bigwig::{BBIRead, BigBedRead, BigBedWrite};
-    use bigtools::chromvalues::ChromValues;
+    use bigtools::utils::chromvalues::ChromValues;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
@@ -37,7 +37,7 @@ fn bigbedwrite_test() -> io::Result<()> {
     outb.autosql = {
         let (_, mut group) = vals_iter.next().unwrap()?;
         let first = group.peek().unwrap();
-        Some(bigtools::autosql::bed_autosql(&first.rest))
+        Some(bigtools::bed::autosql::bed_autosql(&first.rest))
     };
     outb.options.compress = false;
 

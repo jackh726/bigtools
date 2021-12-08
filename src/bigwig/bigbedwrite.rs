@@ -10,10 +10,10 @@ use futures::task::SpawnExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
-use crate::chromvalues::ChromValues;
-use crate::idmap::IdMap;
-use crate::indexlist::IndexList;
-use crate::tell::Tell;
+use crate::utils::chromvalues::ChromValues;
+use crate::utils::idmap::IdMap;
+use crate::utils::indexlist::IndexList;
+use crate::utils::tell::Tell;
 
 use crate::bbiwrite::{
     encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
@@ -54,7 +54,7 @@ impl BigBedWrite {
         let autosql = self
             .autosql
             .clone()
-            .unwrap_or_else(|| crate::autosql::BED3.to_string());
+            .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
             io::Error::new(io::ErrorKind::Other, "Invalid autosql: null byte in string")
         })?;

@@ -3,7 +3,7 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use tempfile;
 
-use crate::seekableread::Reopen;
+use crate::utils::file::seekableread::Reopen;
 
 const READ_SIZE: usize = 20 * 1024; // 20 KB chunks
 
@@ -245,7 +245,7 @@ impl Reopen<RemoteFile> for RemoteFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bigbedread::BigBedRead;
+    use crate::bigwig::BigBedRead;
 
     #[ignore]
     #[test]
