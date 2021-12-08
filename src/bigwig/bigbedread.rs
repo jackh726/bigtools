@@ -6,8 +6,8 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
-    ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, Block, ChromAndSize,
+    MemCachedReeader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -161,7 +161,7 @@ where
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
-    cache: HashMap<usize, [u8; CACHE_SIZE]>,
+    cache: HashMap<u64, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigBedRead<R, S>
@@ -200,25 +200,22 @@ where
         Ok(autosql)
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
+    fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<S>, Endianness>> {
         if self.reader.is_none() {
             let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
             let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
             self.reader.replace(file);
         }
-        // FIXME: In theory, can get rid of this unwrap by doing a `match` with
-        // `Option::insert` in the `None` case, but that currently runs into
-        // lifetime issues.
         Ok(self.reader.as_mut().unwrap())
     }
 
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReeader<'_, S>> {
         self.ensure_reader()?;
         let endianness = self.reader.as_ref().unwrap().endianness();
         let inner = self.reader.as_mut().unwrap();
         Ok(ByteOrdered::runtime(
-            MemCachedRead::new(inner, &mut self.cache),
+            BufReader::new(MemCachedRead::new(inner, &mut self.cache)),
             endianness,
         ))
     }

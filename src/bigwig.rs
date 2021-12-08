@@ -13,14 +13,14 @@ pub(crate) const BIGBED_MAGIC: u32 = 0x8789_F2EB;
 pub(crate) const CIR_TREE_MAGIC: u32 = 0x2468_ACE0;
 pub(crate) const CHROM_TREE_MAGIC: u32 = 0x78CA_8C91;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ZoomHeader {
     pub(crate) reduction_level: u32,
     pub(crate) data_offset: u64,
     pub(crate) index_offset: u64,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 pub struct ZoomRecord {
     pub chrom: u32,
     pub start: u32,
@@ -28,7 +28,7 @@ pub struct ZoomRecord {
     pub summary: Summary,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 pub struct Summary {
     pub total_items: u64,
     pub bases_covered: u64,
@@ -38,21 +38,21 @@ pub struct Summary {
     pub sum_squares: f64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Value {
     pub start: u32,
     pub end: u32,
     pub value: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BedEntry {
     pub start: u32,
     pub end: u32,
     pub rest: String,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum BBIFile {
     BigWig,
     BigBed,

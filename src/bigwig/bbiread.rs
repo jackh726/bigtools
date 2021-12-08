@@ -11,13 +11,13 @@ use crate::bigwig::{
 use crate::utils::mem_cached_file::MemCachedRead;
 use crate::utils::seekableread::SeekableRead;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 pub struct Block {
     pub offset: u64,
     pub size: u64,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct BBIHeader {
     pub endianness: Endianness,
 
@@ -72,27 +72,19 @@ impl From<io::Error> for BBIFileReadInfoError {
     }
 }
 
-pub type BBIReader<R> = ByteOrdered<BufReader<R>, Endianness>;
-// `MemCachedRead`is essentially a wrapper to allow caching hot regions of a
-// file in memory.
-pub type MemCachedReader<'a, R> = ByteOrdered<MemCachedRead<'a, BBIReader<R>>, Endianness>;
+pub type MemCachedReeader<'a, R> =
+    ByteOrdered<BufReader<MemCachedRead<'a, ByteOrdered<BufReader<R>, Endianness>>>, Endianness>;
 
 pub trait BBIRead<R: SeekableRead> {
-    /// Get basic info about the bbi file
     fn get_info(&self) -> &BBIFileInfo;
 
-    /// Reads the autosql from the bbi file
     fn autosql(&mut self) -> io::Result<String>;
 
-    /// Gets a reader to the underlying file
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<R>>;
+    fn ensure_reader(&mut self) -> io::Result<&mut ByteOrdered<BufReader<R>, Endianness>>;
 
-    /// Gets a reader to the underlying file which caches the reads
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, R>>;
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReeader<'_, R>>;
 
-    /// Manually close the open file descriptor (if it exists). If any
-    /// operations are performed after this is called, the file descriptor
-    /// will be reopened.
+    /// Manually close the open file descriptor (if it exists). If any operations are performed after this is called, the file descriptor will be reopened.
     fn close(&mut self);
 
     fn get_chroms(&self) -> Vec<ChromAndSize>;
