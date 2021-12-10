@@ -504,7 +504,7 @@ pub(crate) fn write_zooms(
     Ok(zoom_entries)
 }
 
-type ReadData<I> = (String, u32, u32, I, ThreadPool);
+type ReadData<I> = (String, u32, u32, I);
 
 pub enum ChromDataState<D: ChromData> {
     Read(ReadData<D::Output>, D),
@@ -534,6 +534,7 @@ pub(crate) async fn write_vals<
     file: BufWriter<File>,
     options: BBIWriteOptions,
     begin_processing_chrom: F,
+    pool: ThreadPool,
 ) -> Result<
     (
         IdMap,
@@ -574,7 +575,8 @@ pub(crate) async fn write_vals<
         match vals_iter.advance() {
             ChromDataState::Read(read, iter) => {
                 vals_iter = iter;
-                let read = begin_processing_chrom(read.0, read.1, read.2, read.3, read.4, options)?;
+                let read =
+                    begin_processing_chrom(read.0, read.1, read.2, read.3, pool.clone(), options)?;
                 let (
                     summary_future,
                     ChromProcessingOutput {

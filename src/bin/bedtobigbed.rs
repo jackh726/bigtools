@@ -131,10 +131,9 @@ fn main() -> Result<(), WriteGroupsError> {
     let chsi = bedparser::BedParserStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
-        pool.clone(),
         allow_out_of_order_chroms,
     );
-    outb.write(chrom_map, chsi)?;
+    outb.write(chrom_map, chsi, pool)?;
 
     Ok(())
 }

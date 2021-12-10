@@ -150,7 +150,6 @@ pub fn get_merged_vals(
 }
 
 struct ChromGroupReadImpl {
-    pool: futures::executor::ThreadPool,
     iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
     chrom_ids: Option<IdMap>,
 }
@@ -164,7 +163,7 @@ impl ChromData for ChromGroupReadImpl {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, size, mergingvalues))) => {
                 let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
-                let read_data = (chrom, chrom_id, size, mergingvalues, self.pool.clone());
+                let read_data = (chrom, chrom_id, size, mergingvalues);
 
                 ChromDataState::Read(read_data, self)
             }
@@ -260,15 +259,15 @@ fn main() -> Result<(), WriteGroupsError> {
     match output {
         output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
             let outb = BigWigWrite::create_file(output);
+            let pool = futures::executor::ThreadPoolBuilder::new()
+                .pool_size(nthreads)
+                .create()
+                .expect("Unable to create thread pool.");
             let all_values = ChromGroupReadImpl {
-                pool: futures::executor::ThreadPoolBuilder::new()
-                    .pool_size(nthreads)
-                    .create()
-                    .expect("Unable to create thread pool."),
                 iter: Box::new(iter),
                 chrom_ids: Some(IdMap::default()),
             };
-            outb.write(chrom_map, all_values)?;
+            outb.write(chrom_map, all_values, pool)?;
         }
         output if output.ends_with(".bedGraph") => {
             // TODO: convert to multi-threaded

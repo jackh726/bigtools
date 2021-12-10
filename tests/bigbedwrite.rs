@@ -46,13 +46,8 @@ fn bigbedwrite_test() -> io::Result<()> {
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
-    let chsi = bedparser::BedParserStreamingIterator::new(
-        vals_iter,
-        chrom_map.clone(),
-        pool.clone(),
-        false,
-    );
-    outb.write(chrom_map, chsi).unwrap();
+    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, chrom_map.clone(), false);
+    outb.write(chrom_map, chsi, pool).unwrap();
 
     let mut bwread =
         BigBedRead::from_file_and_attach(tempfile.path().to_string_lossy().to_string()).unwrap();

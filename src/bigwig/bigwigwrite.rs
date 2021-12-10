@@ -37,6 +37,7 @@ impl BigWigWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
+        pool: ThreadPool,
     ) -> Result<(), WriteGroupsError> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
@@ -63,6 +64,7 @@ impl BigWigWrite {
                 file,
                 self.options,
                 BigWigWrite::begin_processing_chrom,
+                pool,
             ))?;
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;

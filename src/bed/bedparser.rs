@@ -5,7 +5,6 @@ use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
-use futures::executor::ThreadPool;
 
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
@@ -22,7 +21,6 @@ pub struct BedParserStreamingIterator<Value, S: StreamingChromValues<Value = Val
 {
     allow_out_of_order_chroms: bool,
     chrom_groups: BedParser<S>,
-    pool: ThreadPool,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
@@ -34,13 +32,11 @@ impl<Value, S: StreamingChromValues<Value = Value>, H: BuildHasher>
     pub fn new(
         chrom_groups: BedParser<S>,
         chrom_map: HashMap<String, u32, H>,
-        pool: ThreadPool,
         allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserStreamingIterator {
             allow_out_of_order_chroms,
             chrom_groups,
-            pool,
             last_chrom: None,
             chrom_ids: Some(IdMap::default()),
             chrom_map,
@@ -70,7 +66,7 @@ impl<Value: Send, S: StreamingChromValues<Value = Value> + Send + 'static, H: Bu
                     None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
-                let read_data = (chrom, chrom_id, length, group, self.pool.clone());
+                let read_data = (chrom, chrom_id, length, group);
 
                 ChromDataState::Read(read_data, self)
             }
