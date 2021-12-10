@@ -35,8 +35,6 @@ fn test() -> io::Result<()> {
     let vals_iter = BedParser::from_bedgraph_file(infile);
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 
-    let options = outb.options.clone();
-
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
 
@@ -44,7 +42,6 @@ fn test() -> io::Result<()> {
         vals_iter,
         chrom_map.clone(),
         pool.clone(),
-        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();
@@ -92,8 +89,6 @@ fn test_multi() -> io::Result<()> {
     let vals_iter = BedParser::from_bedgraph_file(infile);
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 
-    let options = outb.options.clone();
-
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr1".to_string(), 248956422);
     chrom_map.insert("chr2".to_string(), 242193529);
@@ -106,7 +101,6 @@ fn test_multi() -> io::Result<()> {
         vals_iter,
         chrom_map.clone(),
         pool.clone(),
-        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();

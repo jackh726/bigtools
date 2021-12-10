@@ -12,38 +12,35 @@ use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{
-    BBIWriteOptions, BigBedWrite, BigWigWrite, ChromData, ChromDataState, ChromProcessingOutput,
-    WriteSummaryFuture,
-};
+use crate::{ChromData, ChromDataState, ChromProcessingOutput, WriteSummaryFuture};
 
 pub type ChromGroupReadFunction<C> = Box<
     dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
 >;
 
-pub struct BedParserBigWigStreamingIterator<S: StreamingChromValues<Value>, H: BuildHasher> {
+pub struct BedParserBigWigStreamingIterator<S: StreamingChromValues<Value = Value>, H: BuildHasher>
+{
     allow_out_of_order_chroms: bool,
-    chrom_groups: BedParser<Value, S>,
+    chrom_groups: BedParser<S>,
     pool: ThreadPool,
-    options: BBIWriteOptions,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
 }
 
-impl<S: StreamingChromValues<Value>, H: BuildHasher> BedParserBigWigStreamingIterator<S, H> {
+impl<S: StreamingChromValues<Value = Value>, H: BuildHasher>
+    BedParserBigWigStreamingIterator<S, H>
+{
     pub fn new(
-        chrom_groups: BedParser<Value, S>,
+        chrom_groups: BedParser<S>,
         chrom_map: HashMap<String, u32, H>,
         pool: ThreadPool,
-        options: BBIWriteOptions,
         allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserBigWigStreamingIterator {
             allow_out_of_order_chroms,
             chrom_groups,
             pool,
-            options,
             last_chrom: None,
             chrom_ids: Some(IdMap::default()),
             chrom_map,
@@ -51,10 +48,12 @@ impl<S: StreamingChromValues<Value>, H: BuildHasher> BedParserBigWigStreamingIte
     }
 }
 
-impl<S: StreamingChromValues<Value> + Send + 'static, H: BuildHasher> ChromData
+impl<S: StreamingChromValues<Value = Value> + Send + 'static, H: BuildHasher> ChromData<Value>
     for BedParserBigWigStreamingIterator<S, H>
 {
-    fn advance(mut self) -> ChromDataState<Self> {
+    type Output = ChromGroup<Value, S>;
+
+    fn advance(mut self) -> ChromDataState<Value, Self> {
         match self.chrom_groups.next() {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {
@@ -71,18 +70,9 @@ impl<S: StreamingChromValues<Value> + Send + 'static, H: BuildHasher> ChromData
                     None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
-                let group = BigWigWrite::begin_processing_chrom(
-                    chrom,
-                    chrom_id,
-                    length,
-                    group,
-                    self.pool.clone(),
-                    self.options,
-                );
-                match group {
-                    Ok(group) => ChromDataState::Read(group, self),
-                    Err(err) => ChromDataState::Error(err.into()),
-                }
+                let read_data = (chrom, chrom_id, length, group, self.pool.clone());
+
+                ChromDataState::Read(read_data, self)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
@@ -92,29 +82,31 @@ impl<S: StreamingChromValues<Value> + Send + 'static, H: BuildHasher> ChromData
     }
 }
 
-pub struct BedParserBigBedStreamingIterator<S: StreamingChromValues<BedEntry>, H: BuildHasher> {
+pub struct BedParserBigBedStreamingIterator<
+    S: StreamingChromValues<Value = BedEntry>,
+    H: BuildHasher,
+> {
     allow_out_of_order_chroms: bool,
-    chrom_groups: BedParser<BedEntry, S>,
+    chrom_groups: BedParser<S>,
     pool: ThreadPool,
-    options: BBIWriteOptions,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
 }
 
-impl<S: StreamingChromValues<BedEntry>, H: BuildHasher> BedParserBigBedStreamingIterator<S, H> {
+impl<S: StreamingChromValues<Value = BedEntry>, H: BuildHasher>
+    BedParserBigBedStreamingIterator<S, H>
+{
     pub fn new(
-        chrom_groups: BedParser<BedEntry, S>,
+        chrom_groups: BedParser<S>,
         chrom_map: HashMap<String, u32, H>,
         pool: ThreadPool,
-        options: BBIWriteOptions,
         allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserBigBedStreamingIterator {
             allow_out_of_order_chroms,
             chrom_groups,
             pool,
-            options,
             last_chrom: None,
             chrom_ids: Some(IdMap::default()),
             chrom_map,
@@ -122,10 +114,12 @@ impl<S: StreamingChromValues<BedEntry>, H: BuildHasher> BedParserBigBedStreaming
     }
 }
 
-impl<S: StreamingChromValues<BedEntry> + Send + 'static, H: BuildHasher> ChromData
+impl<S: StreamingChromValues<Value = BedEntry> + Send + 'static, H: BuildHasher> ChromData<BedEntry>
     for BedParserBigBedStreamingIterator<S, H>
 {
-    fn advance(mut self) -> ChromDataState<Self> {
+    type Output = ChromGroup<BedEntry, S>;
+
+    fn advance(mut self) -> ChromDataState<BedEntry, Self> {
         match self.chrom_groups.next() {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {
@@ -142,18 +136,9 @@ impl<S: StreamingChromValues<BedEntry> + Send + 'static, H: BuildHasher> ChromDa
                     None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
-                let group = BigBedWrite::begin_processing_chrom(
-                    chrom,
-                    chrom_id,
-                    length,
-                    group,
-                    self.pool.clone(),
-                    self.options,
-                );
-                match group {
-                    Ok(group) => ChromDataState::Read(group, self),
-                    Err(err) => ChromDataState::Error(err.into()),
-                }
+                let read_data = (chrom, chrom_id, length, group, self.pool.clone());
+
+                ChromDataState::Read(read_data, self)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
@@ -163,8 +148,10 @@ impl<S: StreamingChromValues<BedEntry> + Send + 'static, H: BuildHasher> ChromDa
     }
 }
 
-pub trait StreamingChromValues<V> {
-    fn next(&mut self) -> Option<io::Result<(&str, V)>>;
+pub trait StreamingChromValues {
+    type Value;
+
+    fn next(&mut self) -> Option<io::Result<(&str, Self::Value)>>;
 }
 
 pub type Parser<V> = Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, V)>> + Send>;
@@ -174,8 +161,10 @@ pub struct BedStream<V, B: BufRead> {
     parse: Parser<V>,
 }
 
-impl<V, B: BufRead> StreamingChromValues<V> for BedStream<V, B> {
-    fn next(&mut self) -> Option<io::Result<(&str, V)>> {
+impl<V, B: BufRead> StreamingChromValues for BedStream<V, B> {
+    type Value = V;
+
+    fn next(&mut self) -> Option<io::Result<(&str, Self::Value)>> {
         let line = match self.bed.read()? {
             Ok(line) => line.trim_end(),
             Err(e) => return Some(Err(e)),
@@ -189,9 +178,11 @@ pub struct BedIteratorStream<V: Clone, I: Iterator<Item = io::Result<(String, V)
     curr: Option<(String, V)>,
 }
 
-impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues<V>
+impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
     for BedIteratorStream<V, I>
 {
+    type Value = V;
+
     fn next(&mut self) -> Option<io::Result<(&str, V)>> {
         use std::ops::Deref;
         self.curr = match self.iter.next()? {
@@ -202,11 +193,11 @@ impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
     }
 }
 
-pub struct BedParser<V, S: StreamingChromValues<V>> {
-    state: Arc<AtomicCell<Option<BedParserState<V, S>>>>,
+pub struct BedParser<S: StreamingChromValues> {
+    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
 }
 
-impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
+impl<S: StreamingChromValues> BedParser<S> {
     pub fn new(stream: S) -> Self {
         let state = BedParserState {
             stream,
@@ -221,7 +212,7 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
     }
 }
 
-impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
+impl BedParser<BedStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
         let parse: Parser<BedEntry> = Box::new(|s: &str| {
             let mut split = s.splitn(4, '\t');
@@ -257,7 +248,7 @@ impl BedParser<BedEntry, BedStream<BedEntry, BufReader<File>>> {
     }
 }
 
-impl BedParser<Value, BedStream<Value, BufReader<File>>> {
+impl BedParser<BedStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
         let parse: Parser<Value> = Box::new(|s: &str| {
             let mut split = s.splitn(5, '\t');
@@ -298,7 +289,7 @@ impl BedParser<Value, BedStream<Value, BufReader<File>>> {
     }
 }
 
-impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<V, BedIteratorStream<V, I>> {
+impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<BedIteratorStream<V, I>> {
     pub fn from_iter(iter: I) -> Self {
         BedParser::new(BedIteratorStream { iter, curr: None })
     }
@@ -312,15 +303,15 @@ enum ChromOpt {
 }
 
 #[derive(Debug)]
-struct BedParserState<V, S: StreamingChromValues<V>> {
+struct BedParserState<S: StreamingChromValues> {
     stream: S,
     curr_chrom: Option<String>,
-    curr_val: Option<V>,
+    curr_val: Option<S::Value>,
     next_chrom: ChromOpt,
-    next_val: Option<V>,
+    next_val: Option<S::Value>,
 }
 
-impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
+impl<S: StreamingChromValues> BedParserState<S> {
     fn advance(&mut self, replace_current: bool) -> io::Result<()> {
         self.curr_val = self.next_val.take();
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
@@ -353,7 +344,7 @@ impl<V, S: StreamingChromValues<V>> BedParserState<V, S> {
     }
 }
 
-impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
+impl<V, S: StreamingChromValues<Value = V>> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `ChromGroup` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
@@ -392,13 +383,15 @@ impl<V, S: StreamingChromValues<V>> BedParser<V, S> {
 // to the next until we've exhausted the current. In this *particular*
 // implementation, we don't allow parallel iteration of chromsomes. So, the
 // state is either needed *here* or in the main struct.
-pub struct ChromGroup<V, S: StreamingChromValues<V>> {
-    state: Arc<AtomicCell<Option<BedParserState<V, S>>>>,
-    curr_state: Option<BedParserState<V, S>>,
+pub struct ChromGroup<V, S: StreamingChromValues<Value = V>> {
+    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
+    curr_state: Option<BedParserState<S>>,
     done: bool,
 }
 
-impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
+impl<V, S: StreamingChromValues<Value = V>> ChromValues for ChromGroup<V, S> {
+    type V = V;
+
     fn next(&mut self) -> Option<io::Result<V>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
@@ -438,7 +431,7 @@ impl<V, S: StreamingChromValues<V>> ChromValues<V> for ChromGroup<V, S> {
     }
 }
 
-impl<V, S: StreamingChromValues<V>> Drop for ChromGroup<V, S> {
+impl<V, S: StreamingChromValues<Value = V>> Drop for ChromGroup<V, S> {
     fn drop(&mut self) {
         if let Some(state) = self.curr_state.take() {
             self.state.swap(Some(state));

@@ -17,7 +17,7 @@ use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
 
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
+    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
     WriteGroupsError,
 };
 use crate::bigwig::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
@@ -37,14 +37,11 @@ impl BigBedWrite {
         }
     }
 
-    pub fn write<V: ChromData>(
+    pub fn write<V: ChromData<BedEntry>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-    ) -> Result<(), WriteGroupsError>
-    where
-        V: ChromData,
-    {
+    ) -> Result<(), WriteGroupsError> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -77,7 +74,12 @@ impl BigBedWrite {
         let pre_data = file.tell()?;
         // Write data to file and return
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(write_vals(vals, file, self.options))?;
+            block_on(bbiwrite::write_vals(
+                vals,
+                file,
+                self.options,
+                BigBedWrite::begin_processing_chrom,
+            ))?;
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;
         let sections_iter = raw_sections_iter.map(|mut section| {
@@ -159,7 +161,7 @@ impl BigBedWrite {
         chrom_length: u32,
     ) -> Result<Summary, WriteGroupsError>
     where
-        I: ChromValues<BedEntry> + Send,
+        I: ChromValues<V = BedEntry> + Send,
     {
         let ChromProcessingInput {
             mut zooms_channels,
@@ -528,7 +530,7 @@ impl BigBedWrite {
         options: BBIWriteOptions,
     ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
     where
-        I: ChromValues<BedEntry> + Send,
+        I: ChromValues<V = BedEntry> + Send,
     {
         let (processing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
 

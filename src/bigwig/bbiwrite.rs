@@ -14,6 +14,7 @@ use futures::try_join;
 
 use serde::{Deserialize, Serialize};
 
+use crate::utils::chromvalues::ChromValues;
 use crate::utils::filebufferedchannel;
 use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
@@ -503,20 +504,35 @@ pub(crate) fn write_zooms(
     Ok(zoom_entries)
 }
 
-pub enum ChromDataState<D: ChromData> {
-    Read((WriteSummaryFuture, ChromProcessingOutput), D),
+type ReadData<I> = (String, u32, u32, I, ThreadPool);
+
+pub enum ChromDataState<Value, D: ChromData<Value>> {
+    Read(ReadData<D::Output>, D),
     Finished(IdMap),
     Error(WriteGroupsError),
 }
 
-pub trait ChromData: Sized {
-    fn advance(self) -> ChromDataState<Self>;
+pub trait ChromData<V>: Sized {
+    type Output: ChromValues<V = V> + Send + 'static;
+    fn advance(self) -> ChromDataState<V, Self>;
 }
 
-pub(crate) async fn write_vals<V: ChromData>(
+pub(crate) async fn write_vals<
+    Value,
+    V: ChromData<Value>,
+    F: Fn(
+        String,
+        u32,
+        u32,
+        V::Output,
+        ThreadPool,
+        BBIWriteOptions,
+    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>,
+>(
     mut vals_iter: V,
     file: BufWriter<File>,
     options: BBIWriteOptions,
+    begin_processing_chrom: F,
 ) -> Result<
     (
         IdMap,
@@ -557,6 +573,7 @@ pub(crate) async fn write_vals<V: ChromData>(
         match vals_iter.advance() {
             ChromDataState::Read(read, iter) => {
                 vals_iter = iter;
+                let read = begin_processing_chrom(read.0, read.1, read.2, read.3, read.4, options)?;
                 let (
                     summary_future,
                     ChromProcessingOutput {

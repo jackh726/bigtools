@@ -1,6 +1,8 @@
 use std::io;
 
-pub trait ChromValues<V> {
-    fn next(&mut self) -> Option<io::Result<V>>;
-    fn peek(&mut self) -> Option<&V>;
+pub trait ChromValues {
+    type V;
+
+    fn next(&mut self) -> Option<io::Result<Self::V>>;
+    fn peek(&mut self) -> Option<&Self::V>;
 }

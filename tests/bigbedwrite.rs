@@ -41,8 +41,6 @@ fn bigbedwrite_test() -> io::Result<()> {
     };
     outb.options.compress = false;
 
-    let options = outb.options.clone();
-
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
     chrom_map.insert("chr18".to_string(), 80373285);
@@ -52,7 +50,6 @@ fn bigbedwrite_test() -> io::Result<()> {
         vals_iter,
         chrom_map.clone(),
         pool.clone(),
-        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();

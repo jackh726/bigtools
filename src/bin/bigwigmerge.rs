@@ -5,7 +5,6 @@ use std::io::{self, BufRead, BufReader};
 use bigtools::{ChromData, ChromDataState};
 use clap::{App, Arg};
 
-use bigtools::bigwig::BBIWriteOptions;
 use bigtools::bigwig::Value;
 use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
 use bigtools::utils::chromvalues::ChromValues;
@@ -34,7 +33,9 @@ impl MergingValues {
     }
 }
 
-impl ChromValues<Value> for MergingValues {
+impl ChromValues for MergingValues {
+    type V = Value;
+
     fn next(&mut self) -> Option<io::Result<Value>> {
         self.iter.next()
     }
@@ -150,30 +151,22 @@ pub fn get_merged_vals(
 
 struct ChromGroupReadImpl {
     pool: futures::executor::ThreadPool,
-    options: BBIWriteOptions,
     iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
     chrom_ids: Option<IdMap>,
 }
 
-impl ChromData for ChromGroupReadImpl {
-    fn advance(mut self) -> ChromDataState<Self> {
+impl ChromData<Value> for ChromGroupReadImpl {
+    type Output = MergingValues;
+
+    fn advance(mut self) -> ChromDataState<Value, Self> {
         let next = self.iter.next();
         match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, size, mergingvalues))) => {
                 let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
-                let group = BigWigWrite::begin_processing_chrom(
-                    chrom,
-                    chrom_id,
-                    size,
-                    mergingvalues,
-                    self.pool.clone(),
-                    self.options,
-                );
-                match group {
-                    Ok(group) => ChromDataState::Read(group, self),
-                    Err(err) => ChromDataState::Error(err.into()),
-                }
+                let read_data = (chrom, chrom_id, size, mergingvalues, self.pool.clone());
+
+                ChromDataState::Read(read_data, self)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
@@ -272,7 +265,6 @@ fn main() -> Result<(), WriteGroupsError> {
                     .pool_size(nthreads)
                     .create()
                     .expect("Unable to create thread pool."),
-                options: outb.options,
                 iter: Box::new(iter),
                 chrom_ids: Some(IdMap::default()),
             };
