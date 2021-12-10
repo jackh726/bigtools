@@ -114,7 +114,7 @@ fn main() -> Result<(), WriteGroupsError> {
 
     let infile = File::open(bedgraphpath)?;
     let vals_iter = BedParser::from_bedgraph_file(infile);
-    let options = outb.options.clone();
+    let options = outb.options;
 
     let parse_fn = move |chrom, chrom_id, chrom_length, group| {
         BigWigWrite::begin_processing_chrom(
@@ -123,7 +123,7 @@ fn main() -> Result<(), WriteGroupsError> {
             chrom_length,
             group,
             pool.clone(),
-            options.clone(),
+            options,
         )
     };
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);

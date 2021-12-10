@@ -67,7 +67,7 @@ pub enum InputSortType {
     //NONE,
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
     pub items_per_slot: u32,
@@ -75,6 +75,7 @@ pub struct BBIWriteOptions {
     pub initial_zoom_size: u32,
     pub max_zooms: u32,
     pub input_sort_type: InputSortType,
+    pub channel_size: usize,
 }
 
 impl Default for BBIWriteOptions {
@@ -86,6 +87,7 @@ impl Default for BBIWriteOptions {
             initial_zoom_size: 160,
             max_zooms: 10,
             input_sort_type: InputSortType::ALL,
+            channel_size: 100,
         }
     }
 }
@@ -255,7 +257,7 @@ pub(crate) async fn encode_zoom_section(
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
 pub(crate) fn get_rtreeindex<S>(
     sections_stream: S,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> (RTreeChildren, usize, u64)
 where
     S: Iterator<Item = Section>,
@@ -338,7 +340,7 @@ fn write_tree<W: Write>(
     curr_level: usize,
     dest_level: usize,
     childnode_offset: u64,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> io::Result<u64> {
     let non_leafnode_full_block_size: u64 =
         NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
@@ -410,7 +412,7 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
     nodes: RTreeChildren,
     levels: usize,
     section_count: u64,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> io::Result<()> {
     let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
@@ -453,7 +455,7 @@ pub(crate) fn write_zooms(
     mut file: &mut BufWriter<File>,
     zooms: Vec<ZoomInfo>,
     data_size: u64,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> io::Result<Vec<ZoomHeader>> {
     let mut zoom_entries: Vec<ZoomHeader> = vec![];
     let mut zoom_count = 0;
@@ -516,7 +518,7 @@ pub trait ChromData: Sized {
 pub(crate) async fn write_vals<V: ChromData>(
     mut vals_iter: V,
     file: BufWriter<File>,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> Result<
     (
         IdMap,
@@ -683,17 +685,18 @@ async fn write_data<W: Write>(
     Ok((total, max_uncompressed_buf_size))
 }
 
-pub(crate) fn get_chromprocessing(
+/// Sets up the channels and write "threads" for the data and zoom sections
+pub(crate) fn setup_channels(
     pool: &mut ThreadPool,
-    options: &BBIWriteOptions,
+    options: BBIWriteOptions,
 ) -> io::Result<(ChromProcessingInput, ChromProcessingOutput)> {
-    let (ftx, frx) = channel::<_>(100);
+    let (ftx, frx) = channel(options.channel_size);
 
     let (sections_handle, buf, section_receiver) = {
         let (buf, write) = TempFileBuffer::new()?;
         let file = BufWriter::new(write);
 
-        let (section_sender, section_receiver) = filebufferedchannel::channel::<Section>(200);
+        let (section_sender, section_receiver) = filebufferedchannel::channel(options.channel_size);
         let (sections_remote, sections_handle) =
             write_data(file, section_sender, frx).remote_handle();
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
@@ -704,12 +707,12 @@ pub(crate) fn get_chromprocessing(
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
             .map(|size| -> io::Result<_> {
-                let (ftx, frx) = channel::<_>(100);
+                let (ftx, frx) = channel(options.channel_size);
                 let (buf, write) = TempFileBuffer::new()?;
                 let file = BufWriter::new(write);
 
                 let (section_sender, section_receiver) =
-                    filebufferedchannel::channel::<Section>(200);
+                    filebufferedchannel::channel(options.channel_size);
                 let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
                 pool.spawn(remote).expect("Couldn't spawn future.");
                 let zoom_info = TempZoomInfo {
@@ -767,12 +770,12 @@ mod tests {
         });
         let mut options = BBIWriteOptions::default();
         options.block_size = 5;
-        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), &options);
+        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), options);
 
         let mut data = Vec::<u8>::new();
         let mut cursor = Cursor::new(&mut data);
         let mut bufwriter = BufWriter::new(&mut cursor);
-        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, &options)?;
+        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, options)?;
 
         drop(bufwriter);
         drop(cursor);

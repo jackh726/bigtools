@@ -168,7 +168,7 @@ impl ChromData for ChromGroupReadImpl {
                     size,
                     mergingvalues,
                     self.pool.clone(),
-                    self.options.clone(),
+                    self.options,
                 );
                 match group {
                     Ok(group) => ChromDataState::Read(group, self),
@@ -272,7 +272,7 @@ fn main() -> Result<(), WriteGroupsError> {
                     .pool_size(nthreads)
                     .create()
                     .expect("Unable to create thread pool."),
-                options: outb.options.clone(),
+                options: outb.options,
                 iter: Box::new(iter),
                 chrom_ids: Some(IdMap::default()),
             };

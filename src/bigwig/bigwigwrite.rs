@@ -14,9 +14,9 @@ use crate::utils::tell::Tell;
 use crate::ChromData;
 
 use crate::bbiwrite::{
-    encode_zoom_section, get_chromprocessing, get_rtreeindex, write_blank_headers,
-    write_chrom_tree, write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromProcessingInput, ChromProcessingInputSectionChannel, SectionData, WriteGroupsError,
+    self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
+    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
+    ChromProcessingInput, SectionData, WriteGroupsError,
 };
 use crate::bigwig::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 
@@ -58,7 +58,7 @@ impl BigWigWrite {
         let pre_data = file.tell()?;
         // Write data to file and return
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(write_vals(vals, file, &self.options))?;
+            block_on(write_vals(vals, file, self.options))?;
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;
         let sections_iter = raw_sections_iter.map(|mut section| {
@@ -77,10 +77,10 @@ impl BigWigWrite {
         write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
 
         let index_start = file.tell()?;
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, &self.options);
-        write_rtreeindex(&mut file, nodes, levels, total_sections, &self.options)?;
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, self.options);
+        write_rtreeindex(&mut file, nodes, levels, total_sections, self.options)?;
 
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
         file.seek(SeekFrom::Start(0))?;
@@ -122,8 +122,7 @@ impl BigWigWrite {
     }
 
     async fn process_group<I>(
-        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
-        mut ftx: ChromProcessingInputSectionChannel,
+        processing_input: ChromProcessingInput,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -134,6 +133,11 @@ impl BigWigWrite {
     where
         I: ChromValues<Value> + Send,
     {
+        let ChromProcessingInput {
+            mut zooms_channels,
+            mut ftx,
+        } = processing_input;
+
         struct ZoomItem {
             size: u32,
             live_info: Option<ZoomRecord>,
@@ -338,17 +342,10 @@ impl BigWigWrite {
     where
         I: ChromValues<Value> + Send,
     {
-        let (
-            ChromProcessingInput {
-                zooms_channels,
-                ftx,
-            },
-            processing_output,
-        ) = get_chromprocessing(&mut pool, &options)?;
+        let (procesing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
 
         let (f_remote, f_handle) = BigWigWrite::process_group(
-            zooms_channels,
-            ftx,
+            procesing_input,
             chrom_id,
             options,
             pool.clone(),

@@ -115,7 +115,7 @@ fn main() -> Result<(), WriteGroupsError> {
 
     let infile = File::open(bedpath)?;
     let mut vals_iter = BedParser::from_bed_file(infile);
-    let options = outb.options.clone();
+    let options = outb.options;
 
     let autosql = match matches.value_of("autosql") {
         None => {
@@ -135,7 +135,7 @@ fn main() -> Result<(), WriteGroupsError> {
             chrom_length,
             group,
             pool.clone(),
-            options.clone(),
+            options,
         )
     };
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
