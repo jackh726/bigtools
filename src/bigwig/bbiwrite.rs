@@ -143,10 +143,8 @@ pub struct ChromProcessingOutput {
     pub zooms: Vec<TempZoomInfo>,
 }
 
-pub struct ChromGroupRead {
-    pub summary_future: Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError>> + Send>>,
-    pub processing_output: ChromProcessingOutput,
-}
+pub type WriteSummaryFuture =
+    Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError>> + Send>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -506,7 +504,7 @@ pub(crate) fn write_zooms(
 }
 
 pub enum ChromDataState<D: ChromData> {
-    Read(ChromGroupRead, D),
+    Read((WriteSummaryFuture, ChromProcessingOutput), D),
     Finished(IdMap),
     Error(WriteGroupsError),
 }
@@ -559,16 +557,15 @@ pub(crate) async fn write_vals<V: ChromData>(
         match vals_iter.advance() {
             ChromDataState::Read(read, iter) => {
                 vals_iter = iter;
-                let ChromGroupRead {
+                let (
                     summary_future,
-                    processing_output:
-                        ChromProcessingOutput {
-                            sections,
-                            mut data,
-                            data_write_future,
-                            mut zooms,
-                        },
-                } = read;
+                    ChromProcessingOutput {
+                        sections,
+                        mut data,
+                        data_write_future,
+                        mut zooms,
+                    },
+                ) = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
                 data.switch(raw_file);

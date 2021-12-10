@@ -6,16 +6,16 @@ use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
 
-use crate::bigwig::ChromGroupRead;
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState};
+use crate::{ChromData, ChromDataState, ChromProcessingOutput, WriteSummaryFuture};
 
-pub type ChromGroupReadFunction<C> =
-    Box<dyn Fn(String, u32, u32, C) -> io::Result<ChromGroupRead> + Send>;
+pub type ChromGroupReadFunction<C> = Box<
+    dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
+>;
 
 pub struct BedParserChromGroupStreamingIterator<V, S: StreamingChromValues<V>, H: BuildHasher> {
     allow_out_of_order_chroms: bool,

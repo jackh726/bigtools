@@ -11,12 +11,12 @@ use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
-use crate::ChromData;
+use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
 
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromProcessingInput, SectionData, WriteGroupsError,
+    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
+    WriteGroupsError,
 };
 use crate::bigwig::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 
@@ -338,7 +338,7 @@ impl BigWigWrite {
         group: I,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<ChromGroupRead>
+    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
     where
         I: ChromValues<Value> + Send,
     {
@@ -355,11 +355,7 @@ impl BigWigWrite {
         )
         .remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
-        let read = ChromGroupRead {
-            summary_future: f_handle.boxed(),
-            processing_output,
-        };
-        Ok(read)
+        Ok((f_handle.boxed(), processing_output))
     }
 }
 

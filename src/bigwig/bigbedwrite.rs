@@ -13,12 +13,12 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::ChromData;
+use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
 
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromGroupRead,
-    ChromProcessingInput, SectionData, WriteGroupsError,
+    write_rtreeindex, write_vals, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
+    WriteGroupsError,
 };
 use crate::bigwig::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 
@@ -506,7 +506,7 @@ impl BigBedWrite {
         Ok(summary_complete)
     }
 
-    /// This converts a ChromValues (streaming iterator) to a ChromGroupRead.
+    /// This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
     /// This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
     /// This is heavily multi-threaded using Futures. A brief summary:
     /// - All reading from the ChromValues is done in a single future (process_group). This futures in charge of keeping track of sections (and zoom data).
@@ -526,7 +526,7 @@ impl BigBedWrite {
         group: I,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<ChromGroupRead>
+    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
     where
         I: ChromValues<BedEntry> + Send,
     {
@@ -543,11 +543,7 @@ impl BigBedWrite {
         )
         .remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
-        let read = ChromGroupRead {
-            summary_future: f_handle.boxed(),
-            processing_output,
-        };
-        Ok(read)
+        Ok((f_handle.boxed(), processing_output))
     }
 }
 
