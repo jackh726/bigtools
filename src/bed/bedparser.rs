@@ -51,7 +51,7 @@ impl<S: StreamingChromValues<Value = Value>, H: BuildHasher>
 impl<S: StreamingChromValues<Value = Value> + Send + 'static, H: BuildHasher> ChromData<Value>
     for BedParserBigWigStreamingIterator<S, H>
 {
-    type Output = ChromGroup<Value, S>;
+    type Output = ChromGroup<S>;
 
     fn advance(mut self) -> ChromDataState<Value, Self> {
         match self.chrom_groups.next() {
@@ -117,7 +117,7 @@ impl<S: StreamingChromValues<Value = BedEntry>, H: BuildHasher>
 impl<S: StreamingChromValues<Value = BedEntry> + Send + 'static, H: BuildHasher> ChromData<BedEntry>
     for BedParserBigBedStreamingIterator<S, H>
 {
-    type Output = ChromGroup<BedEntry, S>;
+    type Output = ChromGroup<S>;
 
     fn advance(mut self) -> ChromDataState<BedEntry, Self> {
         match self.chrom_groups.next() {
@@ -348,7 +348,7 @@ impl<V, S: StreamingChromValues<Value = V>> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `ChromGroup` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next(&mut self) -> Option<io::Result<(String, ChromGroup<V, S>)>> {
+    pub fn next(&mut self) -> Option<io::Result<(String, ChromGroup<S>)>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
             match state.advance(false) {
@@ -383,16 +383,16 @@ impl<V, S: StreamingChromValues<Value = V>> BedParser<S> {
 // to the next until we've exhausted the current. In this *particular*
 // implementation, we don't allow parallel iteration of chromsomes. So, the
 // state is either needed *here* or in the main struct.
-pub struct ChromGroup<V, S: StreamingChromValues<Value = V>> {
+pub struct ChromGroup<S: StreamingChromValues> {
     state: Arc<AtomicCell<Option<BedParserState<S>>>>,
     curr_state: Option<BedParserState<S>>,
     done: bool,
 }
 
-impl<V, S: StreamingChromValues<Value = V>> ChromValues for ChromGroup<V, S> {
-    type V = V;
+impl<S: StreamingChromValues> ChromValues for ChromGroup<S> {
+    type V = S::Value;
 
-    fn next(&mut self) -> Option<io::Result<V>> {
+    fn next(&mut self) -> Option<io::Result<S::Value>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -415,7 +415,7 @@ impl<V, S: StreamingChromValues<Value = V>> ChromValues for ChromGroup<V, S> {
         }
     }
 
-    fn peek(&mut self) -> Option<&V> {
+    fn peek(&mut self) -> Option<&S::Value> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -431,7 +431,7 @@ impl<V, S: StreamingChromValues<Value = V>> ChromValues for ChromGroup<V, S> {
     }
 }
 
-impl<V, S: StreamingChromValues<Value = V>> Drop for ChromGroup<V, S> {
+impl<S: StreamingChromValues> Drop for ChromGroup<S> {
     fn drop(&mut self) {
         if let Some(state) = self.curr_state.take() {
             self.state.swap(Some(state));
