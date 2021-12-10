@@ -5,38 +5,45 @@ use std::io::{self, BufRead, BufReader};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
+use futures::executor::ThreadPool;
 
 use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ChromProcessingOutput, WriteSummaryFuture};
+use crate::{
+    BBIWriteOptions, BigBedWrite, BigWigWrite, ChromData, ChromDataState, ChromProcessingOutput,
+    WriteSummaryFuture,
+};
 
 pub type ChromGroupReadFunction<C> = Box<
     dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
 >;
 
-pub struct BedParserChromGroupStreamingIterator<V, S: StreamingChromValues<V>, H: BuildHasher> {
+pub struct BedParserBigWigStreamingIterator<S: StreamingChromValues<Value>, H: BuildHasher> {
     allow_out_of_order_chroms: bool,
-    chrom_groups: BedParser<V, S>,
-    callable: ChromGroupReadFunction<ChromGroup<V, S>>,
+    chrom_groups: BedParser<Value, S>,
+    pool: ThreadPool,
+    options: BBIWriteOptions,
     last_chrom: Option<String>,
     chrom_ids: Option<IdMap>,
     chrom_map: HashMap<String, u32, H>,
 }
 
-impl<V, S: StreamingChromValues<V>, H: BuildHasher> BedParserChromGroupStreamingIterator<V, S, H> {
+impl<S: StreamingChromValues<Value>, H: BuildHasher> BedParserBigWigStreamingIterator<S, H> {
     pub fn new(
-        chrom_groups: BedParser<V, S>,
+        chrom_groups: BedParser<Value, S>,
         chrom_map: HashMap<String, u32, H>,
-        callable: ChromGroupReadFunction<ChromGroup<V, S>>,
+        pool: ThreadPool,
+        options: BBIWriteOptions,
         allow_out_of_order_chroms: bool,
     ) -> Self {
-        BedParserChromGroupStreamingIterator {
+        BedParserBigWigStreamingIterator {
             allow_out_of_order_chroms,
             chrom_groups,
-            callable,
+            pool,
+            options,
             last_chrom: None,
             chrom_ids: Some(IdMap::default()),
             chrom_map,
@@ -44,8 +51,8 @@ impl<V, S: StreamingChromValues<V>, H: BuildHasher> BedParserChromGroupStreaming
     }
 }
 
-impl<V, S: StreamingChromValues<V>, H: BuildHasher> ChromData
-    for BedParserChromGroupStreamingIterator<V, S, H>
+impl<S: StreamingChromValues<Value> + Send + 'static, H: BuildHasher> ChromData
+    for BedParserBigWigStreamingIterator<S, H>
 {
     fn advance(mut self) -> ChromDataState<Self> {
         match self.chrom_groups.next() {
@@ -64,7 +71,86 @@ impl<V, S: StreamingChromValues<V>, H: BuildHasher> ChromData
                     None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
-                match (self.callable)(chrom, chrom_id, length, group) {
+                let group = BigWigWrite::begin_processing_chrom(
+                    chrom,
+                    chrom_id,
+                    length,
+                    group,
+                    self.pool.clone(),
+                    self.options,
+                );
+                match group {
+                    Ok(group) => ChromDataState::Read(group, self),
+                    Err(err) => ChromDataState::Error(err.into()),
+                }
+            }
+            None => {
+                let chrom_ids = self.chrom_ids.take().unwrap();
+                ChromDataState::Finished(chrom_ids)
+            }
+        }
+    }
+}
+
+pub struct BedParserBigBedStreamingIterator<S: StreamingChromValues<BedEntry>, H: BuildHasher> {
+    allow_out_of_order_chroms: bool,
+    chrom_groups: BedParser<BedEntry, S>,
+    pool: ThreadPool,
+    options: BBIWriteOptions,
+    last_chrom: Option<String>,
+    chrom_ids: Option<IdMap>,
+    chrom_map: HashMap<String, u32, H>,
+}
+
+impl<S: StreamingChromValues<BedEntry>, H: BuildHasher> BedParserBigBedStreamingIterator<S, H> {
+    pub fn new(
+        chrom_groups: BedParser<BedEntry, S>,
+        chrom_map: HashMap<String, u32, H>,
+        pool: ThreadPool,
+        options: BBIWriteOptions,
+        allow_out_of_order_chroms: bool,
+    ) -> Self {
+        BedParserBigBedStreamingIterator {
+            allow_out_of_order_chroms,
+            chrom_groups,
+            pool,
+            options,
+            last_chrom: None,
+            chrom_ids: Some(IdMap::default()),
+            chrom_map,
+        }
+    }
+}
+
+impl<S: StreamingChromValues<BedEntry> + Send + 'static, H: BuildHasher> ChromData
+    for BedParserBigBedStreamingIterator<S, H>
+{
+    fn advance(mut self) -> ChromDataState<Self> {
+        match self.chrom_groups.next() {
+            Some(Err(err)) => ChromDataState::Error(err.into()),
+            Some(Ok((chrom, group))) => {
+                let chrom_ids = self.chrom_ids.as_mut().unwrap();
+                let last = self.last_chrom.replace(chrom.clone());
+                if let Some(c) = last {
+                    // TODO: test this correctly fails
+                    if !self.allow_out_of_order_chroms && c >= chrom {
+                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                    }
+                }
+                let length = match self.chrom_map.get(&chrom) {
+                    Some(length) => *length,
+                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                };
+                let chrom_id = chrom_ids.get_id(&chrom);
+                let group = BigBedWrite::begin_processing_chrom(
+                    chrom,
+                    chrom_id,
+                    length,
+                    group,
+                    self.pool.clone(),
+                    self.options,
+                );
+                match group {
                     Ok(group) => ChromDataState::Read(group, self),
                     Err(err) => ChromDataState::Error(err.into()),
                 }

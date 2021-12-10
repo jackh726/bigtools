@@ -40,20 +40,11 @@ fn test() -> io::Result<()> {
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
 
-    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigWigWrite::begin_processing_chrom(
-            chrom,
-            chrom_id,
-            chrom_length,
-            group,
-            pool.clone(),
-            options.clone(),
-        )
-    };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+    let chsi = bedparser::BedParserBigWigStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
-        Box::new(parse_fn),
+        pool.clone(),
+        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();
@@ -111,20 +102,11 @@ fn test_multi() -> io::Result<()> {
     chrom_map.insert("chr5".to_string(), 181538259);
     chrom_map.insert("chr6".to_string(), 170805979);
 
-    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigWigWrite::begin_processing_chrom(
-            chrom,
-            chrom_id,
-            chrom_length,
-            group,
-            pool.clone(),
-            options.clone(),
-        )
-    };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+    let chsi = bedparser::BedParserBigWigStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
-        Box::new(parse_fn),
+        pool.clone(),
+        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();

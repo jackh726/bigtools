@@ -116,21 +116,12 @@ fn main() -> Result<(), WriteGroupsError> {
     let vals_iter = BedParser::from_bedgraph_file(infile);
     let options = outb.options;
 
-    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigWigWrite::begin_processing_chrom(
-            chrom,
-            chrom_id,
-            chrom_length,
-            group,
-            pool.clone(),
-            options,
-        )
-    };
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+    let chsi = bedparser::BedParserBigWigStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
-        Box::new(parse_fn),
+        pool.clone(),
+        options,
         allow_out_of_order_chroms,
     );
     outb.write(chrom_map, chsi)?;

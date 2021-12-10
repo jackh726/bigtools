@@ -48,20 +48,11 @@ fn bigbedwrite_test() -> io::Result<()> {
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
-    let parse_fn = move |chrom, chrom_id, chrom_length, group| {
-        BigBedWrite::begin_processing_chrom(
-            chrom,
-            chrom_id,
-            chrom_length,
-            group,
-            pool.clone(),
-            options.clone(),
-        )
-    };
-    let chsi = bedparser::BedParserChromGroupStreamingIterator::new(
+    let chsi = bedparser::BedParserBigBedStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
-        Box::new(parse_fn),
+        pool.clone(),
+        options,
         false,
     );
     outb.write(chrom_map, chsi).unwrap();
