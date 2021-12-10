@@ -155,10 +155,10 @@ struct ChromGroupReadImpl {
     chrom_ids: Option<IdMap>,
 }
 
-impl ChromData<Value> for ChromGroupReadImpl {
+impl ChromData for ChromGroupReadImpl {
     type Output = MergingValues;
 
-    fn advance(mut self) -> ChromDataState<Value, Self> {
+    fn advance(mut self) -> ChromDataState<Self> {
         let next = self.iter.next();
         match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),

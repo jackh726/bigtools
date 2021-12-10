@@ -116,7 +116,7 @@ fn main() -> Result<(), WriteGroupsError> {
     let vals_iter = BedParser::from_bedgraph_file(infile);
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserBigWigStreamingIterator::new(
+    let chsi = bedparser::BedParserStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
         pool.clone(),

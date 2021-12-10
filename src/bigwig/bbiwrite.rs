@@ -506,20 +506,21 @@ pub(crate) fn write_zooms(
 
 type ReadData<I> = (String, u32, u32, I, ThreadPool);
 
-pub enum ChromDataState<Value, D: ChromData<Value>> {
+pub enum ChromDataState<D: ChromData> {
     Read(ReadData<D::Output>, D),
     Finished(IdMap),
     Error(WriteGroupsError),
 }
 
-pub trait ChromData<V>: Sized {
-    type Output: ChromValues<V = V> + Send + 'static;
-    fn advance(self) -> ChromDataState<V, Self>;
+pub trait ChromData: Sized {
+    type Output: ChromValues + Send + 'static;
+    fn advance(self) -> ChromDataState<Self>;
 }
 
 pub(crate) async fn write_vals<
     Value,
-    V: ChromData<Value>,
+    Values: ChromValues<V = Value> + Send + 'static,
+    V: ChromData<Output = Values>,
     F: Fn(
         String,
         u32,

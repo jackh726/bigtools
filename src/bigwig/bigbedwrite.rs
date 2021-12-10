@@ -37,7 +37,10 @@ impl BigBedWrite {
         }
     }
 
-    pub fn write<V: ChromData<BedEntry>>(
+    pub fn write<
+        Values: ChromValues<V = BedEntry> + Send + 'static,
+        V: ChromData<Output = Values>,
+    >(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,

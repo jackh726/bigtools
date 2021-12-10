@@ -128,7 +128,7 @@ fn main() -> Result<(), WriteGroupsError> {
     outb.autosql = Some(autosql);
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserBigBedStreamingIterator::new(
+    let chsi = bedparser::BedParserStreamingIterator::new(
         vals_iter,
         chrom_map.clone(),
         pool.clone(),

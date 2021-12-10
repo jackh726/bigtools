@@ -18,7 +18,7 @@ pub type ChromGroupReadFunction<C> = Box<
     dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
 >;
 
-pub struct BedParserBigWigStreamingIterator<S: StreamingChromValues<Value = Value>, H: BuildHasher>
+pub struct BedParserStreamingIterator<Value, S: StreamingChromValues<Value = Value>, H: BuildHasher>
 {
     allow_out_of_order_chroms: bool,
     chrom_groups: BedParser<S>,
@@ -28,8 +28,8 @@ pub struct BedParserBigWigStreamingIterator<S: StreamingChromValues<Value = Valu
     chrom_map: HashMap<String, u32, H>,
 }
 
-impl<S: StreamingChromValues<Value = Value>, H: BuildHasher>
-    BedParserBigWigStreamingIterator<S, H>
+impl<Value, S: StreamingChromValues<Value = Value>, H: BuildHasher>
+    BedParserStreamingIterator<Value, S, H>
 {
     pub fn new(
         chrom_groups: BedParser<S>,
@@ -37,7 +37,7 @@ impl<S: StreamingChromValues<Value = Value>, H: BuildHasher>
         pool: ThreadPool,
         allow_out_of_order_chroms: bool,
     ) -> Self {
-        BedParserBigWigStreamingIterator {
+        BedParserStreamingIterator {
             allow_out_of_order_chroms,
             chrom_groups,
             pool,
@@ -48,78 +48,12 @@ impl<S: StreamingChromValues<Value = Value>, H: BuildHasher>
     }
 }
 
-impl<S: StreamingChromValues<Value = Value> + Send + 'static, H: BuildHasher> ChromData<Value>
-    for BedParserBigWigStreamingIterator<S, H>
+impl<Value: Send, S: StreamingChromValues<Value = Value> + Send + 'static, H: BuildHasher> ChromData
+    for BedParserStreamingIterator<Value, S, H>
 {
     type Output = ChromGroup<S>;
 
-    fn advance(mut self) -> ChromDataState<Value, Self> {
-        match self.chrom_groups.next() {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, group))) => {
-                let chrom_ids = self.chrom_ids.as_mut().unwrap();
-                let last = self.last_chrom.replace(chrom.clone());
-                if let Some(c) = last {
-                    // TODO: test this correctly fails
-                    if !self.allow_out_of_order_chroms && c >= chrom {
-                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
-                    }
-                }
-                let length = match self.chrom_map.get(&chrom) {
-                    Some(length) => *length,
-                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
-                };
-                let chrom_id = chrom_ids.get_id(&chrom);
-                let read_data = (chrom, chrom_id, length, group, self.pool.clone());
-
-                ChromDataState::Read(read_data, self)
-            }
-            None => {
-                let chrom_ids = self.chrom_ids.take().unwrap();
-                ChromDataState::Finished(chrom_ids)
-            }
-        }
-    }
-}
-
-pub struct BedParserBigBedStreamingIterator<
-    S: StreamingChromValues<Value = BedEntry>,
-    H: BuildHasher,
-> {
-    allow_out_of_order_chroms: bool,
-    chrom_groups: BedParser<S>,
-    pool: ThreadPool,
-    last_chrom: Option<String>,
-    chrom_ids: Option<IdMap>,
-    chrom_map: HashMap<String, u32, H>,
-}
-
-impl<S: StreamingChromValues<Value = BedEntry>, H: BuildHasher>
-    BedParserBigBedStreamingIterator<S, H>
-{
-    pub fn new(
-        chrom_groups: BedParser<S>,
-        chrom_map: HashMap<String, u32, H>,
-        pool: ThreadPool,
-        allow_out_of_order_chroms: bool,
-    ) -> Self {
-        BedParserBigBedStreamingIterator {
-            allow_out_of_order_chroms,
-            chrom_groups,
-            pool,
-            last_chrom: None,
-            chrom_ids: Some(IdMap::default()),
-            chrom_map,
-        }
-    }
-}
-
-impl<S: StreamingChromValues<Value = BedEntry> + Send + 'static, H: BuildHasher> ChromData<BedEntry>
-    for BedParserBigBedStreamingIterator<S, H>
-{
-    type Output = ChromGroup<S>;
-
-    fn advance(mut self) -> ChromDataState<BedEntry, Self> {
+    fn advance(mut self) -> ChromDataState<Self> {
         match self.chrom_groups.next() {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {

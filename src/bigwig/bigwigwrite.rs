@@ -33,7 +33,7 @@ impl BigWigWrite {
         }
     }
 
-    pub fn write<V: ChromData<Value>>(
+    pub fn write<Values: ChromValues<V = Value> + Send + 'static, V: ChromData<Output = Values>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
