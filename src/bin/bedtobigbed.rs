@@ -119,7 +119,7 @@ fn main() -> Result<(), WriteGroupsError> {
     let autosql = match matches.value_of("autosql") {
         None => {
             use bigtools::utils::chromvalues::ChromValues;
-            let (_, mut group) = vals_iter.next().unwrap()?;
+            let (_, mut group) = vals_iter.next_chrom().unwrap()?;
             let first = group.peek().unwrap();
             bigtools::bed::autosql::bed_autosql(&first.rest)
         }

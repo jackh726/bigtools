@@ -1,3 +1,15 @@
+//! There are roughly three layers of abstraction here, each with a different purpose.
+//!
+//! The first layer of abstraction is enscapsulated in the `StreamingBedValues` trait. Briefly,
+//! implementors of this trait return "raw" bed-like data. This is the chromosome (as a `&str`) and
+//! data specific to each type of bed
+//!
+//! The second layer of abstraction manages the state information for when values switch from one
+//! chromosome to another. The is important because bigwig/bigbed writing is "chunked" by chromosome.
+//!
+//! The final layer of abstraction is a thin wrapper around the previous to provide some optional
+//! error checking and to keep track of the chromosomes seen.
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::BuildHasher;
@@ -17,44 +29,29 @@ pub type ChromGroupReadFunction<C> = Box<
     dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
 >;
 
-pub struct BedParserStreamingIterator<S: StreamingChromValues, H: BuildHasher> {
-    bed_data: BedParser<S>,
-    chrom_map: HashMap<String, u32, H>,
-    allow_out_of_order_chroms: bool,
-    chrom_ids: Option<IdMap>,
-    last_chrom: Option<String>,
-}
-
-impl<S: StreamingChromValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
-    pub fn new(
-        bed_data: BedParser<S>,
-        chrom_map: HashMap<String, u32, H>,
-        allow_out_of_order_chroms: bool,
-    ) -> Self {
-        BedParserStreamingIterator {
-            bed_data,
-            chrom_map,
-            allow_out_of_order_chroms,
-            chrom_ids: Some(IdMap::default()),
-            last_chrom: None,
-        }
-    }
-}
-
-pub trait StreamingChromValues {
+// FIXME: replace with LendingIterator when GATs are thing
+/// Essentially a combined lending iterator over the chrom (&str) and remaining
+/// values of bed-like data
+pub trait StreamingBedValues {
     type Value;
 
     fn next(&mut self) -> Option<io::Result<(&str, Self::Value)>>;
 }
 
+// ---------------
+// Bed-like stream
+// ---------------
+
+// FIXME(perf): should this be a generic? Speed test
 pub type Parser<V> = Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, V)>> + Send>;
 
-pub struct BedStream<V, B: BufRead> {
+/// Parses a bed-like file
+pub struct BedFileStream<V, B> {
     bed: StreamingLineReader<B>,
     parse: Parser<V>,
 }
 
-impl<V, B: BufRead> StreamingChromValues for BedStream<V, B> {
+impl<V, B: BufRead> StreamingBedValues for BedFileStream<V, B> {
     type Value = V;
 
     fn next(&mut self) -> Option<io::Result<(&str, Self::Value)>> {
@@ -66,12 +63,13 @@ impl<V, B: BufRead> StreamingChromValues for BedStream<V, B> {
     }
 }
 
+// Wraps a bed-like Iterator
 pub struct BedIteratorStream<V, I> {
     iter: I,
     curr: Option<(String, V)>,
 }
 
-impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
+impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingBedValues
     for BedIteratorStream<V, I>
 {
     type Value = V;
@@ -86,12 +84,32 @@ impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
     }
 }
 
+// ----------------
+// State-management
+// ----------------
+
 /// A wrapper for "bed-like" data
-pub struct BedParser<S: StreamingChromValues> {
+pub struct BedParser<S: StreamingBedValues> {
     state: Arc<AtomicCell<Option<BedParserState<S>>>>,
 }
 
-impl<S: StreamingChromValues> BedParser<S> {
+#[derive(Debug)]
+enum ChromOpt {
+    None,
+    Same,
+    Diff(String),
+}
+
+#[derive(Debug)]
+struct BedParserState<S: StreamingBedValues> {
+    stream: S,
+    curr_chrom: Option<String>,
+    curr_val: Option<S::Value>,
+    next_chrom: ChromOpt,
+    next_val: Option<S::Value>,
+}
+
+impl<S: StreamingBedValues> BedParser<S> {
     pub fn new(stream: S) -> Self {
         let state = BedParserState {
             stream,
@@ -106,7 +124,7 @@ impl<S: StreamingChromValues> BedParser<S> {
     }
 }
 
-impl BedParser<BedStream<BedEntry, BufReader<File>>> {
+impl BedParser<BedFileStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
         let parse: Parser<BedEntry> = Box::new(|s: &str| {
             let mut split = s.splitn(4, '\t');
@@ -135,14 +153,14 @@ impl BedParser<BedStream<BedEntry, BufReader<File>>> {
                 Ok((start, end, rest)) => Some(Ok((chrom, BedEntry { start, end, rest }))),
             }
         });
-        BedParser::new(BedStream {
+        BedParser::new(BedFileStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
             parse,
         })
     }
 }
 
-impl BedParser<BedStream<Value, BufReader<File>>> {
+impl BedParser<BedFileStream<Value, BufReader<File>>> {
     pub fn from_bedgraph_file(file: File) -> Self {
         let parse: Parser<Value> = Box::new(|s: &str| {
             let mut split = s.splitn(5, '\t');
@@ -176,7 +194,7 @@ impl BedParser<BedStream<Value, BufReader<File>>> {
                 Ok((start, end, value)) => Some(Ok((chrom, Value { start, end, value }))),
             }
         });
-        BedParser::new(BedStream {
+        BedParser::new(BedFileStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
             parse,
         })
@@ -189,11 +207,167 @@ impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<BedIterato
     }
 }
 
-impl<S: StreamingChromValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
-    type Output = ChromGroup<S>;
+impl<S: StreamingBedValues> BedParser<S> {
+    // This is *valid* to call multiple times for the same chromosome (assuming the
+    // `BedChromData` has been dropped), since calling this function doesn't
+    // actually advance the state (it will only set `next_val` if it currently is none).
+    pub fn next_chrom(&mut self) -> Option<io::Result<(String, BedChromData<S>)>> {
+        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+        if state.next_val.is_none() {
+            match state.advance_state(false) {
+                Ok(()) => {}
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        let next_chrom = match &state.next_chrom {
+            ChromOpt::Diff(real_chrom) => Some(real_chrom),
+            ChromOpt::Same => state.curr_chrom.as_ref(),
+            ChromOpt::None => None,
+        };
+        let ret = match next_chrom {
+            None => None,
+            Some(chrom) => {
+                let group = BedChromData {
+                    state: self.state.clone(),
+                    curr_state: None,
+                    done: false,
+                };
+                Some(Ok((chrom.to_owned(), group)))
+            }
+        };
+        self.state.swap(Some(state));
+        ret
+    }
+}
+
+impl<S: StreamingBedValues> BedParserState<S> {
+    fn advance_state(&mut self, replace_current: bool) -> io::Result<()> {
+        self.curr_val = self.next_val.take();
+        match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
+            ChromOpt::Diff(real_chrom) => {
+                self.curr_chrom.replace(real_chrom);
+            }
+            ChromOpt::Same => {}
+            ChromOpt::None => {
+                self.curr_chrom = None;
+            }
+        }
+
+        if let Some(next) = self.stream.next() {
+            let (chrom, v) = next?;
+            self.next_val.replace(v);
+            if let Some(curr_chrom) = &self.curr_chrom {
+                if curr_chrom != chrom {
+                    self.next_chrom = ChromOpt::Diff(chrom.to_owned());
+                } else {
+                    self.next_chrom = ChromOpt::Same;
+                }
+            } else {
+                self.next_chrom = ChromOpt::Diff(chrom.to_owned());
+            }
+        }
+        if replace_current && self.curr_val.is_none() && self.next_val.is_some() {
+            self.advance_state(false)?;
+        }
+        Ok(())
+    }
+}
+
+// The separation here between the "current" state and the shared state comes
+// from the observation that once we *start* on a chromosome, we can't move on
+// to the next until we've exhausted the current. In this *particular*
+// implementation, we don't allow parallel iteration of chromsomes. So, the
+// state is either needed *here* or in the main struct.
+pub struct BedChromData<S: StreamingBedValues> {
+    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
+    curr_state: Option<BedParserState<S>>,
+    done: bool,
+}
+
+impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
+    type V = S::Value;
+
+    fn next(&mut self) -> Option<io::Result<S::Value>> {
+        if self.curr_state.is_none() {
+            let opt_state = self.state.swap(None);
+            if opt_state.is_none() {
+                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+            }
+            self.curr_state = opt_state;
+        }
+        if self.done {
+            return None;
+        }
+        let state = self.curr_state.as_mut().unwrap();
+        match state.advance_state(true) {
+            Ok(()) => {
+                if let ChromOpt::Diff(_) = state.next_chrom {
+                    self.done = true;
+                }
+                state.curr_val.take().map(Result::Ok)
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    fn peek(&mut self) -> Option<&S::Value> {
+        if self.curr_state.is_none() {
+            let opt_state = self.state.swap(None);
+            if opt_state.is_none() {
+                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
+            }
+            self.curr_state = opt_state;
+        }
+        if self.done {
+            return None;
+        }
+        let state = self.curr_state.as_ref().unwrap();
+        state.next_val.as_ref()
+    }
+}
+
+impl<S: StreamingBedValues> Drop for BedChromData<S> {
+    fn drop(&mut self) {
+        if let Some(state) = self.curr_state.take() {
+            self.state.swap(Some(state));
+        }
+    }
+}
+
+// ------------------------------------------------
+// Chromosome tracking and optional error reporting
+// ------------------------------------------------
+
+pub struct BedParserStreamingIterator<S: StreamingBedValues, H: BuildHasher> {
+    bed_data: BedParser<S>,
+    chrom_map: HashMap<String, u32, H>,
+    allow_out_of_order_chroms: bool,
+    chrom_ids: Option<IdMap>,
+    last_chrom: Option<String>,
+}
+
+impl<S: StreamingBedValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
+    pub fn new(
+        bed_data: BedParser<S>,
+        chrom_map: HashMap<String, u32, H>,
+        allow_out_of_order_chroms: bool,
+    ) -> Self {
+        BedParserStreamingIterator {
+            bed_data,
+            chrom_map,
+            allow_out_of_order_chroms,
+            chrom_ids: Some(IdMap::default()),
+            last_chrom: None,
+        }
+    }
+}
+
+impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
+    type Output = BedChromData<S>;
 
     fn advance(mut self) -> ChromDataState<Self> {
-        match self.bed_data.next() {
+        match self.bed_data.next_chrom() {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
@@ -221,150 +395,6 @@ impl<S: StreamingChromValues, H: BuildHasher> ChromData for BedParserStreamingIt
     }
 }
 
-#[derive(Debug)]
-enum ChromOpt {
-    None,
-    Same,
-    Diff(String),
-}
-
-#[derive(Debug)]
-struct BedParserState<S: StreamingChromValues> {
-    stream: S,
-    curr_chrom: Option<String>,
-    curr_val: Option<S::Value>,
-    next_chrom: ChromOpt,
-    next_val: Option<S::Value>,
-}
-
-impl<S: StreamingChromValues> BedParserState<S> {
-    fn advance(&mut self, replace_current: bool) -> io::Result<()> {
-        self.curr_val = self.next_val.take();
-        match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
-            ChromOpt::Diff(real_chrom) => {
-                self.curr_chrom.replace(real_chrom);
-            }
-            ChromOpt::Same => {}
-            ChromOpt::None => {
-                self.curr_chrom = None;
-            }
-        }
-
-        if let Some(next) = self.stream.next() {
-            let (chrom, v) = next?;
-            self.next_val.replace(v);
-            if let Some(curr_chrom) = &self.curr_chrom {
-                if curr_chrom != chrom {
-                    self.next_chrom = ChromOpt::Diff(chrom.to_owned());
-                } else {
-                    self.next_chrom = ChromOpt::Same;
-                }
-            } else {
-                self.next_chrom = ChromOpt::Diff(chrom.to_owned());
-            }
-        }
-        if replace_current && self.curr_val.is_none() && self.next_val.is_some() {
-            self.advance(false)?;
-        }
-        Ok(())
-    }
-}
-
-impl<S: StreamingChromValues> BedParser<S> {
-    // This is *valid* to call multiple times for the same chromosome (assuming the
-    // `ChromGroup` has been dropped), since calling this function doesn't
-    // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next(&mut self) -> Option<io::Result<(String, ChromGroup<S>)>> {
-        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        if state.next_val.is_none() {
-            match state.advance(false) {
-                Ok(()) => {}
-                Err(e) => return Some(Err(e)),
-            }
-        }
-
-        let next_chrom = match &state.next_chrom {
-            ChromOpt::Diff(real_chrom) => Some(real_chrom),
-            ChromOpt::Same => state.curr_chrom.as_ref(),
-            ChromOpt::None => None,
-        };
-        let ret = match next_chrom {
-            None => None,
-            Some(chrom) => {
-                let group = ChromGroup {
-                    state: self.state.clone(),
-                    curr_state: None,
-                    done: false,
-                };
-                Some(Ok((chrom.to_owned(), group)))
-            }
-        };
-        self.state.swap(Some(state));
-        ret
-    }
-}
-
-// The separation here between the "current" state and the shared state comes
-// from the observation that once we *start* on a chromosome, we can't move on
-// to the next until we've exhausted the current. In this *particular*
-// implementation, we don't allow parallel iteration of chromsomes. So, the
-// state is either needed *here* or in the main struct.
-pub struct ChromGroup<S: StreamingChromValues> {
-    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
-    curr_state: Option<BedParserState<S>>,
-    done: bool,
-}
-
-impl<S: StreamingChromValues> ChromValues for ChromGroup<S> {
-    type V = S::Value;
-
-    fn next(&mut self) -> Option<io::Result<S::Value>> {
-        if self.curr_state.is_none() {
-            let opt_state = self.state.swap(None);
-            if opt_state.is_none() {
-                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-            }
-            self.curr_state = opt_state;
-        }
-        if self.done {
-            return None;
-        }
-        let state = self.curr_state.as_mut().unwrap();
-        match state.advance(true) {
-            Ok(()) => {
-                if let ChromOpt::Diff(_) = state.next_chrom {
-                    self.done = true;
-                }
-                state.curr_val.take().map(Result::Ok)
-            }
-            Err(e) => Some(Err(e)),
-        }
-    }
-
-    fn peek(&mut self) -> Option<&S::Value> {
-        if self.curr_state.is_none() {
-            let opt_state = self.state.swap(None);
-            if opt_state.is_none() {
-                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-            }
-            self.curr_state = opt_state;
-        }
-        if self.done {
-            return None;
-        }
-        let state = self.curr_state.as_ref().unwrap();
-        state.next_val.as_ref()
-    }
-}
-
-impl<S: StreamingChromValues> Drop for ChromGroup<S> {
-    fn drop(&mut self) {
-        if let Some(state) = self.curr_state.take() {
-            self.state.swap(Some(state));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,7 +410,7 @@ mod tests {
         let f = File::open(dir)?;
         let mut bgp = BedParser::from_bed_file(f);
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
@@ -392,7 +422,7 @@ mod tests {
             );
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
@@ -404,7 +434,7 @@ mod tests {
             );
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 &BedEntry {
@@ -471,7 +501,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr18");
             assert_eq!(
                 BedEntry {
@@ -512,7 +542,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr19");
             assert_eq!(
                 BedEntry {
@@ -527,7 +557,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next().is_none());
+        assert!(bgp.next_chrom().is_none());
         Ok(())
     }
 
@@ -539,7 +569,7 @@ mod tests {
         let f = File::open(dir)?;
         let mut bgp = BedParser::from_bedgraph_file(f);
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr17");
             assert_eq!(
                 Value {
@@ -597,7 +627,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr18");
             assert_eq!(
                 Value {
@@ -638,7 +668,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             assert_eq!(chrom, "chr19");
             assert_eq!(
                 Value {
@@ -653,7 +683,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next().is_none());
+        assert!(bgp.next_chrom().is_none());
         Ok(())
     }
 }

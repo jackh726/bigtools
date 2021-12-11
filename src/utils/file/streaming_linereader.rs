@@ -1,7 +1,7 @@
 use std::io::{self, BufRead};
 
 #[derive(Debug)]
-pub struct StreamingLineReader<B: BufRead> {
+pub struct StreamingLineReader<B> {
     current_line: String,
     buf_read: B,
 }

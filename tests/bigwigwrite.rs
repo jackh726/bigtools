@@ -21,7 +21,7 @@ fn test() -> io::Result<()> {
     let first = {
         let infile = File::open(single_chrom_bedgraph.clone())?;
         let mut vals_iter = BedParser::from_bedgraph_file(infile);
-        let (_, mut group) = vals_iter.next().unwrap()?;
+        let (_, mut group) = vals_iter.next_chrom().unwrap()?;
         group.next().unwrap().unwrap()
     };
 
