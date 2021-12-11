@@ -17,63 +17,26 @@ pub type ChromGroupReadFunction<C> = Box<
     dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
 >;
 
-pub struct BedParserStreamingIterator<Value, S: StreamingChromValues<Value = Value>, H: BuildHasher>
-{
-    allow_out_of_order_chroms: bool,
-    chrom_groups: BedParser<S>,
-    last_chrom: Option<String>,
-    chrom_ids: Option<IdMap>,
+pub struct BedParserStreamingIterator<S: StreamingChromValues, H: BuildHasher> {
+    bed_data: BedParser<S>,
     chrom_map: HashMap<String, u32, H>,
+    allow_out_of_order_chroms: bool,
+    chrom_ids: Option<IdMap>,
+    last_chrom: Option<String>,
 }
 
-impl<Value, S: StreamingChromValues<Value = Value>, H: BuildHasher>
-    BedParserStreamingIterator<Value, S, H>
-{
+impl<S: StreamingChromValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
     pub fn new(
-        chrom_groups: BedParser<S>,
+        bed_data: BedParser<S>,
         chrom_map: HashMap<String, u32, H>,
         allow_out_of_order_chroms: bool,
     ) -> Self {
         BedParserStreamingIterator {
-            allow_out_of_order_chroms,
-            chrom_groups,
-            last_chrom: None,
-            chrom_ids: Some(IdMap::default()),
+            bed_data,
             chrom_map,
-        }
-    }
-}
-
-impl<Value: Send, S: StreamingChromValues<Value = Value> + Send + 'static, H: BuildHasher> ChromData
-    for BedParserStreamingIterator<Value, S, H>
-{
-    type Output = ChromGroup<S>;
-
-    fn advance(mut self) -> ChromDataState<Self> {
-        match self.chrom_groups.next() {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, group))) => {
-                let chrom_ids = self.chrom_ids.as_mut().unwrap();
-                let last = self.last_chrom.replace(chrom.clone());
-                if let Some(c) = last {
-                    // TODO: test this correctly fails
-                    if !self.allow_out_of_order_chroms && c >= chrom {
-                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
-                    }
-                }
-                let length = match self.chrom_map.get(&chrom) {
-                    Some(length) => *length,
-                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
-                };
-                let chrom_id = chrom_ids.get_id(&chrom);
-                let read_data = (chrom, chrom_id, length, group);
-
-                ChromDataState::Read(read_data, self)
-            }
-            None => {
-                let chrom_ids = self.chrom_ids.take().unwrap();
-                ChromDataState::Finished(chrom_ids)
-            }
+            allow_out_of_order_chroms,
+            chrom_ids: Some(IdMap::default()),
+            last_chrom: None,
         }
     }
 }
@@ -103,7 +66,7 @@ impl<V, B: BufRead> StreamingChromValues for BedStream<V, B> {
     }
 }
 
-pub struct BedIteratorStream<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> {
+pub struct BedIteratorStream<V, I> {
     iter: I,
     curr: Option<(String, V)>,
 }
@@ -123,6 +86,7 @@ impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingChromValues
     }
 }
 
+/// A wrapper for "bed-like" data
 pub struct BedParser<S: StreamingChromValues> {
     state: Arc<AtomicCell<Option<BedParserState<S>>>>,
 }
@@ -220,8 +184,40 @@ impl BedParser<BedStream<Value, BufReader<File>>> {
 }
 
 impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<BedIteratorStream<V, I>> {
-    pub fn from_iter(iter: I) -> Self {
+    pub fn wrap_iter(iter: I) -> Self {
         BedParser::new(BedIteratorStream { iter, curr: None })
+    }
+}
+
+impl<S: StreamingChromValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
+    type Output = ChromGroup<S>;
+
+    fn advance(mut self) -> ChromDataState<Self> {
+        match self.bed_data.next() {
+            Some(Err(err)) => ChromDataState::Error(err.into()),
+            Some(Ok((chrom, group))) => {
+                let chrom_ids = self.chrom_ids.as_mut().unwrap();
+                let last = self.last_chrom.replace(chrom.clone());
+                if let Some(c) = last {
+                    // TODO: test this correctly fails
+                    if !self.allow_out_of_order_chroms && c >= chrom {
+                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                    }
+                }
+                let length = match self.chrom_map.get(&chrom) {
+                    Some(length) => *length,
+                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                };
+                let chrom_id = chrom_ids.get_id(&chrom);
+                let read_data = (chrom, chrom_id, length, group);
+
+                ChromDataState::Read(read_data, self)
+            }
+            None => {
+                let chrom_ids = self.chrom_ids.take().unwrap();
+                ChromDataState::Finished(chrom_ids)
+            }
+        }
     }
 }
 
@@ -274,7 +270,7 @@ impl<S: StreamingChromValues> BedParserState<S> {
     }
 }
 
-impl<V, S: StreamingChromValues<Value = V>> BedParser<S> {
+impl<S: StreamingChromValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `ChromGroup` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).

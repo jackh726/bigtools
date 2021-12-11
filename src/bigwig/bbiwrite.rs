@@ -513,13 +513,12 @@ pub enum ChromDataState<D: ChromData> {
 }
 
 pub trait ChromData: Sized {
-    type Output: ChromValues + Send + 'static;
+    type Output: ChromValues;
     fn advance(self) -> ChromDataState<Self>;
 }
 
 pub(crate) async fn write_vals<
-    Value,
-    Values: ChromValues<V = Value> + Send + 'static,
+    Values: ChromValues + Send + 'static,
     V: ChromData<Output = Values>,
     F: Fn(
         String,
