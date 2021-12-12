@@ -162,12 +162,23 @@ struct OccupiedEntry<T> {
 ///
 /// assert_eq!(Some(five), index);
 /// ```
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Index<T> {
     index: usize,
     generation: usize,
     _marker: PhantomData<T>,
 }
+
+impl<T> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            generation: self.generation,
+            _marker: PhantomData,
+        }
+    }
+}
+impl<T> Copy for Index<T> {}
 
 impl<T> Index<T> {
     fn new(index: usize, generation: usize) -> Index<T> {
@@ -870,6 +881,8 @@ where
         }
     }
 
+    /// Inserts an element immediately before the provided index. Returns `None`
+    /// if the element at the provided index was removed.
     pub fn insert_before(&mut self, index: Index<T>, item: T) -> Option<Index<T>> {
         // Get the current index
         let (prev_index, index, _next_index) = match self.contents.get(index.index)? {
@@ -935,6 +948,8 @@ where
         Some(Index::new(position, self.generation))
     }
 
+    /// Inserts an element immediately after the provided index. Returns `None`
+    /// if the element at the provided index was removed.
     pub fn insert_after(&mut self, index: Index<T>, item: T) -> Option<Index<T>> {
         // Get the current index
         let (_prev_index, index, next_index) = match self.contents.get(index.index)? {
