@@ -12,7 +12,7 @@ fn main() -> Result<(), WriteGroupsError> {
     let matches = App::new("BedGraphToBigWig")
         .about("Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.")
         .arg(Arg::new("bedgraph")
-                .help("the bedgraph to convert to a bigwig")
+                .help("The bedgraph to convert to a bigwig. Can use `-` or `stdin` to read from stdin.")
                 .index(1)
                 .required(true)
             )
@@ -112,16 +112,29 @@ fn main() -> Result<(), WriteGroupsError> {
         .create()
         .expect("Unable to create thread pool.");
 
-    let infile = File::open(bedgraphpath)?;
-    let vals_iter = BedParser::from_bedgraph_file(infile);
-
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserStreamingIterator::new(
-        vals_iter,
-        chrom_map.clone(),
-        allow_out_of_order_chroms,
-    );
-    outb.write(chrom_map, chsi, pool)?;
+    if bedgraphpath == "-" || bedgraphpath == "stdin" {
+        let stdin = std::io::stdin();
+        // FIXME: This will lock on every line read, when we should be able to lock once
+        let vals_iter = BedParser::from_bedgraph_file(stdin);
+
+        let chsi = bedparser::BedParserStreamingIterator::new(
+            vals_iter,
+            chrom_map.clone(),
+            allow_out_of_order_chroms,
+        );
+        outb.write(chrom_map, chsi, pool)?;
+    } else {
+        let infile = File::open(bedgraphpath)?;
+        let vals_iter = BedParser::from_bedgraph_file(infile);
+
+        let chsi = bedparser::BedParserStreamingIterator::new(
+            vals_iter,
+            chrom_map.clone(),
+            allow_out_of_order_chroms,
+        );
+        outb.write(chrom_map, chsi, pool)?;
+    };
 
     Ok(())
 }

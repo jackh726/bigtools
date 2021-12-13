@@ -13,7 +13,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
+use crate::{ChromData, ChromProcessingOutput, ReadData, WriteSummaryFuture};
 
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
@@ -526,17 +526,13 @@ impl BigBedWrite {
     ///   All of this is done for zoom sections too.
     ///
     /// The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-    pub fn begin_processing_chrom<I: 'static>(
-        chrom: String,
-        chrom_id: u32,
-        chrom_length: u32,
-        group: I,
+    pub fn begin_processing_chrom<I: ChromValues<V = BedEntry> + Send + 'static>(
+        read_data: ReadData<I>,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
-    where
-        I: ChromValues<V = BedEntry> + Send,
-    {
+    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> {
+        let (chrom, chrom_id, chrom_length, group) = read_data;
+
         let (processing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
 
         let (f_remote, f_handle) = BigBedWrite::process_group(

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::BuildHasher;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -23,11 +23,7 @@ use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ChromProcessingOutput, WriteSummaryFuture};
-
-pub type ChromGroupReadFunction<C> = Box<
-    dyn Fn(String, u32, u32, C) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> + Send,
->;
+use crate::{ChromData, ChromDataState};
 
 // FIXME: replace with LendingIterator when GATs are thing
 /// Essentially a combined lending iterator over the chrom (&str) and remaining
@@ -160,8 +156,8 @@ impl BedParser<BedFileStream<BedEntry, BufReader<File>>> {
     }
 }
 
-impl BedParser<BedFileStream<Value, BufReader<File>>> {
-    pub fn from_bedgraph_file(file: File) -> Self {
+impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>>> {
+    pub fn from_bedgraph_file(file: R) -> Self {
         let parse: Parser<Value> = Box::new(|s: &str| {
             let mut split = s.splitn(5, '\t');
             let chrom = match split.next() {

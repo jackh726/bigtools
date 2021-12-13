@@ -11,7 +11,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
-use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
+use crate::{ChromData, ChromProcessingOutput, ReadData, WriteSummaryFuture};
 
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
@@ -128,7 +128,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_group<I>(
+    async fn process_group<I: ChromValues<V = Value>>(
         processing_input: ChromProcessingInput,
         chrom_id: u32,
         options: BBIWriteOptions,
@@ -136,10 +136,7 @@ impl BigWigWrite {
         mut group: I,
         chrom: String,
         chrom_length: u32,
-    ) -> Result<Summary, WriteGroupsError>
-    where
-        I: ChromValues<V = Value> + Send,
-    {
+    ) -> Result<Summary, WriteGroupsError> {
         let ChromProcessingInput {
             mut zooms_channels,
             mut ftx,
@@ -338,17 +335,13 @@ impl BigWigWrite {
     ///   All of this is done for zoom sections too.
     ///
     /// The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-    pub fn begin_processing_chrom<I: 'static>(
-        chrom: String,
-        chrom_id: u32,
-        chrom_length: u32,
-        group: I,
+    pub fn begin_processing_chrom<I: ChromValues<V = Value> + Send + 'static>(
+        read_data: ReadData<I>,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
-    where
-        I: ChromValues<V = Value> + Send,
-    {
+    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> {
+        let (chrom, chrom_id, chrom_length, group) = read_data;
+
         let (procesing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
 
         let (f_remote, f_handle) = BigWigWrite::process_group(
