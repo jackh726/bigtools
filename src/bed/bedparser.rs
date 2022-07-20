@@ -9,20 +9,22 @@
 //!
 //! The final layer of abstraction is a thin wrapper around the previous to provide some optional
 //! error checking and to keep track of the chromosomes seen.
-use std::collections::HashMap;
+
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
+use futures::executor::ThreadPool;
 use thiserror::Error;
 
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState};
+use crate::{ChromData, ChromDataState, ReadData, BBIWriteOptions, WriteSummaryFuture, ChromProcessingOutput};
 
 // FIXME: replace with LendingIterator when GATs are thing
 /// Essentially a combined lending iterator over the chrom (&str) and remaining
@@ -37,8 +39,7 @@ pub trait StreamingBedValues {
 // Bed-like stream
 // ---------------
 
-// FIXME(perf): should this be a generic? Speed test
-pub type Parser<V> = Box<dyn for<'a> Fn(&'a str) -> Option<io::Result<(&'a str, V)>> + Send>;
+pub type Parser<V> = for<'a> fn(&'a str) -> Option<io::Result<(&'a str, V)>>;
 
 /// Parses a bed-like file
 pub struct BedFileStream<V, B> {
@@ -119,79 +120,81 @@ impl<S: StreamingBedValues> BedParser<S> {
     }
 }
 
+pub fn parse_bed<'a>(s: &'a str) -> Option<io::Result<(&'a str, BedEntry)>> {
+    let mut split = s.splitn(4, '\t');
+    let chrom = match split.next() {
+        Some(chrom) => chrom,
+        None => return None,
+    };
+    let res = (|| {
+        let s = split.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s))
+        })?;
+        let start = s.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+        })?;
+        let s = split.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s))
+        })?;
+        let end = s.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+        })?;
+        let rest = split.next().unwrap_or("").to_string();
+        Ok((start, end, rest))
+    })();
+    match res {
+        Err(e) => Some(Err(e)),
+        Ok((start, end, rest)) => Some(Ok((chrom, BedEntry { start, end, rest }))),
+    }
+}
+
+pub fn parse_bedgraph<'a>(s: &'a str) -> Option<io::Result<(&'a str, Value)>> {
+    let mut split = s.splitn(5, '\t');
+    let chrom = match split.next() {
+        Some(chrom) => chrom,
+        None => return None,
+    };
+    let res = (|| {
+        let s = split.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s))
+        })?;
+        let start = s.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
+        })?;
+        let s = split.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s))
+        })?;
+        let end = s.parse::<u32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
+        })?;
+        let s = split.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Missing value: {:}", s))
+        })?;
+        let value = s.parse::<f32>().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
+        })?;
+        Ok((start, end, value))
+    })();
+    match res {
+        Err(e) => Some(Err(e)),
+        Ok((start, end, value)) => Some(Ok((chrom, Value { start, end, value }))),
+    }
+}
+
 impl BedParser<BedFileStream<BedEntry, BufReader<File>>> {
     pub fn from_bed_file(file: File) -> Self {
-        let parse: Parser<BedEntry> = Box::new(|s: &str| {
-            let mut split = s.splitn(4, '\t');
-            let chrom = match split.next() {
-                Some(chrom) => chrom,
-                None => return None,
-            };
-            let res = (|| {
-                let s = split.next().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s))
-                })?;
-                let start = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-                })?;
-                let s = split.next().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s))
-                })?;
-                let end = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-                })?;
-                let rest = split.next().unwrap_or("").to_string();
-                Ok((start, end, rest))
-            })();
-            match res {
-                Err(e) => Some(Err(e)),
-                Ok((start, end, rest)) => Some(Ok((chrom, BedEntry { start, end, rest }))),
-            }
-        });
         BedParser::new(BedFileStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
-            parse,
+            parse: parse_bed,
         })
     }
 }
 
 impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>>> {
     pub fn from_bedgraph_file(file: R) -> Self {
-        let parse: Parser<Value> = Box::new(|s: &str| {
-            let mut split = s.splitn(5, '\t');
-            let chrom = match split.next() {
-                Some(chrom) => chrom,
-                None => return None,
-            };
-            let res = (|| {
-                let s = split.next().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Missing start: {:}", s))
-                })?;
-                let start = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid start: {:}", s))
-                })?;
-                let s = split.next().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Missing end: {:}", s))
-                })?;
-                let end = s.parse::<u32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid end: {:}", s))
-                })?;
-                let s = split.next().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Missing value: {:}", s))
-                })?;
-                let value = s.parse::<f32>().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid value: {:}", s))
-                })?;
-                Ok((start, end, value))
-            })();
-            match res {
-                Err(e) => Some(Err(e)),
-                Ok((start, end, value)) => Some(Ok((chrom, Value { start, end, value }))),
-            }
-        });
         BedParser::new(BedFileStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
-            parse,
+            parse: parse_bedgraph,
         })
     }
 }
@@ -391,6 +394,147 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
                     None => return ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                };
+                let chrom_id = chrom_ids.get_id(&chrom);
+                let read_data = (chrom, chrom_id, length, group);
+
+                ChromDataState::Read(read_data, self)
+            }
+            None => {
+                let chrom_ids = self.chrom_ids.take().unwrap();
+                ChromDataState::Finished(chrom_ids)
+            }
+        }
+    }
+}
+
+pub struct BedParserParallelStreamingIterator<F, V, H: BuildHasher>
+where F: Fn(
+    ReadData<V>,
+    ThreadPool,
+    BBIWriteOptions,
+) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
+{
+    begin_processing_chrom: F,
+    parse_fn: Parser<V>,
+    chrom_map: HashMap<String, u32, H>,
+    allow_out_of_order_chroms: bool,
+    pool: ThreadPool,
+    path: Path,
+    chrom_ids: Option<IdMap>,
+    last_chrom: Option<String>,
+    chrom_indices: Vec<(u64, String)>,
+    max_idxs: usize,
+    queued_reads: VecDeque<()>,
+}
+
+impl<F, V, H: BuildHasher> BedParserParallelStreamingIterator<F, V, H>
+where F: Fn(
+    ReadData<V>,
+    ThreadPool,
+    BBIWriteOptions,
+) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>
+{
+    pub fn new(
+        begin_processing_chrom: F,
+        parse_fn: Parser<V>,
+        chrom_map: HashMap<String, u32, H>,
+        mut chrom_indices: Vec<(u64, String)>,
+        allow_out_of_order_chroms: bool,
+        pool: ThreadPool,
+        path: Path,
+    ) -> Self {
+        chrom_indices.reverse();
+
+        BedParserParallelStreamingIterator {
+            begin_processing_chrom,
+            parse_fn,
+            chrom_map,
+            allow_out_of_order_chroms,
+            pool,
+            path,
+            chrom_ids: Some(IdMap::default()),
+            last_chrom: None,
+            chrom_indices,
+            max_idxs: 2,
+            queued_reads: VecDeque::new(),
+        }
+    }
+}
+
+impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserParallelStreamingIterator<S, H> {
+    type Output = BedChromData<S>;
+
+    fn advance(mut self) -> ChromDataState<Self> {
+        let begin_next = || {
+            let curr = match self.chrom_indices.pop() {
+                Some(c) => c,
+                None => {
+                    let chrom_ids = self.chrom_ids.take().unwrap();
+                    ChromDataState::Finished(chrom_ids)
+                },
+            };
+            let chrom = curr.1;
+
+            let file = match File::open(&self.path) {
+                Ok(f) => f,
+                Err(err) => ChromDataState::Err(err),
+            };
+            file.seek(SeekFrom::Start(curr.0));
+            let parser = BedParser::new(BedFileStream {
+                bed: StreamingLineReader::new(BufReader::new(file)),
+                parse: self.parse_fn,
+            });
+
+            match parser.next_chrom() {
+                Some(Err(err)) => ChromDataState::Error(err.into()),
+                Some(Ok((chrom, group))) => {
+                    let chrom_ids = self.chrom_ids.as_mut().unwrap();
+                    let last = self.last_chrom.replace(chrom.clone());
+                    if let Some(c) = last {
+                        // TODO: test this correctly fails
+                        if !self.allow_out_of_order_chroms && c >= chrom {
+                            return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                        }
+                    }
+                    let length = match self.chrom_map.get(&chrom) {
+                        Some(length) => *length,
+                        None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                    };
+                    let chrom_id = chrom_ids.get_id(&chrom);
+                    let read_data = (chrom, chrom_id, length, group);
+    
+                    ChromDataState::Read(read_data, self)
+                }
+                None => {
+                    let chrom_ids = self.chrom_ids.take().unwrap();
+                    ChromDataState::Finished(chrom_ids)
+                }
+            }
+
+            Some(read)
+        };
+
+        let next = self
+            .queued_reads
+            .pop_front()
+            .or_else(|| {
+                let curr = self.chrom_indices.pop();
+            });
+        match self.bed_data.next_chrom() {
+            Some(Err(err)) => ChromDataState::Error(err.into()),
+            Some(Ok((chrom, group))) => {
+                let chrom_ids = self.chrom_ids.as_mut().unwrap();
+                let last = self.last_chrom.replace(chrom.clone());
+                if let Some(c) = last {
+                    // TODO: test this correctly fails
+                    if !self.allow_out_of_order_chroms && c >= chrom {
+                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                    }
+                }
+                let length = match self.chrom_map.get(&chrom) {
+                    Some(length) => *length,
+                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
                 let read_data = (chrom, chrom_id, length, group);

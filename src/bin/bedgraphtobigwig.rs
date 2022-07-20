@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+use bigtools::bed::indexer::index_chroms;
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
@@ -126,15 +127,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         outb.write(chrom_map, chsi, pool)?;
     } else {
-        let infile = File::open(bedgraphpath)?;
-        let vals_iter = BedParser::from_bedgraph_file(infile);
+        let infile = File::open(&bedgraphpath)?;
+        if infile.metadata()?.len() >= 200_000_000 {
+            let chrom_indices = index_chroms(infile)?;
 
-        let chsi = bedparser::BedParserStreamingIterator::new(
-            vals_iter,
-            chrom_map.clone(),
-            allow_out_of_order_chroms,
-        );
-        outb.write(chrom_map, chsi, pool)?;
+            let infile = File::open(&bedgraphpath)?;
+            let vals_iter = BedParser::from_bedgraph_file(infile);
+    
+            let chsi = bedparser::BedParserParallelStreamingIterator::new(
+                vals_iter,
+                chrom_map.clone(),
+                chrom_indices,
+                allow_out_of_order_chroms,
+            );
+            outb.write(chrom_map, chsi, pool)?;
+        } else {
+            let vals_iter = BedParser::from_bedgraph_file(infile);
+    
+            let chsi = bedparser::BedParserStreamingIterator::new(
+                vals_iter,
+                chrom_map.clone(),
+                allow_out_of_order_chroms,
+            );
+            outb.write(chrom_map, chsi, pool)?;
+        }
+
     };
 
     Ok(())
