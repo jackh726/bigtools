@@ -6,7 +6,7 @@ fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("Testing")
         .arg(
             Arg::new("bigbed")
-                .about("the bigbed to get info for")
+                .help("the bigbed to get info for")
                 .index(1)
                 .required(true),
         )

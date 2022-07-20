@@ -98,14 +98,14 @@ fn main() -> Result<(), BigBedReadAttachError> {
                 .arg(
                     Arg::new("a")
                         .short('a')
-                        .about("Each entry in this bed is compared against b for overlaps.")
+                        .help("Each entry in this bed is compared against b for overlaps.")
                         .takes_value(true)
                         .required(true),
                 )
                 .arg(
                     Arg::new("b")
                         .short('b')
-                        .about("Each entry in a will be compared against this bigBed for overlaps.")
+                        .help("Each entry in a will be compared against this bigBed for overlaps.")
                         .takes_value(true)
                         .required(true),
                 ),
@@ -124,7 +124,7 @@ fn main() -> Result<(), BigBedReadAttachError> {
             intersect(apath, b, IntersectOptions {})?;
         }
         None => {
-            eprintln!("No command. Use bigtools -.about to see.about.");
+            eprintln!("No command. Use bigtools -.help to see.help.");
         }
         Some((subcommand, _)) => {
             panic!("BUG: unhandled subcommand: {}", subcommand);

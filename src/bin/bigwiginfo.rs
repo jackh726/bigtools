@@ -6,7 +6,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
     let matches = App::new("BigWigInfo")
         .arg(
             Arg::new("bigwig")
-                .about("the bigwig to get info for")
+                .help("the bigwig to get info for")
                 .index(1)
                 .required(true),
         )
