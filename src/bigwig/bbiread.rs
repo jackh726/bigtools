@@ -56,8 +56,8 @@ impl PartialEq for ChromAndSize {
 pub struct BBIFileInfo {
     pub filetype: BBIFile,
     pub header: BBIHeader,
-    pub(crate) zoom_headers: Vec<ZoomHeader>,
-    pub(crate) chrom_info: Vec<ChromInfo>,
+    pub zoom_headers: Vec<ZoomHeader>,
+    pub chrom_info: Vec<ChromInfo>,
 }
 
 pub enum BBIFileReadInfoError {

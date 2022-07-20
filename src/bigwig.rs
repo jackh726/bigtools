@@ -14,8 +14,8 @@ pub(crate) const CIR_TREE_MAGIC: u32 = 0x2468_ACE0;
 pub(crate) const CHROM_TREE_MAGIC: u32 = 0x78CA_8C91;
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct ZoomHeader {
-    pub(crate) reduction_level: u32,
+pub struct ZoomHeader {
+    pub reduction_level: u32,
     pub(crate) data_offset: u64,
     pub(crate) index_offset: u64,
 }
