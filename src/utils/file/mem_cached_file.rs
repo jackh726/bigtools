@@ -100,7 +100,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
 
                     // Read all the new cache blocks
                     let mut temp_buf = vec![0u8; read_length];
-                    let read = self.reader.read(&mut temp_buf)?;
+                    let read = try_read_exact(self.reader, &mut temp_buf)?;
                     let read_buf = &temp_buf[..read];
 
                     // For each *full* chunk that was read, insert that data into
@@ -182,6 +182,26 @@ impl<R: Read + Seek> Drop for MemCachedRead<'_, R> {
             let _ = self.reader.seek(SeekFrom::Start(*current_position));
         }
     }
+}
+
+/// Repeatedly calls `read` until either the buffer is filled or `read` returns
+/// `0`, ending EOF. This roughly follows the default implementation of
+/// `read_exact`, except it does not error on EOF.
+fn try_read_exact<R: Read + ?Sized>(this: &mut R, mut buf: &mut [u8]) -> io::Result<usize> {
+    let mut total_read = 0;
+    while !buf.is_empty() {
+        match this.read(buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                total_read += n;
+                let tmp = buf;
+                buf = &mut tmp[n..];
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total_read)
 }
 
 #[cfg(test)]

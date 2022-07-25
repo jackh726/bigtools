@@ -7,14 +7,16 @@ use crate::utils::file::seekableread::Reopen;
 
 const READ_SIZE: usize = 20 * 1024; // 20 KB chunks
 
-/// Remote file reads are cached to a temporary file. The size of each block is
-/// `READ_SIZE + 1` bytes. The first byte of a block is `0` if the data hasn't
-/// been written yet, or `1` if it has. Additionally, the data is stored by
-/// tiling, so all or no data for a given block is available.
+// Remote file reads are cached to a temporary file. The size of each block
+// (with the exception of the last block) is `READ_SIZE + 1` bytes. The first
+// byte of a block is `0` if the data hasn't been written yet, or `1` if it
+// has (and has enough data to fill the block). A value of `2` signifies that
+// there wasn't enough data to fill the block, which only should happen for the
+// last block.
 
 pub struct RemoteFile {
     url: String,
-    last_seek: u64,
+    current_position: u64,
     current: Option<Cursor<Vec<u8>>>,
     cache: Option<File>,
 }
@@ -23,7 +25,7 @@ impl RemoteFile {
     pub fn new(url: &str) -> RemoteFile {
         RemoteFile {
             url: url.to_string(),
-            last_seek: 0,
+            current_position: 0,
             current: None,
             cache: None,
         }
@@ -31,12 +33,8 @@ impl RemoteFile {
 }
 
 impl RemoteFile {
-    fn block(&self) -> u64 {
-        self.last_seek / READ_SIZE as u64
-    }
-
-    fn read_current_block(&mut self, recommended_size: Option<u64>) -> io::Result<u64> {
-        let block = self.block();
+    fn read_current_block(&mut self, read_size: u64) -> io::Result<u64> {
+        let block = self.current_position / READ_SIZE as u64;
         let block_start = block * READ_SIZE as u64;
         let cache_block_start = block * (READ_SIZE as u64 + 1);
         let cache = match self.cache.as_mut() {
@@ -63,9 +61,13 @@ impl RemoteFile {
             return Ok(bytes_available);
         }
 
-        let read_len = recommended_size
-            .unwrap_or(READ_SIZE as u64)
-            .max(READ_SIZE as u64);
+        let read_len = {
+            let cur_pos = self.current_position;
+            let block = cur_pos / (READ_SIZE as u64);
+            let block_start = block * (READ_SIZE as u64);
+            let blocks_to_read = (cur_pos - block_start + read_size - 1) / (READ_SIZE as u64) + 1;
+            blocks_to_read * (READ_SIZE as u64)
+        };
 
         let resp = attohttpc::get(&self.url)
             .header(
@@ -122,23 +124,25 @@ impl Read for RemoteFile {
             //    a previous read, but it's enough.
             // 4) Whatever is left in the current memory is leftover from a
             //    a previous read, and it's not enough.
-            let bytes_available = if self.current.is_none() {
-                let cursor_start = (self.last_seek / READ_SIZE as u64) * READ_SIZE as u64;
-                let in_block = self.last_seek - cursor_start;
+            let reset_cursor = |this: &mut Self| -> io::Result<u64> {
+                let cursor_start = (this.current_position / READ_SIZE as u64) * READ_SIZE as u64;
+                let in_block = this.current_position - cursor_start;
                 // If we not at the start of the block, then the length that we need
                 // is longer than the length of the buf itself, since we have to
                 // acount for how far into the block we are.
-                let bytes_available =
-                    self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
-                // If we are at the beginning of a block, then skip to where
+                let bytes_available = this.read_current_block(remaining_buf.len() as u64)?;
+                // If we are not at the beginning of a block, then skip to where
                 // we need to be.
                 if in_block > 0 {
-                    self.current
+                    this.current
                         .as_mut()
                         .unwrap()
                         .seek(SeekFrom::Start(in_block))?;
                 }
-                bytes_available - in_block.min(bytes_available)
+                Ok(bytes_available - in_block.min(bytes_available))
+            };
+            let bytes_available = if self.current.is_none() {
+                reset_cursor(self)?
             } else {
                 let bytes_in_cursor = self.current.as_ref().unwrap().get_ref().len() as u64;
                 let cursor_position = self.current.as_ref().unwrap().position();
@@ -146,41 +150,24 @@ impl Read for RemoteFile {
                 // We don't have enough bytes in the cursor. Let's reload this
                 // block just to ensure that we have the data loaded.
                 if bytes_available < remaining_buf.len() as u64 {
-                    self.last_seek = ((self.last_seek / READ_SIZE as u64) * READ_SIZE as u64)
-                        + self.current.as_ref().unwrap().position();
-                    self.current = None;
-                    let cursor_start = (self.last_seek / READ_SIZE as u64) * READ_SIZE as u64;
-                    let in_block = self.last_seek - cursor_start;
-                    let bytes_available =
-                        self.read_current_block(Some(in_block + remaining_buf.len() as u64))?;
-                    if in_block > 0 {
-                        self.current
-                            .as_mut()
-                            .unwrap()
-                            .seek(SeekFrom::Start(in_block))?;
-                    }
-                    bytes_available - in_block.min(bytes_available)
+                    reset_cursor(self)?
                 } else {
                     bytes_available
                 }
             };
             let read = self.current.as_mut().unwrap().read(remaining_buf)?;
+            self.current_position += read as u64;
             total_read += read;
             if read == 0 || read == remaining_buf.len() || read == bytes_available as usize {
                 break;
             }
-            let cursor_start = (self.last_seek / READ_SIZE as u64) * READ_SIZE as u64;
-            let in_block = self.last_seek - cursor_start;
+            let cursor_start = (self.current_position / READ_SIZE as u64) * READ_SIZE as u64;
+            let in_block = self.current_position - cursor_start;
             let remaining_in_block = READ_SIZE - in_block as usize;
             // If we didn't read everything, we *must* have at least read until
             // the end of the block
             assert!(read >= remaining_in_block);
-            // We don't want to skip into the middle of a chunk
-            let skip = remaining_in_block + ((read - remaining_in_block) / READ_SIZE) * READ_SIZE;
-            remaining_buf = &mut remaining_buf[skip..];
-            total_read -= read - skip;
-            self.current = None;
-            self.last_seek += skip as u64;
+            remaining_buf = &mut remaining_buf[read..];
         }
         Ok(total_read)
     }
@@ -189,34 +176,33 @@ impl Read for RemoteFile {
 impl Seek for RemoteFile {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         // If we seek outside the current block, we have to invalidate.
-        let last_seek = self.last_seek;
-        self.last_seek = match pos {
+        let last_position = self.current_position;
+        self.current_position = match pos {
             SeekFrom::Start(s) => s,
             SeekFrom::End(_) => unimplemented!(),
             SeekFrom::Current(s) => {
                 if s >= 0 {
-                    last_seek + (s as u64)
+                    self.current_position + (s as u64)
                 } else {
-                    if last_seek < s.checked_neg().unwrap() as u64 {
+                    if self.current_position < s.checked_neg().unwrap() as u64 {
                         panic!("Seeked to <0");
                     }
-                    last_seek - s.checked_neg().unwrap() as u64
+                    self.current_position - s.checked_neg().unwrap() as u64
                 }
             }
         };
-        if let Some(_cursor) = self.current.as_mut() {
-            /*
-            // FIXME: this isn't correct
-            let cursor_end = cursor.get_ref().len() as u64;
-            if self.last_seek >= last_seek && self.last_seek < cursor_end {
-                let new_position = self.last_seek - last_seek;
+        if let Some(cursor) = self.current.as_mut() {
+            let cursor_start = (last_position / READ_SIZE as u64) * READ_SIZE as u64;
+            let cursor_end = cursor_start + READ_SIZE as u64;
+            assert_eq!(cursor_end - cursor_start, cursor.get_ref().len() as u64);
+            if cursor_start <= self.current_position && self.current_position < cursor_end {
+                let new_position = self.current_position - cursor_start;
                 cursor.set_position(new_position);
-                return Ok(self.last_seek);
+                return Ok(self.current_position);
             }
-            */
             self.current = None;
         }
-        Ok(self.last_seek)
+        Ok(self.current_position)
     }
 }
 
@@ -224,7 +210,7 @@ impl Clone for RemoteFile {
     fn clone(&self) -> Self {
         RemoteFile {
             url: self.url.clone(),
-            last_seek: 0,
+            current_position: 0,
             current: None,
             cache: None,
         }
@@ -235,7 +221,7 @@ impl Reopen<RemoteFile> for RemoteFile {
     fn reopen(&self) -> io::Result<RemoteFile> {
         Ok(RemoteFile {
             url: self.url.clone(),
-            last_seek: 0,
+            current_position: 0,
             current: None,
             cache: None,
         })
@@ -245,7 +231,7 @@ impl Reopen<RemoteFile> for RemoteFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bigwig::BigBedRead;
+    use crate::bigwig::{BigBedRead, BigWigRead};
 
     #[ignore]
     #[test]
@@ -259,5 +245,15 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(remote_intervals.len(), 5);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_remote2() {
+        let f = RemoteFile::new("http://hgdownload.soe.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign100mer.bigWig");
+        let mut remote = BigWigRead::from(f).unwrap();
+
+        let interval = remote.get_zoom_interval("chr17", 0, 36996442, 2048);
+        let _: Vec<_> = interval.unwrap().collect();
     }
 }

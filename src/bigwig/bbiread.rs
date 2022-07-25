@@ -140,10 +140,10 @@ pub trait BBIRead<R: SeekableRead> {
 
         // TODO: could do some optimization here to check if our interval overlaps with any data
 
-        //println!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
+        //eprintln!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
         let mut blocks: Vec<Block> = vec![];
         search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
-        //println!("overlapping_blocks: {:?}", blocks);
+        //eprintln!("overlapping_blocks: {:?}", blocks);
         Ok(blocks)
     }
 
@@ -355,7 +355,7 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
     end: u32,
     blocks: &mut Vec<Block>,
 ) -> io::Result<()> {
-    //println!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", self.current_file_offset()?, chrom_ix, start, end);
+    //eprintln!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", file.tell()?, chrom_ix, start, end);
 
     let isleaf: u8 = file.read_u8()?;
     assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
