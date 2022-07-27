@@ -25,6 +25,7 @@ where
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
     vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
+    chrom: u32,
     start: u32,
     end: u32,
 }
@@ -55,12 +56,14 @@ where
                         self.bigwig,
                         current_block,
                         &mut self.known_offset,
+                        self.chrom,
                         self.start,
                         self.end,
                     ) {
-                        Ok(vals) => {
+                        Ok(Some(vals)) => {
                             self.vals = Some(vals);
                         }
+                        Ok(None) => {}
                         Err(e) => {
                             return Some(Err(e));
                         }
@@ -83,6 +86,7 @@ where
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
     vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
+    chrom: u32,
     start: u32,
     end: u32,
 }
@@ -113,12 +117,14 @@ where
                         &mut self.bigwig,
                         current_block,
                         &mut self.known_offset,
+                        self.chrom,
                         self.start,
                         self.end,
                     ) {
-                        Ok(vals) => {
+                        Ok(Some(vals)) => {
                             self.vals = Some(vals);
                         }
+                        Ok(None) => {}
                         Err(e) => {
                             return Some(Err(e));
                         }
@@ -285,12 +291,14 @@ where
         start: u32,
         end: u32,
     ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send + 'a> {
+        let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
             bigwig: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
+            chrom,
             start,
             end,
         })
@@ -302,12 +310,14 @@ where
         start: u32,
         end: u32,
     ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send> {
+        let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(OwnedIntervalIter {
             bigwig: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
+            chrom,
             start,
             end,
         })
@@ -320,6 +330,7 @@ where
         end: u32,
         reduction_level: u32,
     ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+        let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
             .info
             .zoom_headers
@@ -339,18 +350,23 @@ where
         let file = self.ensure_reader()?;
         file.seek(SeekFrom::Start(index_offset))?;
         let blocks = self.search_cir_tree(chrom_name, start, end)?;
-        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), start, end))
+        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), chrom, start, end))
     }
 
     /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
     /// positions with no data in the bigWig will be `std::f32::NAN`.
     pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
+        let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.ensure_reader()?.tell()?;
         for block in blocks {
-            let block_values = get_block_values(self, block, &mut known_offset, start, end)?;
+            let block_values = get_block_values(self, block, &mut known_offset, chrom, start, end)?;
+            let block_values = match block_values {
+                Some(v) => v,
+                None => continue,
+            };
             for block_value in block_values {
                 let block_value_start = (block_value.start - start) as usize;
                 let block_value_end = (block_value.end - start) as usize;
@@ -367,13 +383,14 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     bigwig: &mut BigWigRead<R, S>,
     block: Block,
     known_offset: &mut u64,
+    chrom: u32,
     start: u32,
     end: u32,
-) -> io::Result<Box<dyn Iterator<Item = Value> + Send>> {
+) -> io::Result<Option<Box<dyn Iterator<Item = Value> + Send>>> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
     let mut values: Vec<Value> = Vec::new();
 
-    let _chrom_id = block_data_mut.read_u32()?;
+    let chrom_id = block_data_mut.read_u32()?;
     let chrom_start = block_data_mut.read_u32()?;
     let _chrom_end = block_data_mut.read_u32()?;
     let item_step = block_data_mut.read_u32()?;
@@ -381,6 +398,10 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     let section_type = block_data_mut.read_u8()?;
     let _reserved = block_data_mut.read_u8()?;
     let item_count = block_data_mut.read_u16()?;
+
+    if chrom_id != chrom {
+        return Ok(None);
+    }
 
     let mut curr_start = chrom_start;
     for _ in 0..item_count {
@@ -434,5 +455,5 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(Box::new(values.into_iter()))
+    Ok(Some(Box::new(values.into_iter())))
 }

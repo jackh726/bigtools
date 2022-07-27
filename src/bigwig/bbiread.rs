@@ -60,6 +60,23 @@ pub struct BBIFileInfo {
     pub chrom_info: Vec<ChromInfo>,
 }
 
+impl BBIFileInfo {
+    pub(crate) fn chrom_id(&self, chrom_name: &str) -> io::Result<u32> {
+        let chrom_info = &self.chrom_info;
+        let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
+        //println!("Chrom: {:?}", chrom);
+        match chrom {
+            Some(c) => Ok(c.id),
+            None => {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{} not found.", chrom_name),
+                ))
+            }
+        }
+    }
+}
+
 pub enum BBIFileReadInfoError {
     UnknownMagic,
     InvalidChroms,
@@ -447,6 +464,7 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     bbifile: &mut B,
     block: Block,
     known_offset: &mut u64,
+    chrom: u32,
     start: u32,
     end: u32,
 ) -> io::Result<Box<dyn Iterator<Item = ZoomRecord> + Send>> {
@@ -465,7 +483,7 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
         let max_val = f64::from(data_mut.read_f32()?);
         let sum = f64::from(data_mut.read_f32()?);
         let sum_squares = f64::from(data_mut.read_f32()?);
-        if chrom_end >= start && chrom_start <= end {
+        if chrom_id == chrom && chrom_end >= start && chrom_start <= end {
             records.push(ZoomRecord {
                 chrom: chrom_id,
                 start: chrom_start,
@@ -496,6 +514,7 @@ where
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = ZoomRecord> + Send + 'a>>,
+    chrom: u32,
     start: u32,
     end: u32,
     _phantom: PhantomData<S>,
@@ -507,12 +526,13 @@ where
     S: SeekableRead,
     B: BBIRead<S>,
 {
-    pub fn new(bbifile: &'a mut B, blocks: I, start: u32, end: u32) -> Self {
+    pub fn new(bbifile: &'a mut B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
         ZoomIntervalIter {
             bbifile,
             known_offset: 0,
             blocks,
             vals: None,
+            chrom,
             start,
             end,
             _phantom: PhantomData,
@@ -545,6 +565,7 @@ where
                         self.bbifile,
                         current_block,
                         &mut self.known_offset,
+                        self.chrom,
                         self.start,
                         self.end,
                     ) {

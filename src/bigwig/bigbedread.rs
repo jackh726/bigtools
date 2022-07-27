@@ -330,6 +330,7 @@ where
         end: u32,
         reduction_level: u32,
     ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+        let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
             .info
             .zoom_headers
@@ -349,7 +350,7 @@ where
         let file = self.ensure_reader()?;
         file.seek(SeekFrom::Start(index_offset))?;
         let blocks = self.search_cir_tree(chrom_name, start, end)?;
-        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), start, end))
+        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), chrom, start, end))
     }
 }
 
@@ -372,6 +373,7 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
         if chrom_start == 0 && chrom_end == 0 {
             return Err(io::Error::new(io::ErrorKind::Other, ""));
         }
+        // FIXME: should this just return empty?
         assert_eq!(
             chrom_id, expected_chrom,
             "BUG: bigBed had multiple chroms in a section"
