@@ -1,6 +1,6 @@
 [package]
 name = "bigtools"
-version = "0.1.8-dev"
+version = "0.1.8"
 authors = ["Jack Huey <jackh726@gmail.com>"]
 edition = "2021"
 license = "MIT"
