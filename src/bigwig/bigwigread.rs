@@ -350,7 +350,13 @@ where
         let file = self.ensure_reader()?;
         file.seek(SeekFrom::Start(index_offset))?;
         let blocks = self.search_cir_tree(chrom_name, start, end)?;
-        Ok(ZoomIntervalIter::new(self, blocks.into_iter(), chrom, start, end))
+        Ok(ZoomIntervalIter::new(
+            self,
+            blocks.into_iter(),
+            chrom,
+            start,
+            end,
+        ))
     }
 
     /// Returns the values between `start` and `end` as a `Vec<f32>`. Any

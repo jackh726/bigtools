@@ -67,12 +67,10 @@ impl BBIFileInfo {
         //println!("Chrom: {:?}", chrom);
         match chrom {
             Some(c) => Ok(c.id),
-            None => {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{} not found.", chrom_name),
-                ))
-            }
+            None => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("{} not found.", chrom_name),
+            )),
         }
     }
 }

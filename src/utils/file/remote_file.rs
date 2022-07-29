@@ -194,7 +194,6 @@ impl Seek for RemoteFile {
         if let Some(cursor) = self.current.as_mut() {
             let cursor_start = (last_position / READ_SIZE as u64) * READ_SIZE as u64;
             let cursor_end = cursor_start + READ_SIZE as u64;
-            assert_eq!(cursor_end - cursor_start, cursor.get_ref().len() as u64);
             if cursor_start <= self.current_position && self.current_position < cursor_end {
                 let new_position = self.current_position - cursor_start;
                 cursor.set_position(new_position);
@@ -254,6 +253,16 @@ mod tests {
         let mut remote = BigWigRead::from(f).unwrap();
 
         let interval = remote.get_zoom_interval("chr17", 0, 36996442, 2048);
+        let _: Vec<_> = interval.unwrap().collect();
+    }
+
+    #[ignore]
+    #[test]
+    fn test_remote3() {
+        let f = RemoteFile::new("http://hgdownload.soe.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign100mer.bigWig");
+        let mut remote = BigWigRead::from(f).unwrap();
+
+        let interval = remote.get_zoom_interval("chr2", 46087592, 174087320, 32768);
         let _: Vec<_> = interval.unwrap().collect();
     }
 }
