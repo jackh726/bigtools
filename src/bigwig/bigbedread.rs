@@ -347,9 +347,7 @@ where
         };
 
         let index_offset = zoom_header.index_offset;
-        let file = self.ensure_reader()?;
-        file.seek(SeekFrom::Start(index_offset))?;
-        let blocks = self.search_cir_tree(chrom_name, start, end)?;
+        let blocks = self.search_cir_tree(index_offset, chrom_name, start, end)?;
         Ok(ZoomIntervalIter::new(
             self,
             blocks.into_iter(),

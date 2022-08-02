@@ -272,6 +272,9 @@ mod tests {
         let remote = BigWigRead::from(f).unwrap();
         //let remote = BigWigRead::from_file_and_attach("/home/hueyj/git/bigtools/temp.bw").unwrap();
 
-        let _: Vec<_> = remote.get_interval_move("chr1", 169253475, 169257278).unwrap().collect();
+        let _: Vec<_> = remote
+            .get_interval_move("chr1", 169253475, 169257278)
+            .unwrap()
+            .collect();
     }
 }

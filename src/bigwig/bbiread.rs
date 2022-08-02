@@ -115,6 +115,7 @@ pub trait BBIRead<R: SeekableRead> {
     /// This assumes the file is at the cir tree start
     fn search_cir_tree(
         &mut self,
+        at: u64,
         chrom_name: &str,
         start: u32,
         end: u32,
@@ -136,6 +137,7 @@ pub trait BBIRead<R: SeekableRead> {
         };
 
         let mut file = self.ensure_mem_cached_reader()?;
+        file.seek(SeekFrom::Start(at))?;
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
             return Err(io::Error::new(
@@ -170,10 +172,7 @@ pub trait BBIRead<R: SeekableRead> {
     ) -> io::Result<Vec<Block>> {
         let full_index_offset = self.get_info().header.full_index_offset;
 
-        let file = self.ensure_reader()?;
-        file.seek(SeekFrom::Start(full_index_offset))?;
-
-        self.search_cir_tree(chrom_name, start, end)
+        self.search_cir_tree(full_index_offset, chrom_name, start, end)
     }
 }
 
