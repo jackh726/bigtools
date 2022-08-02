@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io::{self, Read, Seek, SeekFrom};
 
-pub const CACHE_SIZE: usize = 8 * 1024;
+pub const CACHE_SIZE: usize = 64;
 
 /// Wraps a `Read` and a `HashMap<u64, [u8; CACHE_SIZE]` to provide in-memory
 /// caching of file contents.
@@ -88,6 +88,7 @@ impl<R: Read + Seek> Read for MemCachedRead<'_, R> {
                         .unwrap_or(first_block);
 
                     // The end block with the last position we want to read
+                    // FIXME: Why is this +1
                     let block_end = last_block * CACHE_SIZE + CACHE_SIZE + 1;
 
                     // The read length is from the beginning of the start block

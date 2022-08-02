@@ -177,7 +177,7 @@ pub trait BBIRead<R: SeekableRead> {
 }
 
 pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
-    let file = BufReader::new(file);
+    let file = BufReader::with_capacity(128, file);
     let mut file = ByteOrdered::runtime(file, Endianness::Little);
 
     let magic = file.read_u32()?;

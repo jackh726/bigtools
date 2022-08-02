@@ -153,11 +153,7 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
     }
 }
 
-pub struct BigBedRead<R, S>
-where
-    R: Reopen<S>,
-    S: SeekableRead,
-{
+pub struct BigBedRead<R, S> {
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<S>,

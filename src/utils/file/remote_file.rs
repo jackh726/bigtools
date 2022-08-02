@@ -5,7 +5,7 @@ use tempfile;
 
 use crate::utils::file::seekableread::Reopen;
 
-const READ_SIZE: usize = 20 * 1024; // 20 KB chunks
+const READ_SIZE: usize = 10 * 1024; // 10 KB chunks
 
 // Remote file reads are cached to a temporary file. The size of each block
 // (with the exception of the last block) is `READ_SIZE + 1` bytes. The first
