@@ -370,7 +370,7 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
     end: u32,
     blocks: &mut Vec<Block>,
 ) -> io::Result<()> {
-    //eprintln!("Searching for overlapping blocks at {:?}. Searching {:?}:{:?}-{:?}", file.tell()?, chrom_ix, start, end);
+    //eprintln!("Searching for blocks overlapping {:?}:{:?}-{:?}", chrom_ix, start, end);
 
     let isleaf: u8 = file.read_u8()?;
     assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
@@ -397,7 +397,7 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
             let data_offset = file.read_u64()?;
             let data_size = file.read_u64()?;
             if block_overlaps {
-                //eprintln!("Overlaps (leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
+                //eprintln!("Overlaps (leaf): {:?}:{:?}-{:?}:{:?} {:?} {:?}", start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
                 blocks.push(Block {
                     offset: data_offset,
                     size: data_size,
@@ -406,7 +406,7 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
         } else {
             let data_offset = file.read_u64()?;
             if block_overlaps {
-                //eprintln!("Overlaps (non-leaf): {:?}:{:?}-{:?} with {:?}:{:?}-{:?}:{:?} {:?}", chrom_ix, start, end, start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
+                //eprintln!("Overlaps (non-leaf): {:?}:{:?}-{:?}:{:?} {:?}", start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
                 childblocks.push(data_offset);
             }
         }

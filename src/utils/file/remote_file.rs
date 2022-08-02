@@ -17,7 +17,7 @@ const READ_SIZE: usize = 20 * 1024; // 20 KB chunks
 pub struct RemoteFile {
     url: String,
     current_position: u64,
-    current: Option<Cursor<Vec<u8>>>,
+    current: Option<(u64, Cursor<Vec<u8>>)>,
     cache: Option<File>,
 }
 
@@ -51,13 +51,13 @@ impl RemoteFile {
         if status == 1 {
             let mut bytes = vec![0u8; READ_SIZE];
             cache.read_exact(&mut bytes)?;
-            self.current = Some(Cursor::new(bytes.to_vec()));
+            self.current = Some((block_start, Cursor::new(bytes.to_vec())));
             return Ok(READ_SIZE as u64);
         } else if status == 2 {
             let bytes_available = cache.read_u64::<byteorder::BigEndian>()?;
             let mut bytes = vec![0u8; bytes_available as usize];
             cache.read_exact(&mut bytes)?;
-            self.current = Some(Cursor::new(bytes.to_vec()));
+            self.current = Some((block_start, Cursor::new(bytes.to_vec())));
             return Ok(bytes_available);
         }
 
@@ -106,7 +106,7 @@ impl RemoteFile {
             cache.write_all(block_data)?;
         }
         let len = bytes.len() as u64;
-        self.current = Some(Cursor::new(bytes));
+        self.current = Some((block_start, Cursor::new(bytes)));
         Ok(len)
     }
 }
@@ -137,25 +137,27 @@ impl Read for RemoteFile {
                     this.current
                         .as_mut()
                         .unwrap()
+                        .1
                         .seek(SeekFrom::Start(in_block))?;
                 }
                 Ok(bytes_available - in_block.min(bytes_available))
             };
-            let bytes_available = if self.current.is_none() {
-                reset_cursor(self)?
-            } else {
-                let bytes_in_cursor = self.current.as_ref().unwrap().get_ref().len() as u64;
-                let cursor_position = self.current.as_ref().unwrap().position();
-                let bytes_available = bytes_in_cursor - cursor_position;
-                // We don't have enough bytes in the cursor. Let's reload this
-                // block just to ensure that we have the data loaded.
-                if bytes_available < remaining_buf.len() as u64 {
-                    reset_cursor(self)?
-                } else {
-                    bytes_available
+            let bytes_available = match self.current.as_ref() {
+                None => reset_cursor(self)?,
+                Some((_, cursor)) => {
+                    let bytes_in_cursor = cursor.get_ref().len() as u64;
+                    let cursor_position = cursor.position();
+                    let bytes_available = bytes_in_cursor - cursor_position;
+                    // We don't have enough bytes in the cursor. Let's reload this
+                    // block just to ensure that we have the data loaded.
+                    if bytes_available < remaining_buf.len() as u64 {
+                        reset_cursor(self)?
+                    } else {
+                        bytes_available
+                    }
                 }
             };
-            let read = self.current.as_mut().unwrap().read(remaining_buf)?;
+            let read = self.current.as_mut().unwrap().1.read(remaining_buf)?;
             self.current_position += read as u64;
             total_read += read;
             if read == 0 || read == remaining_buf.len() || read == bytes_available as usize {
@@ -175,8 +177,6 @@ impl Read for RemoteFile {
 
 impl Seek for RemoteFile {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        // If we seek outside the current block, we have to invalidate.
-        let last_position = self.current_position;
         self.current_position = match pos {
             SeekFrom::Start(s) => s,
             SeekFrom::End(_) => unimplemented!(),
@@ -191,11 +191,10 @@ impl Seek for RemoteFile {
                 }
             }
         };
-        if let Some(cursor) = self.current.as_mut() {
-            let cursor_start = (last_position / READ_SIZE as u64) * READ_SIZE as u64;
-            let cursor_end = cursor_start + READ_SIZE as u64;
-            if cursor_start <= self.current_position && self.current_position < cursor_end {
-                let new_position = self.current_position - cursor_start;
+        if let Some((cursor_start, cursor)) = self.current.as_mut() {
+            let cursor_end = *cursor_start + READ_SIZE as u64;
+            if *cursor_start <= self.current_position && self.current_position < cursor_end {
+                let new_position = self.current_position - *cursor_start;
                 cursor.set_position(new_position);
                 return Ok(self.current_position);
             }
@@ -264,5 +263,15 @@ mod tests {
 
         let interval = remote.get_zoom_interval("chr2", 46087592, 174087320, 32768);
         let _: Vec<_> = interval.unwrap().collect();
+    }
+
+    #[ignore]
+    #[test]
+    fn test_remote4() {
+        let f = RemoteFile::new("https://proteinpaint.stjude.org/ppdemo/hg19/bigwig/temp.bw");
+        let remote = BigWigRead::from(f).unwrap();
+        //let remote = BigWigRead::from_file_and_attach("/home/hueyj/git/bigtools/temp.bw").unwrap();
+
+        let _: Vec<_> = remote.get_interval_move("chr1", 169253475, 169257278).unwrap().collect();
     }
 }
