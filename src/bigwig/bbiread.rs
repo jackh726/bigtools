@@ -436,6 +436,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     let file = bbifile.ensure_reader()?;
 
     // TODO: Could minimize this by chunking block reads
+    // FIXME: this relies on the current state of "store a BufReader as a reader"
     if known_offset != block.offset {
         file.seek(SeekFrom::Start(block.offset))?;
     }
