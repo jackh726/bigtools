@@ -21,7 +21,6 @@ where
     S: SeekableRead,
 {
     bigwig: &'a mut BigWigRead<R, S>,
-    known_offset: u64,
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
     vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
@@ -55,7 +54,6 @@ where
                     match get_block_values(
                         self.bigwig,
                         current_block,
-                        &mut self.known_offset,
                         self.chrom,
                         self.start,
                         self.end,
@@ -82,7 +80,6 @@ where
     S: SeekableRead,
 {
     bigwig: BigWigRead<R, S>,
-    known_offset: u64,
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
     vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
@@ -116,7 +113,6 @@ where
                     match get_block_values(
                         &mut self.bigwig,
                         current_block,
-                        &mut self.known_offset,
                         self.chrom,
                         self.start,
                         self.end,
@@ -302,7 +298,6 @@ where
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
             bigwig: self,
-            known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
             chrom,
@@ -321,7 +316,6 @@ where
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(OwnedIntervalIter {
             bigwig: self,
-            known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
             chrom,
@@ -370,10 +364,8 @@ where
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
-        use crate::utils::tell::Tell;
-        let mut known_offset = self.ensure_reader()?.tell()?;
         for block in blocks {
-            let block_values = get_block_values(self, block, &mut known_offset, chrom, start, end)?;
+            let block_values = get_block_values(self, block, chrom, start, end)?;
             let block_values = match block_values {
                 Some(v) => v,
                 None => continue,
@@ -393,12 +385,11 @@ where
 fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     bigwig: &mut BigWigRead<R, S>,
     block: Block,
-    known_offset: &mut u64,
     chrom: u32,
     start: u32,
     end: u32,
 ) -> io::Result<Option<Box<dyn Iterator<Item = Value> + Send>>> {
-    let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
+    let mut block_data_mut = get_block_data(bigwig, &block)?;
     let mut values: Vec<Value> = Vec::new();
 
     let chrom_id = block_data_mut.read_u32()?;
@@ -465,6 +456,5 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
         }
     }
 
-    *known_offset = block.offset + block.size;
     Ok(Some(Box::new(values.into_iter())))
 }

@@ -422,7 +422,6 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
 pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     bbifile: &mut B,
     block: &Block,
-    known_offset: u64,
 ) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
     use libdeflater::Decompressor;
 
@@ -436,9 +435,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     let mut file = bbifile.ensure_reader()?;
 
     // TODO: Could minimize this by chunking block reads
-    if known_offset != block.offset {
-        file.seek(SeekFrom::Start(block.offset))?;
-    }
+    file.seek(SeekFrom::Start(block.offset))?;
 
     let mut raw_data = vec![0u8; block.size as usize];
     file.read_exact(&mut raw_data)?;
@@ -460,12 +457,11 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
 pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     bbifile: &mut B,
     block: Block,
-    known_offset: &mut u64,
     chrom: u32,
     start: u32,
     end: u32,
 ) -> io::Result<Box<dyn Iterator<Item = ZoomRecord> + Send>> {
-    let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
+    let mut data_mut = get_block_data(bbifile, &block)?;
     let len = data_mut.inner_mut().get_mut().len();
     assert_eq!(len % (4 * 8), 0);
     let itemcount = len / (4 * 8);
@@ -497,7 +493,6 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
         }
     }
 
-    *known_offset = block.offset + block.size;
     Ok(Box::new(records.into_iter()))
 }
 
@@ -508,7 +503,6 @@ where
     B: BBIRead<S>,
 {
     bbifile: &'a mut B,
-    known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = ZoomRecord> + Send + 'a>>,
     chrom: u32,
@@ -526,7 +520,6 @@ where
     pub fn new(bbifile: &'a mut B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
         ZoomIntervalIter {
             bbifile,
-            known_offset: 0,
             blocks,
             vals: None,
             chrom,
@@ -561,7 +554,6 @@ where
                     match get_zoom_block_values(
                         self.bbifile,
                         current_block,
-                        &mut self.known_offset,
                         self.chrom,
                         self.start,
                         self.end,

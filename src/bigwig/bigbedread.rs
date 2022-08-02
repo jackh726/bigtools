@@ -20,7 +20,6 @@ where
     S: SeekableRead,
 {
     bigbed: &'a mut BigBedRead<R, S>,
-    known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = BedEntry> + Send + 'a>>,
     expected_chrom: u32,
@@ -53,7 +52,6 @@ where
                     match get_block_entries(
                         self.bigbed,
                         current_block,
-                        &mut self.known_offset,
                         self.expected_chrom,
                         self.start,
                         self.end,
@@ -79,7 +77,6 @@ where
     S: SeekableRead,
 {
     bigbed: BigBedRead<R, S>,
-    known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = BedEntry> + Send>>,
     expected_chrom: u32,
@@ -112,7 +109,6 @@ where
                     match get_block_entries(
                         &mut self.bigbed,
                         current_block,
-                        &mut self.known_offset,
                         self.expected_chrom,
                         self.start,
                         self.end,
@@ -288,7 +284,6 @@ where
             .id;
         Ok(IntervalIter {
             bigbed: self,
-            known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
             expected_chrom: chrom_ix,
@@ -314,7 +309,6 @@ where
             .id;
         Ok(OwnedIntervalIter {
             bigbed: self,
-            known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
             expected_chrom: chrom_ix,
@@ -362,12 +356,11 @@ where
 fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
     bigbed: &mut BigBedRead<R, S>,
     block: Block,
-    known_offset: &mut u64,
     expected_chrom: u32,
     start: u32,
     end: u32,
 ) -> io::Result<Box<dyn Iterator<Item = BedEntry> + Send>> {
-    let mut block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
+    let mut block_data_mut = get_block_data(bigbed, &block)?;
     let mut entries: Vec<BedEntry> = Vec::new();
 
     let mut read_entry = || -> io::Result<BedEntry> {
@@ -405,6 +398,5 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
         }
     }
 
-    *known_offset = block.offset + block.size;
     Ok(Box::new(entries.into_iter()))
 }
