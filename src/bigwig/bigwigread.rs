@@ -4,7 +4,7 @@ use std::io::BufReader;
 use std::io::{self, Seek, SeekFrom};
 use std::vec::Vec;
 
-use byteordered::{ByteOrdered, Endianness};
+use byteordered::ByteOrdered;
 
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
@@ -165,7 +165,7 @@ where
 {
     pub info: BBIFileInfo,
     reopen: R,
-    reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    reader: Option<S>,
     cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
@@ -193,18 +193,25 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok("".to_string())
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
+    fn ensure_reader(&mut self) -> io::Result<BBIReader<&mut S>> {
         if self.reader.is_none() {
-            let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
-            let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
-            self.reader.replace(file);
+            self.reader.replace(fp);
         }
-        Ok(self.reader.as_mut().unwrap())
+        // FIXME: In theory, can get rid of this unwrap by doing a `match` with
+        // `Option::insert` in the `None` case, but that currently runs into
+        // lifetime issues.
+        let endianness = self.info.header.endianness;
+        let reader =
+            ByteOrdered::runtime(BufReader::new(self.reader.as_mut().unwrap()), endianness);
+        Ok(reader)
     }
 
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
-        self.ensure_reader()?;
+        if self.reader.is_none() {
+            let fp = self.reopen.reopen()?;
+            self.reader.replace(fp);
+        }
         let endianness = self.info.header.endianness;
         let inner = self.reader.as_mut().unwrap();
         Ok(ByteOrdered::runtime(
@@ -266,7 +273,7 @@ where
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let summary_offset = self.info.header.total_summary_offset;
         let data_offset = self.info.header.full_data_offset;
-        let reader = self.ensure_reader()?;
+        let mut reader = self.ensure_reader()?;
         reader.seek(SeekFrom::Start(summary_offset))?;
         let bases_covered = reader.read_u64()?;
         let min_val = reader.read_f64()?;

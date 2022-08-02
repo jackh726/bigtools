@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
-use byteordered::{ByteOrdered, Endianness};
+use byteordered::ByteOrdered;
 
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
@@ -160,7 +160,7 @@ where
 {
     pub info: BBIFileInfo,
     reopen: R,
-    reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    reader: Option<S>,
     cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
@@ -189,9 +189,9 @@ where
     }
 
     fn autosql(&mut self) -> io::Result<String> {
-        self.ensure_reader()?;
-        let reader = self.reader.as_mut().unwrap();
-        reader.seek(SeekFrom::Start(self.info.header.auto_sql_offset))?;
+        let auto_sql_offset = self.info.header.auto_sql_offset;
+        let mut reader = self.ensure_reader()?;
+        reader.seek(SeekFrom::Start(auto_sql_offset))?;
         let mut buffer = Vec::new();
         reader.read_until(b'\0', &mut buffer)?;
         buffer.pop();
@@ -200,22 +200,26 @@ where
         Ok(autosql)
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
+    fn ensure_reader(&mut self) -> io::Result<BBIReader<&mut S>> {
         if self.reader.is_none() {
-            let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
-            let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
-            self.reader.replace(file);
+            self.reader.replace(fp);
         }
         // FIXME: In theory, can get rid of this unwrap by doing a `match` with
         // `Option::insert` in the `None` case, but that currently runs into
         // lifetime issues.
-        Ok(self.reader.as_mut().unwrap())
+        let endianness = self.info.header.endianness;
+        let reader =
+            ByteOrdered::runtime(BufReader::new(self.reader.as_mut().unwrap()), endianness);
+        Ok(reader)
     }
 
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
-        self.ensure_reader()?;
-        let endianness = self.reader.as_ref().unwrap().endianness();
+        if self.reader.is_none() {
+            let fp = self.reopen.reopen()?;
+            self.reader.replace(fp);
+        }
+        let endianness = self.info.header.endianness;
         let inner = self.reader.as_mut().unwrap();
         Ok(ByteOrdered::runtime(
             MemCachedRead::new(inner, &mut self.cache),
