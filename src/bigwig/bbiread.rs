@@ -90,7 +90,7 @@ impl From<io::Error> for BBIFileReadInfoError {
 pub type BBIReader<R> = ByteOrdered<BufReader<R>, Endianness>;
 // `MemCachedRead`is essentially a wrapper to allow caching hot regions of a
 // file in memory.
-pub type MemCachedReader<'a, R> = ByteOrdered<MemCachedRead<'a, R>, Endianness>;
+pub type MemCachedReader<'a, R> = ByteOrdered<MemCachedRead<'a, BBIReader<R>>, Endianness>;
 
 pub trait BBIRead<R: SeekableRead> {
     /// Get basic info about the bbi file
@@ -100,7 +100,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn autosql(&mut self) -> io::Result<String>;
 
     /// Gets a reader to the underlying file
-    fn ensure_reader(&mut self) -> io::Result<BBIReader<&mut R>>;
+    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<R>>;
 
     /// Gets a reader to the underlying file which caches the reads
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, R>>;
@@ -433,7 +433,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
             info.header.uncompress_buf_size as usize,
         )
     };
-    let mut file = bbifile.ensure_reader()?;
+    let file = bbifile.ensure_reader()?;
 
     // TODO: Could minimize this by chunking block reads
     if known_offset != block.offset {
