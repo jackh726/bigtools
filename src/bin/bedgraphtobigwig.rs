@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -6,9 +7,9 @@ use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::{self, BedParser};
-use bigtools::bigwig::{BigWigWrite, WriteGroupsError};
+use bigtools::bigwig::BigWigWrite;
 
-fn main() -> Result<(), WriteGroupsError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BedGraphToBigWig")
         .about("Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.")
         .arg(Arg::new("bedgraph")

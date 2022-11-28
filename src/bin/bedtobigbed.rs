@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -6,9 +7,9 @@ use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::{self, BedParser};
-use bigtools::bigwig::{BigBedWrite, WriteGroupsError};
+use bigtools::bigwig::BigBedWrite;
 
-fn main() -> Result<(), WriteGroupsError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BedToBigBed")
         .arg(Arg::new("bed")
                 .help("the n to convert to a bigbed")

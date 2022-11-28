@@ -1,7 +1,7 @@
-use std::io::{self};
+use std::error::Error;
 
 #[test]
-fn test_valid_read() -> io::Result<()> {
+fn test_valid_read() -> Result<(), Box<dyn Error>> {
     use std::path::PathBuf;
 
     use bigtools::bigwig::{BBIRead, BigWigRead};
@@ -39,7 +39,7 @@ fn test_valid_read() -> io::Result<()> {
 }
 
 #[test]
-fn test_values() -> io::Result<()> {
+fn test_values() -> Result<(), Box<dyn Error>> {
     use std::path::PathBuf;
 
     use bigtools::bigwig::BigWigRead;

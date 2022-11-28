@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
 
@@ -5,7 +6,8 @@ use clap::{App, Arg};
 
 use futures::task::SpawnExt;
 
-use bigtools::bigwig::{BBIRead, BigWigRead, BigWigReadAttachError, ChromAndSize};
+use bigtools::bbiread::BBIReadError;
+use bigtools::bigwig::{BBIRead, BigWigRead, ChromAndSize};
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
@@ -13,7 +15,7 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     bigwig: BigWigRead<R, S>,
     mut out_file: File,
     nthreads: usize,
-) -> std::io::Result<()> {
+) -> Result<(), BBIReadError> {
     /*
     // This is the simple single-threaded approach
     let mut chroms: Vec<ChromAndSize> = bigwig.get_chroms();
@@ -45,7 +47,7 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
                 mut bigwig: BigWigRead<R, S>,
                 chrom: ChromAndSize,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
-            ) -> io::Result<()> {
+            ) -> Result<(), BBIReadError> {
                 for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
                     let val = raw_val?;
                     writer.write_fmt(format_args!(
@@ -72,7 +74,7 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     Ok(())
 }
 
-fn main() -> Result<(), BigWigReadAttachError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BigWigToBedGraph")
         .about("Converts an input bigWig to a bedGraph. Can be multi-threaded for substantial speedups. Note for roughly each core, one temporary file will be opened.")
         .arg(Arg::new("bigwig")

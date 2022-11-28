@@ -9,7 +9,6 @@
 //!
 //! The final layer of abstraction is a thin wrapper around the previous to provide some optional
 //! error checking and to keep track of the chromosomes seen.
-
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::BuildHasher;
@@ -17,8 +16,8 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
+use thiserror::Error;
 
-use crate::bigwig::WriteGroupsError;
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
@@ -207,7 +206,7 @@ impl<S: StreamingBedValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `BedChromData` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next_chrom(&mut self) -> Option<io::Result<(String, BedChromData<S>)>> {
+    pub fn next_chrom(&mut self) -> Option<Result<(String, BedChromData<S>), BedParseError>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         if state.next_val.is_none() {
             match state.advance_state(false) {
@@ -238,7 +237,7 @@ impl<S: StreamingBedValues> BedParser<S> {
 }
 
 impl<S: StreamingBedValues> BedParserState<S> {
-    fn advance_state(&mut self, replace_current: bool) -> io::Result<()> {
+    fn advance_state(&mut self, replace_current: bool) -> Result<(), BedParseError> {
         self.curr_val = self.next_val.take();
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
             ChromOpt::Diff(real_chrom) => {
@@ -270,6 +269,20 @@ impl<S: StreamingBedValues> BedParserState<S> {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum BedParseError {
+    #[error("{}", .0)]
+    InvalidInput(String),
+    #[error("{}", .0)]
+    IoError(io::Error),
+}
+
+impl From<io::Error> for BedParseError {
+    fn from(e: io::Error) -> Self {
+        Self::IoError(e)
+    }
+}
+
 // The separation here between the "current" state and the shared state comes
 // from the observation that once we *start* on a chromosome, we can't move on
 // to the next until we've exhausted the current. In this *particular*
@@ -282,9 +295,10 @@ pub struct BedChromData<S: StreamingBedValues> {
 }
 
 impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
-    type V = S::Value;
+    type Value = S::Value;
+    type Error = BedParseError;
 
-    fn next(&mut self) -> Option<io::Result<S::Value>> {
+    fn next(&mut self) -> Option<Result<Self::Value, Self::Error>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -371,12 +385,12 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                 if let Some(c) = last {
                     // TODO: test this correctly fails
                     if !self.allow_out_of_order_chroms && c >= chrom {
-                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                        return ChromDataState::Error(BedParseError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                     }
                 }
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
-                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                    None => return ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
                 let chrom_id = chrom_ids.get_id(&chrom);
                 let read_data = (chrom, chrom_id, length, group);

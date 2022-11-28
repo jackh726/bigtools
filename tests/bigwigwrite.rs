@@ -1,7 +1,8 @@
+use std::error::Error;
 use std::io::{self};
 
 #[test]
-fn test() -> io::Result<()> {
+fn test() -> Result<(), Box<dyn Error>> {
     use std::collections::HashMap;
     use std::fs::File;
     use std::path::PathBuf;

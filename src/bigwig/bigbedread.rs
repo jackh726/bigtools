@@ -4,10 +4,11 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use thiserror::Error;
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
-    ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, BBIReader,
+    Block, ChromAndSize, MemCachedReader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -34,7 +35,7 @@ where
     R: Reopen<S>,
     S: SeekableRead,
 {
-    type Item = io::Result<BedEntry>;
+    type Item = Result<BedEntry, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -93,7 +94,7 @@ where
     R: Reopen<S>,
     S: SeekableRead,
 {
-    type Item = io::Result<BedEntry>;
+    type Item = Result<BedEntry, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -130,10 +131,13 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum BigBedReadAttachError {
+    #[error("File is not a bigBed.")]
     NotABigBed,
+    #[error("The chromosomes are invalid.")]
     InvalidChroms,
+    #[error("An error occurred: {}", .0)]
     IoError(io::Error),
 }
 
@@ -272,7 +276,8 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<BedEntry>> + Send + 'a> {
+    ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + Send + 'a, BBIReadError>
+    {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
@@ -298,7 +303,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<BedEntry>> + Send> {
+    ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + Send, BBIReadError> {
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
@@ -325,7 +330,8 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, BBIReadError>
+    {
         let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
             .info
@@ -335,10 +341,9 @@ where
         {
             Some(h) => h,
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No reduction level found.",
-                ));
+                return Err(
+                    io::Error::new(io::ErrorKind::Other, "No reduction level found.").into(),
+                );
             }
         };
 
@@ -362,7 +367,7 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
     expected_chrom: u32,
     start: u32,
     end: u32,
-) -> io::Result<Box<dyn Iterator<Item = BedEntry> + Send>> {
+) -> Result<Box<dyn Iterator<Item = BedEntry> + Send>, BBIReadError> {
     let mut block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
     let mut entries: Vec<BedEntry> = Vec::new();
 

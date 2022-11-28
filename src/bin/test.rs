@@ -1,8 +1,10 @@
+use std::error::Error;
+
 use clap::{App, Arg};
 
-use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
+use bigtools::bigwig::BigBedRead;
 
-fn main() -> Result<(), BigBedReadAttachError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Testing")
         .arg(
             Arg::new("bigbed")

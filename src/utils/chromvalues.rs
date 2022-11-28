@@ -1,8 +1,7 @@
-use std::io;
-
 pub trait ChromValues {
-    type V;
+    type Value;
+    type Error: Send;
 
-    fn next(&mut self) -> Option<io::Result<Self::V>>;
-    fn peek(&mut self) -> Option<&Self::V>;
+    fn next(&mut self) -> Option<Result<Self::Value, Self::Error>>;
+    fn peek(&mut self) -> Option<&Self::Value>;
 }

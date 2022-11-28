@@ -1,10 +1,12 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use clap::{App, Arg};
 
-use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigtools::bbiread::BBIReadError;
+use bigtools::bigwig::BigWigRead;
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 
@@ -18,7 +20,7 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     mut bigwigin: BigWigRead<R, S>,
     out: File,
     options: Options,
-) -> io::Result<()> {
+) -> Result<(), BBIReadError> {
     let uniquenames = {
         if !options.withnames {
             true
@@ -89,7 +91,7 @@ fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     Ok(())
 }
 
-fn main() -> Result<(), BigWigReadAttachError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BigWigInfo")
         .arg(Arg::new("bigwig")
                 .help("The input bigwig file")

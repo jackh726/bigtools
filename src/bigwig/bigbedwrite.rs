@@ -38,14 +38,14 @@ impl BigBedWrite {
     }
 
     pub fn write<
-        Values: ChromValues<V = BedEntry> + Send + 'static,
+        Values: ChromValues<Value = BedEntry> + Send + 'static,
         V: ChromData<Output = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         pool: ThreadPool,
-    ) -> Result<(), WriteGroupsError> {
+    ) -> Result<(), WriteGroupsError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -164,9 +164,9 @@ impl BigBedWrite {
         mut group: I,
         chrom: String,
         chrom_length: u32,
-    ) -> Result<Summary, WriteGroupsError>
+    ) -> Result<Summary, WriteGroupsError<I::Error>>
     where
-        I: ChromValues<V = BedEntry> + Send,
+        I: ChromValues<Value = BedEntry> + Send,
     {
         let ChromProcessingInput {
             mut zooms_channels,
@@ -203,7 +203,10 @@ impl BigBedWrite {
         };
         let mut total_items = 0;
         while let Some(current_val) = group.next() {
-            let current_val = current_val?;
+            let current_val = match current_val {
+                Ok(v) => v,
+                Err(e) => return Err(WriteGroupsError::SourceError(e)),
+            };
             total_items += 1;
             // TODO: test these correctly fails
             if current_val.start > current_val.end {
@@ -526,11 +529,14 @@ impl BigBedWrite {
     ///   All of this is done for zoom sections too.
     ///
     /// The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-    pub fn begin_processing_chrom<I: ChromValues<V = BedEntry> + Send + 'static>(
+    pub fn begin_processing_chrom<I: ChromValues<Value = BedEntry> + Send + 'static>(
         read_data: ReadData<I>,
         mut pool: ThreadPool,
         options: BBIWriteOptions,
-    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> {
+    ) -> io::Result<(
+        WriteSummaryFuture<I::Error>,
+        ChromProcessingOutput<I::Error>,
+    )> {
         let (chrom, chrom_id, chrom_length, group) = read_data;
 
         let (processing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;

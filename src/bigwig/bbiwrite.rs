@@ -4,6 +4,7 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
 
 use byteorder::{NativeEndian, WriteBytesExt};
+use thiserror::Error;
 
 use futures::channel::mpsc::{channel, Receiver};
 use futures::executor::ThreadPool;
@@ -93,37 +94,27 @@ impl Default for BBIWriteOptions {
     }
 }
 
-#[derive(Debug)]
-pub enum WriteGroupsError {
+#[derive(Error, Debug)]
+pub enum WriteGroupsError<SourceError> {
+    #[error("{}", .0)]
     InvalidInput(String),
-    IoError(io::Error),
+    #[error("{}", .0)]
+    IoError(#[from] io::Error),
+    #[error("SourceError")]
+    SourceError(SourceError),
 }
 
-impl std::fmt::Display for WriteGroupsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidInput(message) => write!(f, "{}", message),
-            Self::IoError(e) => write!(f, "{}", e),
-        }
-    }
-}
-
-impl From<io::Error> for WriteGroupsError {
-    fn from(error: io::Error) -> Self {
-        WriteGroupsError::IoError(error)
-    }
-}
-
-impl<W> From<io::IntoInnerError<W>> for WriteGroupsError {
+impl<W, S> From<io::IntoInnerError<W>> for WriteGroupsError<S> {
     fn from(error: io::IntoInnerError<W>) -> Self {
         WriteGroupsError::IoError(error.into())
     }
 }
 
-pub struct TempZoomInfo {
+pub struct TempZoomInfo<SourceError> {
     pub resolution: u32,
-    pub data_write_future:
-        Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
+    pub data_write_future: Box<
+        dyn Future<Output = Result<(usize, usize), WriteGroupsError<SourceError>>> + Send + Unpin,
+    >,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: filebufferedchannel::Receiver<Section>,
 }
@@ -136,16 +127,17 @@ pub(crate) struct ChromProcessingInput {
     pub(crate) ftx: ChromProcessingInputSectionChannel,
 }
 
-pub struct ChromProcessingOutput {
+pub struct ChromProcessingOutput<SourceError> {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
-    pub data_write_future:
-        Box<dyn Future<Output = Result<(usize, usize), WriteGroupsError>> + Send + Unpin>,
-    pub zooms: Vec<TempZoomInfo>,
+    pub data_write_future: Box<
+        dyn Future<Output = Result<(usize, usize), WriteGroupsError<SourceError>>> + Send + Unpin,
+    >,
+    pub zooms: Vec<TempZoomInfo<SourceError>>,
 }
 
-pub type WriteSummaryFuture =
-    Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError>> + Send>>;
+pub type WriteSummaryFuture<SourceError> =
+    Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError<SourceError>>> + Send>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -509,7 +501,7 @@ pub type ReadData<I> = (String, u32, u32, I);
 pub enum ChromDataState<D: ChromData> {
     Read(ReadData<D::Output>, D),
     Finished(IdMap),
-    Error(WriteGroupsError),
+    Error(<D::Output as ChromValues>::Error),
 }
 
 pub trait ChromData: Sized {
@@ -524,7 +516,10 @@ pub(crate) async fn write_vals<
         ReadData<V::Output>,
         ThreadPool,
         BBIWriteOptions,
-    ) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)>,
+    ) -> io::Result<(
+        WriteSummaryFuture<Values::Error>,
+        ChromProcessingOutput<Values::Error>,
+    )>,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
@@ -540,7 +535,7 @@ pub(crate) async fn write_vals<
         Vec<ZoomInfo>,
         usize,
     ),
-    WriteGroupsError,
+    WriteGroupsError<Values::Error>,
 > {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
@@ -596,8 +591,11 @@ pub(crate) async fn write_vals<
                 }
 
                 // All the futures are actually just handles, so these are purely for the result
-                let (chrom_summary, (_num_sections, uncompressed_buf_size)) =
-                    try_join!(summary_future, data_write_future)?;
+                let joined_future = match try_join!(summary_future, data_write_future) {
+                    Ok(f) => f,
+                    Err(e) => return Err(e),
+                };
+                let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(Box::new(sections.into_iter()));
                 raw_file = data.await_real_file();
@@ -610,7 +608,11 @@ pub(crate) async fn write_vals<
                 } in zooms.into_iter()
                 {
                     let zoom = zooms_map.get_mut(&resolution).unwrap();
-                    let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
+                    let data_write_data = data_write_future.await;
+                    let (_num_sections, uncompressed_buf_size) = match data_write_data {
+                        Ok(d) => d,
+                        Err(e) => return Err(e),
+                    };
                     max_uncompressed_buf_size =
                         max_uncompressed_buf_size.max(uncompressed_buf_size);
                     zoom.0.push(Box::new(sections.into_iter()));
@@ -630,7 +632,7 @@ pub(crate) async fn write_vals<
                 }
             }
             ChromDataState::Finished(chrom_ids) => break chrom_ids,
-            ChromDataState::Error(err) => return Err(err),
+            ChromDataState::Error(err) => return Err(WriteGroupsError::SourceError(err)),
         }
     };
 
@@ -669,11 +671,11 @@ pub(crate) async fn write_vals<
     ))
 }
 
-async fn write_data<W: Write>(
+async fn write_data<W: Write, SourceError: Send>(
     mut data_file: W,
     mut section_sender: filebufferedchannel::Sender<Section>,
     mut frx: Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
-) -> Result<(usize, usize), WriteGroupsError> {
+) -> Result<(usize, usize), WriteGroupsError<SourceError>> {
     let mut current_offset = 0;
     let mut total = 0;
     let mut max_uncompressed_buf_size = 0;
@@ -698,10 +700,10 @@ async fn write_data<W: Write>(
 }
 
 /// Sets up the channels and write "threads" for the data and zoom sections
-pub(crate) fn setup_channels(
+pub(crate) fn setup_channels<SourceError: Send + 'static>(
     pool: &mut ThreadPool,
     options: BBIWriteOptions,
-) -> io::Result<(ChromProcessingInput, ChromProcessingOutput)> {
+) -> io::Result<(ChromProcessingInput, ChromProcessingOutput<SourceError>)> {
     let (ftx, frx) = channel(options.channel_size);
 
     let (sections_handle, buf, section_receiver) = {

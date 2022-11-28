@@ -1,7 +1,7 @@
-use std::io::{self};
+use std::error::Error;
 
 #[test]
-fn bigbedwrite_test() -> io::Result<()> {
+fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     use std::collections::HashMap;
     use std::fs::File;
     use std::path::PathBuf;

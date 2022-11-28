@@ -1,6 +1,4 @@
-use std::io;
-
-use crate::bigwig::Value;
+use crate::{bigwig::Value, BBIReadError};
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
@@ -308,9 +306,9 @@ pub fn merge_into(one: Value, two: Value) -> (Value, Option<Value>, Option<Value
     }
 }
 
-struct ValueIter<I>
+struct ValueIter<E, I>
 where
-    I: Iterator<Item = io::Result<Value>> + Send,
+    I: Iterator<Item = Result<Value, E>> + Send,
 {
     error: bool,
     sections: Vec<(I, Option<Value>)>,
@@ -319,11 +317,11 @@ where
     next_start: u32,
 }
 
-impl<I> Iterator for ValueIter<I>
+impl<E, I> Iterator for ValueIter<E, I>
 where
-    I: Iterator<Item = io::Result<Value>> + Send,
+    I: Iterator<Item = Result<Value, E>> + Send,
 {
-    type Item = io::Result<Value>;
+    type Item = Result<Value, E>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.error {
@@ -501,9 +499,11 @@ where
     }
 }
 
-pub fn merge_sections_many<I>(sections: Vec<I>) -> impl Iterator<Item = io::Result<Value>> + Send
+pub fn merge_sections_many<I>(
+    sections: Vec<I>,
+) -> impl Iterator<Item = Result<Value, BBIReadError>> + Send
 where
-    I: Iterator<Item = io::Result<Value>> + Send,
+    I: Iterator<Item = Result<Value, BBIReadError>> + Send,
 {
     ValueIter {
         error: false,

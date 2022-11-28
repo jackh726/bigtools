@@ -5,10 +5,11 @@ use std::io::{self, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use thiserror::Error;
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReader, Block,
-    ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, BBIReader,
+    Block, ChromAndSize, MemCachedReader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -97,7 +98,7 @@ where
     R: Reopen<S>,
     S: SeekableRead,
 {
-    type Item = io::Result<Value>;
+    type Item = Result<Value, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -126,7 +127,7 @@ where
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            return Some(Err(e));
+                            return Some(Err(e.into()));
                         }
                     }
                 }
@@ -135,10 +136,13 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum BigWigReadAttachError {
+    #[error("NotABigWig")]
     NotABigWig,
+    #[error("InvalidChroms")]
     InvalidChroms,
+    #[error("{}", .0)]
     IoError(io::Error),
 }
 
@@ -290,7 +294,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send + 'a> {
+    ) -> Result<impl Iterator<Item = io::Result<Value>> + Send + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
@@ -309,7 +313,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<Value>> + Send> {
+    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + Send, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(OwnedIntervalIter {
@@ -329,7 +333,8 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> io::Result<impl Iterator<Item = io::Result<ZoomRecord>> + Send + 'a> {
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, BBIReadError>
+    {
         let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
             .info
@@ -339,10 +344,9 @@ where
         {
             Some(h) => h,
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No reduction level found.",
-                ));
+                return Err(
+                    io::Error::new(io::ErrorKind::Other, "No reduction level found.").into(),
+                );
             }
         };
 
@@ -359,9 +363,16 @@ where
 
     /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
     /// positions with no data in the bigWig will be `std::f32::NAN`.
-    pub fn values(&mut self, chrom_name: &str, start: u32, end: u32) -> io::Result<Vec<f32>> {
+    pub fn values(
+        &mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<f32>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let blocks = self
+            .get_overlapping_blocks(chrom_name, start, end)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.ensure_reader()?.tell()?;

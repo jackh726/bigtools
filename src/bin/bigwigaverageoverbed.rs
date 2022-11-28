@@ -1,12 +1,13 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 use clap::{App, Arg};
 
-use bigtools::bigwig::{BigWigRead, BigWigReadAttachError};
+use bigtools::bigwig::BigWigRead;
 use bigtools::utils::misc::{bigwig_average_over_bed, BigWigAverageOverBedOptions, Name};
 
-fn main() -> Result<(), BigWigReadAttachError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BigWigAverageOverBed")
         .arg(Arg::new("bigwig")
                 .help("The input bigwig file")

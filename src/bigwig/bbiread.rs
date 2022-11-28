@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use thiserror::Error;
 
 use crate::bigwig::{
     BBIFile, Summary, ZoomHeader, ZoomRecord, BIGBED_MAGIC, BIGWIG_MAGIC, CHROM_TREE_MAGIC,
@@ -75,16 +76,36 @@ impl BBIFileInfo {
     }
 }
 
+#[derive(Error, Debug)]
 pub enum BBIFileReadInfoError {
+    #[error("Invalid magic (likely not a BigWig or BigBed file)")]
     UnknownMagic,
+    #[error("Invalid chromosomes section")]
     InvalidChroms,
-    IoError(io::Error),
+    #[error("Error occurred: {}", .0)]
+    IoError(#[from] io::Error),
 }
 
-impl From<io::Error> for BBIFileReadInfoError {
-    fn from(error: io::Error) -> Self {
-        BBIFileReadInfoError::IoError(error)
-    }
+#[derive(Error, Debug)]
+pub enum CirTreeSearchError {
+    #[error("The passed chromosome ({}) was incorrect.", .0)]
+    InvalidChromosome(String),
+    #[error("Invalid magic (likely a bug).")]
+    UnknownMagic,
+    #[error("Error occurred: {}", .0)]
+    IoError(#[from] io::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum BBIReadError {
+    #[error("The passed chromosome ({}) was incorrect.", .0)]
+    InvalidChromosome(String),
+    #[error("Invalid magic (likely a bug).")]
+    UnknownMagic,
+    #[error("Error searching the cir tree.")]
+    CirTreeSearchError(#[from] CirTreeSearchError),
+    #[error("Error occurred: {}", .0)]
+    IoError(#[from] io::Error),
 }
 
 pub type BBIReader<R> = ByteOrdered<BufReader<R>, Endianness>;
@@ -119,7 +140,7 @@ pub trait BBIRead<R: SeekableRead> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<Vec<Block>> {
+    ) -> Result<Vec<Block>, CirTreeSearchError> {
         // TODO: Move anything relying on self out to separate method
         let chrom_ix = {
             let chrom_info = &self.get_info().chrom_info;
@@ -128,32 +149,33 @@ pub trait BBIRead<R: SeekableRead> {
             match chrom {
                 Some(c) => c.id,
                 None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("{} not found.", chrom_name),
-                    ))
+                    return Err(CirTreeSearchError::InvalidChromosome(
+                        chrom_name.to_string(),
+                    ));
                 }
             }
         };
 
+        let endianness = self.get_info().header.endianness;
         let mut file = self.ensure_mem_cached_reader()?;
         file.seek(SeekFrom::Start(at))?;
-        let magic = file.read_u32()?;
+        let mut header_data = [0; 48];
+        file.read_exact(&mut header_data)?;
+        let mut header_data = ByteOrdered::runtime(Cursor::new(header_data), endianness);
+        // All the following unwraps should compile to no-ops, since the underlying structure is an array
+        let magic = header_data.read_u32().unwrap();
         if magic != CIR_TREE_MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Invalid file format: CIR_TREE_MAGIC does not match.",
-            ));
+            return Err(CirTreeSearchError::UnknownMagic);
         }
-        let _blocksize = file.read_u32()?;
-        let _item_count = file.read_u64()?;
-        let _start_chrom_idx = file.read_u32()?;
-        let _start_base = file.read_u32()?;
-        let _end_chrom_idx = file.read_u32()?;
-        let _end_base = file.read_u32()?;
-        let _end_file_offset = file.read_u64()?;
-        let _item_per_slot = file.read_u32()?;
-        let _reserved = file.read_u32()?;
+        let _blocksize = header_data.read_u32().unwrap();
+        let _item_count = header_data.read_u64().unwrap();
+        let _start_chrom_idx = header_data.read_u32().unwrap();
+        let _start_base = header_data.read_u32().unwrap();
+        let _end_chrom_idx = header_data.read_u32().unwrap();
+        let _end_base = header_data.read_u32().unwrap();
+        let _end_file_offset = header_data.read_u64().unwrap();
+        let _item_per_slot = header_data.read_u32().unwrap();
+        let _reserved = header_data.read_u32().unwrap();
 
         // TODO: could do some optimization here to check if our interval overlaps with any data
 
@@ -169,7 +191,7 @@ pub trait BBIRead<R: SeekableRead> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> io::Result<Vec<Block>> {
+    ) -> Result<Vec<Block>, CirTreeSearchError> {
         let full_index_offset = self.get_info().header.full_index_offset;
 
         self.search_cir_tree(full_index_offset, chrom_name, start, end)
@@ -465,7 +487,7 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     chrom: u32,
     start: u32,
     end: u32,
-) -> io::Result<Box<dyn Iterator<Item = ZoomRecord> + Send>> {
+) -> Result<Box<dyn Iterator<Item = ZoomRecord> + Send>, BBIReadError> {
     let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
     let len = data_mut.inner_mut().get_mut().len();
     assert_eq!(len % (4 * 8), 0);
@@ -544,7 +566,7 @@ where
     S: SeekableRead,
     B: BBIRead<S>,
 {
-    type Item = io::Result<ZoomRecord>;
+    type Item = Result<ZoomRecord, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {

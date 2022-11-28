@@ -1,29 +1,31 @@
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
-use bigtools::{ChromData, ChromDataState};
 use clap::{App, Arg};
 
+use bigtools::bbiread::BBIReadError;
 use bigtools::bigwig::Value;
-use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite, WriteGroupsError};
+use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::filebufferedchannel;
 use bigtools::utils::idmap::IdMap;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::seekableread::ReopenableFile;
+use bigtools::{ChromData, ChromDataState};
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
-    iter: std::iter::Peekable<Box<dyn Iterator<Item = io::Result<Value>> + Send>>,
+    iter: std::iter::Peekable<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>>,
 }
 
 impl MergingValues {
     pub fn new<I: 'static>(iters: Vec<I>) -> Self
     where
-        I: Iterator<Item = io::Result<Value>> + Send,
+        I: Iterator<Item = Result<Value, BBIReadError>> + Send,
     {
-        let iter: Box<dyn Iterator<Item = io::Result<Value>> + Send> = Box::new(
+        let iter: Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send> = Box::new(
             merge_sections_many(iters)
                 .filter(|x| x.as_ref().map(|v| v.value != 0.0).unwrap_or(true)),
         );
@@ -34,9 +36,10 @@ impl MergingValues {
 }
 
 impl ChromValues for MergingValues {
-    type V = Value;
+    type Value = Value;
+    type Error = BBIReadError;
 
-    fn next(&mut self) -> Option<io::Result<Value>> {
+    fn next(&mut self) -> Option<Result<Value, BBIReadError>> {
         self.iter.next()
     }
 
@@ -52,10 +55,13 @@ impl ChromValues for MergingValues {
 pub fn get_merged_vals(
     bigwigs: Vec<BigWigRead<ReopenableFile, File>>,
     max_zooms: usize,
-) -> io::Result<(
-    impl Iterator<Item = io::Result<(String, u32, MergingValues)>>,
-    HashMap<String, u32>,
-)> {
+) -> Result<
+    (
+        impl Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>>,
+        HashMap<String, u32>,
+    ),
+    BBIReadError,
+> {
     let (chrom_sizes, chrom_map) = {
         // NOTE: We don't need to worry about max fds here because chroms are cached.
 
@@ -79,10 +85,10 @@ pub fn get_merged_vals(
             let size = sizes[0];
             if !sizes.iter().all(|s| *s == size) {
                 eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-                return Err(io::Error::new(
+                return Err(BBIReadError::IoError(io::Error::new(
                     io::ErrorKind::Other,
                     "Invalid input (nonmatching chroms)",
-                ));
+                )));
             }
 
             chrom_sizes.insert(chrom.clone(), (size, bws));
@@ -104,19 +110,19 @@ pub fn get_merged_vals(
         if bws.len() > max_bw_fds {
             eprintln!("Number of bigWigs to merge would exceed the maximum number of file descriptors. Splitting into chunks.");
 
-            let mut merges: Vec<Box<dyn Iterator<Item = io::Result<Value>> + Send>> = bws
+            let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>> = bws
                 .into_iter()
                 .map(|b| {
                     let iter = b.get_interval_move(&chrom, 1, size)?;
                     Ok(Box::new(iter) as Box<_>)
                 })
-                .collect::<io::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, BBIReadError>>()?;
 
             while merges.len() > max_bw_fds {
                 merges = {
                     let len = merges.len();
                     let mut vals = merges.into_iter().peekable();
-                    let mut merges: Vec<Box<dyn Iterator<Item = io::Result<Value>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
+                    let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
 
                     while vals.peek().is_some() {
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
@@ -139,7 +145,7 @@ pub fn get_merged_vals(
             let iters: Vec<_> = bws
                 .into_iter()
                 .map(|b| b.get_interval_move(&chrom, 1, size))
-                .collect::<io::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, _>>()?;
             let mergingvalues = MergingValues::new(iters);
 
             Ok((chrom, size, mergingvalues))
@@ -150,7 +156,7 @@ pub fn get_merged_vals(
 }
 
 struct ChromGroupReadImpl {
-    iter: Box<dyn Iterator<Item = io::Result<(String, u32, MergingValues)>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>> + Send>,
     chrom_ids: Option<IdMap>,
 }
 
@@ -175,7 +181,7 @@ impl ChromData for ChromGroupReadImpl {
     }
 }
 
-fn main() -> Result<(), WriteGroupsError> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BigWigMerge")
         .arg(Arg::new("output")
                 .help("the path of the merged output bigwig (if .bw or .bigWig) or bedGraph (if .bedGraph)")
