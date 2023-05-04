@@ -13,7 +13,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::hash::BuildHasher;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, SeekFrom, Seek};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -420,7 +421,7 @@ where F: Fn(
     chrom_map: HashMap<String, u32, H>,
     allow_out_of_order_chroms: bool,
     pool: ThreadPool,
-    path: Path,
+    path: PathBuf,
     chrom_ids: Option<IdMap>,
     last_chrom: Option<String>,
     chrom_indices: Vec<(u64, String)>,
@@ -442,8 +443,10 @@ where F: Fn(
         mut chrom_indices: Vec<(u64, String)>,
         allow_out_of_order_chroms: bool,
         pool: ThreadPool,
-        path: Path,
+        path: PathBuf,
     ) -> Self {
+        // For speed, we `pop` and go in reverse order. We want forward order,
+        // so reverse here.
         chrom_indices.reverse();
 
         BedParserParallelStreamingIterator {
@@ -462,90 +465,76 @@ where F: Fn(
     }
 }
 
-impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserParallelStreamingIterator<S, H> {
-    type Output = BedChromData<S>;
+impl<F, S: StreamingBedValues, H: BuildHasher> ChromData for BedParserParallelStreamingIterator<F, S, H> where F: Fn(
+    ReadData<S>,
+    ThreadPool,
+    BBIWriteOptions,
+) -> io::Result<(WriteSummaryFuture, ChromProcessingOutput)> {
+    type Output = BedChromData<BedFileStream<S, BufReader<File>>>;
 
     fn advance(mut self) -> ChromDataState<Self> {
-        let begin_next = || {
-            let curr = match self.chrom_indices.pop() {
+        let begin_next = |_self: Self| {
+            let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
                 None => {
-                    let chrom_ids = self.chrom_ids.take().unwrap();
-                    ChromDataState::Finished(chrom_ids)
+                    let chrom_ids = _self.chrom_ids.take().unwrap();
+                    return ChromDataState::Finished(chrom_ids);
                 },
             };
             let chrom = curr.1;
 
-            let file = match File::open(&self.path) {
+            let file = match File::open(&_self.path) {
                 Ok(f) => f,
-                Err(err) => ChromDataState::Err(err),
+                Err(err) => return ChromDataState::Error(err.into()),
             };
             file.seek(SeekFrom::Start(curr.0));
             let parser = BedParser::new(BedFileStream {
                 bed: StreamingLineReader::new(BufReader::new(file)),
-                parse: self.parse_fn,
+                parse: _self.parse_fn,
             });
 
             match parser.next_chrom() {
                 Some(Err(err)) => ChromDataState::Error(err.into()),
                 Some(Ok((chrom, group))) => {
-                    let chrom_ids = self.chrom_ids.as_mut().unwrap();
-                    let last = self.last_chrom.replace(chrom.clone());
+                    let chrom_ids = _self.chrom_ids.as_mut().unwrap();
+                    let last = _self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
                         // TODO: test this correctly fails
                         if !self.allow_out_of_order_chroms && c >= chrom {
                             return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                         }
                     }
-                    let length = match self.chrom_map.get(&chrom) {
+                    let length = match _self.chrom_map.get(&chrom) {
                         Some(length) => *length,
                         None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                     };
                     let chrom_id = chrom_ids.get_id(&chrom);
                     let read_data = (chrom, chrom_id, length, group);
     
-                    ChromDataState::Read(read_data, self)
+                    ChromDataState::Read(read_data, _self)
                 }
                 None => {
-                    let chrom_ids = self.chrom_ids.take().unwrap();
+                    let chrom_ids = _self.chrom_ids.take().unwrap();
                     ChromDataState::Finished(chrom_ids)
                 }
             }
-
-            Some(read)
         };
 
         let next = self
             .queued_reads
             .pop_front()
-            .or_else(|| {
-                let curr = self.chrom_indices.pop();
-            });
-        match self.bed_data.next_chrom() {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, group))) => {
-                let chrom_ids = self.chrom_ids.as_mut().unwrap();
-                let last = self.last_chrom.replace(chrom.clone());
-                if let Some(c) = last {
-                    // TODO: test this correctly fails
-                    if !self.allow_out_of_order_chroms && c >= chrom {
-                        return ChromDataState::Error(WriteGroupsError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
-                    }
+            .unwrap_or_else(|| {
+                /*
+                let next_chrom = begin_next(self);
+                match next_chrom {
+                    ChromDataState::Read(read_data, _self) => {},
+                    ChromDataState::Finished(chrom_ids) => todo!(),
+                    ChromDataState::Error(error) => todo!(),
                 }
-                let length = match self.chrom_map.get(&chrom) {
-                    Some(length) => *length,
-                    None => return ChromDataState::Error(WriteGroupsError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
-                };
-                let chrom_id = chrom_ids.get_id(&chrom);
-                let read_data = (chrom, chrom_id, length, group);
-
-                ChromDataState::Read(read_data, self)
-            }
-            None => {
-                let chrom_ids = self.chrom_ids.take().unwrap();
-                ChromDataState::Finished(chrom_ids)
-            }
-        }
+                Some(())
+                */
+                begin_next(self)
+            });
     }
 }
 
