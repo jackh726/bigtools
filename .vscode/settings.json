@@ -1,0 +1,15 @@
+{
+    "rust-analyzer.check.invocationLocation": null,
+    "rust-analyzer.check.invocationStrategy": null,
+    "rust-analyzer.check.overrideCommand": null,
+    "rust-analyzer.linkedProjects": null,
+    "rust-analyzer.rustfmt.overrideCommand": null,
+    "rust-analyzer.procMacro.server": null,
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.cargo.buildScripts.invocationLocation": null,
+    "rust-analyzer.cargo.buildScripts.invocationStrategy": null,
+    "rust-analyzer.cargo.buildScripts.overrideCommand": null,
+    "rust-analyzer.cargo.sysrootSrc": null,
+    "rust-analyzer.rustc.source": null
+}
