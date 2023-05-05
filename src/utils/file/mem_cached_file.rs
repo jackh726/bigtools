@@ -222,9 +222,11 @@ mod tests {
         data.seek(SeekFrom::Start(10)).unwrap();
         data.write(test_data).unwrap();
         // Then write across a block boundary
-        data.seek(SeekFrom::Start(CACHE_SIZE as u64 * 2 - 4)).unwrap();
+        data.seek(SeekFrom::Start(CACHE_SIZE as u64 * 2 - 4))
+            .unwrap();
         data.write(test_data).unwrap();
-        data.seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4)).unwrap();
+        data.seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4))
+            .unwrap();
         data.write(&vec![1u8; CACHE_SIZE * 5]).unwrap();
         data.seek(SeekFrom::Start(0)).unwrap();
         let mut cache = HashMap::new();
@@ -236,14 +238,22 @@ mod tests {
         mem_cached_file.read_exact(&mut test).unwrap();
         assert_eq!(&test, test_data);
         // Read across a block boundary
-        mem_cached_file.seek(SeekFrom::Start(CACHE_SIZE as u64 * 2 - 4)).unwrap();
+        mem_cached_file
+            .seek(SeekFrom::Start(CACHE_SIZE as u64 * 2 - 4))
+            .unwrap();
         mem_cached_file.read_exact(&mut test).unwrap();
         assert_eq!(&test, test_data);
         // Read first into cache, then second from cache + across multipe blocks (cached + not cached)
-        mem_cached_file.seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4)).unwrap();
-        mem_cached_file.read_exact(&mut vec![0u8; CACHE_SIZE * 3]).unwrap();
+        mem_cached_file
+            .seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4))
+            .unwrap();
+        mem_cached_file
+            .read_exact(&mut vec![0u8; CACHE_SIZE * 3])
+            .unwrap();
         let mut test = vec![0u8; CACHE_SIZE * 5];
-        mem_cached_file.seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4)).unwrap();
+        mem_cached_file
+            .seek(SeekFrom::Start(CACHE_SIZE as u64 * 7 - 4))
+            .unwrap();
         mem_cached_file.read_exact(&mut test).unwrap();
         let sum: usize = test.iter().map(|i| *i as usize).sum();
         assert_eq!(sum, CACHE_SIZE * 5);
