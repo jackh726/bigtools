@@ -498,16 +498,23 @@ pub(crate) fn write_zooms(
 
 pub type ReadData<I> = (String, u32, u32, I);
 
+/// Potential states encountered when reading `ChromData`
 pub enum ChromDataState<D: ChromData> {
-    Read(ReadData<D::Output>, D),
+    /// We've encountered a new chromosome
+    NewChrom(ReadData<D::Output>),
     Finished(IdMap),
     Error(<D::Output as ChromValues>::Error),
 }
 
 pub trait ChromData: Sized {
     type Output: ChromValues;
-    fn advance(self) -> ChromDataState<Self>;
+    fn advance(&mut self) -> ChromDataState<Self>;
 }
+
+pub type ChromProcessingFnOutput<Values> = (
+    WriteSummaryFuture<<Values as ChromValues>::Error>,
+    ChromProcessingOutput<<Values as ChromValues>::Error>,
+);
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
@@ -516,10 +523,7 @@ pub(crate) async fn write_vals<
         ReadData<V::Output>,
         ThreadPool,
         BBIWriteOptions,
-    ) -> io::Result<(
-        WriteSummaryFuture<Values::Error>,
-        ChromProcessingOutput<Values::Error>,
-    )>,
+    ) -> io::Result<ChromProcessingFnOutput<Values>>,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
@@ -564,8 +568,7 @@ pub(crate) async fn write_vals<
 
     let chrom_ids = loop {
         match vals_iter.advance() {
-            ChromDataState::Read(read, iter) => {
-                vals_iter = iter;
+            ChromDataState::NewChrom(read) => {
                 let read = begin_processing_chrom(read, pool.clone(), options)?;
                 let (
                     summary_future,

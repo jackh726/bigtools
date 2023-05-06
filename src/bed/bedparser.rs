@@ -13,7 +13,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::hash::BuildHasher;
-use std::io::{self, BufRead, BufReader, Read, SeekFrom, Seek};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,7 +25,10 @@ use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ReadData, BBIWriteOptions, WriteSummaryFuture, ChromProcessingOutput};
+use crate::{
+    BBIWriteOptions, ChromData, ChromDataState, ChromProcessingOutput, ReadData, WriteGroupsError,
+    WriteSummaryFuture,
+};
 
 // FIXME: replace with LendingIterator when GATs are thing
 /// Essentially a combined lending iterator over the chrom (&str) and remaining
@@ -241,6 +244,8 @@ impl<S: StreamingBedValues> BedParser<S> {
 }
 
 impl<S: StreamingBedValues> BedParserState<S> {
+    /// Advances the state and ensures we have data loaded for the *current* val
+    /// and the *next* val.
     fn advance_state(&mut self, replace_current: bool) -> Result<(), BedParseError> {
         self.curr_val = self.next_val.take();
         match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
@@ -380,7 +385,7 @@ impl<S: StreamingBedValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
 impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
     type Output = BedChromData<S>;
 
-    fn advance(mut self) -> ChromDataState<Self> {
+    fn advance(&mut self) -> ChromDataState<Self> {
         match self.bed_data.next_chrom() {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, group))) => {
@@ -399,7 +404,7 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                 let chrom_id = chrom_ids.get_id(&chrom);
                 let read_data = (chrom, chrom_id, length, group);
 
-                ChromDataState::Read(read_data, self)
+                ChromDataState::NewChrom(read_data)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
@@ -409,6 +414,7 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
     }
 }
 
+/*
 pub struct BedParserParallelStreamingIterator<F, V, H: BuildHasher>
 where F: Fn(
     ReadData<V>,
@@ -510,7 +516,7 @@ impl<F, S: StreamingBedValues, H: BuildHasher> ChromData for BedParserParallelSt
                     };
                     let chrom_id = chrom_ids.get_id(&chrom);
                     let read_data = (chrom, chrom_id, length, group);
-    
+
                     ChromDataState::Read(read_data, _self)
                 }
                 None => {
@@ -537,6 +543,7 @@ impl<F, S: StreamingBedValues, H: BuildHasher> ChromData for BedParserParallelSt
             });
     }
 }
+ */
 
 #[cfg(test)]
 mod tests {
