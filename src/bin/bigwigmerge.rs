@@ -163,7 +163,7 @@ struct ChromGroupReadImpl {
 impl ChromData for ChromGroupReadImpl {
     type Output = MergingValues;
 
-    fn advance(mut self) -> ChromDataState<Self> {
+    fn advance(&mut self) -> ChromDataState<Self> {
         let next = self.iter.next();
         match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
@@ -171,7 +171,7 @@ impl ChromData for ChromGroupReadImpl {
                 let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
                 let read_data = (chrom, chrom_id, size, mergingvalues);
 
-                ChromDataState::Read(read_data, self)
+                ChromDataState::NewChrom(read_data)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
