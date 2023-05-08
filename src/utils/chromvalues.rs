@@ -3,5 +3,5 @@ pub trait ChromValues {
     type Error: Send;
 
     fn next(&mut self) -> Option<Result<Self::Value, Self::Error>>;
-    fn peek(&mut self) -> Option<&Self::Value>;
+    fn peek(&mut self) -> Option<Result<&Self::Value, Self::Error>>;
 }

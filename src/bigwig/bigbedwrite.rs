@@ -222,6 +222,10 @@ impl BigBedWrite {
                 )));
             }
             if let Some(next_val) = group.peek() {
+                let next_val = match next_val {
+                    Ok(v) => v,
+                    Err(e) => return Err(WriteGroupsError::SourceError(e)),
+                };
                 if current_val.start > next_val.start {
                     return Err(WriteGroupsError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
@@ -329,7 +333,7 @@ impl BigBedWrite {
                 &mut summary,
                 current_val.start,
                 current_val.end,
-                group.peek().map(|v| v.start),
+                group.peek().and_then(|v| v.ok()).map(|v| v.start),
             );
 
             for (i, zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
@@ -376,7 +380,7 @@ impl BigBedWrite {
                     });
                 }
 
-                let next_start = group.peek().map(|v| v.start).unwrap_or(u32::max_value());
+                let next_start = group.peek().and_then(|v| v.ok()).map(|v| v.start).unwrap_or(u32::max_value());
 
                 while overlap
                     .head()

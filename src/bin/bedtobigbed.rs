@@ -120,8 +120,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let autosql = match matches.value_of("autosql") {
         None => {
             use bigtools::utils::chromvalues::ChromValues;
-            let (_, mut group) = vals_iter.next_chrom().unwrap()?;
-            let first = group.peek().unwrap();
+            let (_, mut group) = vals_iter.next_chrom()?.unwrap();
+            let first = group.peek().unwrap().unwrap();
             bigtools::bed::autosql::bed_autosql(&first.rest)
         }
         Some(file) => std::fs::read_to_string(file)?,

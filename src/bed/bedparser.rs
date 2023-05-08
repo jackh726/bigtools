@@ -100,22 +100,27 @@ enum ChromOpt {
     Diff(String),
 }
 
+// Example order of state transitions
+// 1) active_chrom: None, next_val: None (creation)
+// 2) active_chrom: Some(X), next_val: Some((.., Same)) (load value)
+// 3) active_chrom: Some(X), next_val: None (value taken)
+// (cycle between for 2 and 3 for all values of a chromosome)
+// 4) active_chrom: None, next_val: Some((.., Diff(Y))) (switch chromosome)
+// 5) active_chrom: Some(Y), next_val: Some((.. Same)) (load value)
+// 6) active_chrom: Some(Y), next_val: None (value taken)
+// (cycle between 5 and 6 for all values of a chromosome)
 #[derive(Debug)]
 struct BedParserState<S: StreamingBedValues> {
     stream: S,
-    curr_chrom: Option<String>,
-    curr_val: Option<S::Value>,
-    next_chrom: ChromOpt,
-    next_val: Option<S::Value>,
+    active_chrom: Option<String>,
+    next_val: Option<(S::Value, ChromOpt)>,
 }
 
 impl<S: StreamingBedValues> BedParser<S> {
     pub fn new(stream: S) -> Self {
         let state = BedParserState {
             stream,
-            curr_chrom: None,
-            next_chrom: ChromOpt::None,
-            curr_val: None,
+            active_chrom: None,
             next_val: None,
         };
         BedParser {
@@ -213,67 +218,67 @@ impl<S: StreamingBedValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `BedChromData` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next_chrom(&mut self) -> Option<Result<(String, BedChromData<S>), BedParseError>> {
+    pub fn next_chrom(&mut self) -> Result<Option<(String, BedChromData<S>)>, BedParseError> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        if state.next_val.is_none() {
-            match state.advance_state(false) {
-                Ok(()) => {}
-                Err(e) => return Some(Err(e)),
-            }
-        }
+        state.load_state(true)?;
+        let chrom = state.active_chrom.clone();
+        self.state.swap(Some(state));
 
-        let next_chrom = match &state.next_chrom {
-            ChromOpt::Diff(real_chrom) => Some(real_chrom),
-            ChromOpt::Same => state.curr_chrom.as_ref(),
-            ChromOpt::None => None,
-        };
-        let ret = match next_chrom {
-            None => None,
+        match chrom {
             Some(chrom) => {
                 let group = BedChromData {
                     state: self.state.clone(),
                     curr_state: None,
                     done: false,
                 };
-                Some(Ok((chrom.to_owned(), group)))
+                Ok(Some((chrom.to_owned(), group)))
             }
-        };
-        self.state.swap(Some(state));
-        ret
+            None => Ok(None),
+        }
     }
 }
 
 impl<S: StreamingBedValues> BedParserState<S> {
-    /// Advances the state and ensures we have data loaded for the *current* val
-    /// and the *next* val.
-    fn advance_state(&mut self, replace_current: bool) -> Result<(), BedParseError> {
-        self.curr_val = self.next_val.take();
-        match std::mem::replace(&mut self.next_chrom, ChromOpt::None) {
-            ChromOpt::Diff(real_chrom) => {
-                self.curr_chrom.replace(real_chrom);
+    fn load_state(&mut self, switch_chrom: bool) -> Result<(), BedParseError> {
+        if !switch_chrom && self.active_chrom.is_none() {
+            return Ok(());
+        }
+        match (&self.active_chrom, self.next_val.take()) {
+            (None, Some((_, ChromOpt::Same))) => panic!(),
+            (None, Some((v, ChromOpt::Diff(chrom)))) => {
+                self.active_chrom = Some(chrom);
+                self.next_val = Some((v, ChromOpt::Same));
+                return Ok(());
             }
-            ChromOpt::Same => {}
-            ChromOpt::None => {
-                self.curr_chrom = None;
+            (Some(_), Some(next_val)) => {
+                self.next_val = Some(next_val);
+                return Ok(());
             }
+            _ => {}
         }
 
         if let Some(next) = self.stream.next() {
             let (chrom, v) = next?;
-            self.next_val.replace(v);
-            if let Some(curr_chrom) = &self.curr_chrom {
-                if curr_chrom != chrom {
-                    self.next_chrom = ChromOpt::Diff(chrom.to_owned());
-                } else {
-                    self.next_chrom = ChromOpt::Same;
+            let next_chrom = match &self.active_chrom {
+                // If the chromosome read is the same as the active chromosome,
+                // then nothing to do other than return `Same`
+                Some(curr_chrom) if curr_chrom == chrom => ChromOpt::Same,
+                // If it's the first, set as active and return `Same`
+                None => {
+                    self.active_chrom = Some(chrom.to_owned());
+                    ChromOpt::Same
                 }
-            } else {
-                self.next_chrom = ChromOpt::Diff(chrom.to_owned());
-            }
+                // Otherwise, it's different, so set active to none and return Diff
+                Some(_) => {
+                    self.active_chrom = None;
+                    ChromOpt::Diff(chrom.to_owned())
+                }
+            };
+            self.next_val = Some((v, next_chrom));
+        } else {
+            self.active_chrom = None;
         }
-        if replace_current && self.curr_val.is_none() && self.next_val.is_some() {
-            self.advance_state(false)?;
-        }
+
         Ok(())
     }
 }
@@ -319,18 +324,19 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
             return None;
         }
         let state = self.curr_state.as_mut().unwrap();
-        match state.advance_state(true) {
-            Ok(()) => {
-                if let ChromOpt::Diff(_) = state.next_chrom {
-                    self.done = true;
-                }
-                state.curr_val.take().map(Result::Ok)
-            }
-            Err(e) => Some(Err(e)),
+        if let Err(e) = state.load_state(false) {
+            return Some(Err(e));
         }
+        if state.active_chrom.is_none() {
+            self.done = true;
+            return None;
+        }
+
+        let next_val = state.next_val.take()?;
+        Some(Ok(next_val.0))
     }
 
-    fn peek(&mut self) -> Option<&S::Value> {
+    fn peek(&mut self) -> Option<Result<&S::Value, Self::Error>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -341,8 +347,16 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
         if self.done {
             return None;
         }
+        let state = self.curr_state.as_mut().unwrap();
+        if let Err(e) = state.load_state(false) {
+            return Some(Err(e));
+        }
+        if state.active_chrom.is_none() {
+            self.done = true;
+            return None;
+        }
         let state = self.curr_state.as_ref().unwrap();
-        state.next_val.as_ref()
+        state.next_val.as_ref().map(|v| Ok(&v.0))
     }
 }
 
@@ -385,11 +399,14 @@ impl<S: StreamingBedValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
 impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
     type Output = BedChromData<S>;
 
-    fn advance(&mut self) -> ChromDataState<Self> {
+    /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
+    fn advance(&mut self) -> ChromDataState<Self::Output> {
         match self.bed_data.next_chrom() {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, group))) => {
+            Err(err) => ChromDataState::Error(err.into()),
+            Ok(Some((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
+
+                // First, if we don't want to allow out of order chroms, error here
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
                     // TODO: test this correctly fails
@@ -397,16 +414,19 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                         return ChromDataState::Error(BedParseError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
                     }
                 }
+
+                // Next, make sure we have the length of the chromosome
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
                     None => return ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
                 };
+                // Make a new id for the chromosome
                 let chrom_id = chrom_ids.get_id(&chrom);
-                let read_data = (chrom, chrom_id, length, group);
 
+                let read_data = (chrom, chrom_id, length, group);
                 ChromDataState::NewChrom(read_data)
             }
-            None => {
+            Ok(None) => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
                 ChromDataState::Finished(chrom_ids)
             }
@@ -568,7 +588,7 @@ mod tests {
                     end: 100,
                     rest: "test1\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
         }
         {
@@ -580,7 +600,7 @@ mod tests {
                     end: 100,
                     rest: "test1\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
         }
         {
@@ -592,7 +612,7 @@ mod tests {
                     end: 100,
                     rest: "test1\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
             assert_eq!(chrom, "chr17");
             assert_eq!(
@@ -609,7 +629,7 @@ mod tests {
                     end: 200,
                     rest: "test2\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
             assert_eq!(
                 &BedEntry {
@@ -617,7 +637,7 @@ mod tests {
                     end: 200,
                     rest: "test2\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -634,7 +654,7 @@ mod tests {
                     end: 300,
                     rest: "test3\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -645,7 +665,7 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
@@ -667,7 +687,7 @@ mod tests {
                     end: 200,
                     rest: "test5\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
             assert_eq!(
                 &BedEntry {
@@ -675,7 +695,7 @@ mod tests {
                     end: 200,
                     rest: "test5\t0".to_string()
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -686,7 +706,7 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
@@ -702,12 +722,12 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next_chrom().is_none());
+        assert!(matches!(bgp.next_chrom(), Ok(None)));
         Ok(())
     }
 
@@ -735,7 +755,7 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
             assert_eq!(
                 &Value {
@@ -743,7 +763,7 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -760,7 +780,7 @@ mod tests {
                     end: 300,
                     value: 0.5
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -771,7 +791,7 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
@@ -793,7 +813,7 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
             assert_eq!(
                 &Value {
@@ -801,7 +821,7 @@ mod tests {
                     end: 200,
                     value: 0.5
                 },
-                group.peek().unwrap()
+                group.peek().unwrap().unwrap()
             );
 
             assert_eq!(
@@ -812,7 +832,7 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
@@ -828,12 +848,12 @@ mod tests {
                 },
                 group.next().unwrap().unwrap()
             );
-            assert_eq!(None, group.peek());
+            assert!(group.peek().is_none());
 
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(bgp.next_chrom().is_none());
+        assert!(matches!(bgp.next_chrom(), Ok(None)));
         Ok(())
     }
 }
