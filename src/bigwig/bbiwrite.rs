@@ -499,16 +499,17 @@ pub(crate) fn write_zooms(
 pub type ReadData<I> = (String, u32, u32, I);
 
 /// Potential states encountered when reading `ChromData`
-pub enum ChromDataState<D: ChromData> {
+pub enum ChromDataState<Output: ChromValues> {
     /// We've encountered a new chromosome
-    NewChrom(ReadData<D::Output>),
+    NewChrom(ReadData<Output>),
     Finished(IdMap),
-    Error(<D::Output as ChromValues>::Error),
+    Error(<Output as ChromValues>::Error),
 }
 
+/// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
     type Output: ChromValues;
-    fn advance(&mut self) -> ChromDataState<Self>;
+    fn advance(&mut self) -> ChromDataState<Self::Output>;
 }
 
 pub type ChromProcessingFnOutput<Values> = (

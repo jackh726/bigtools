@@ -43,9 +43,9 @@ impl ChromValues for MergingValues {
         self.iter.next()
     }
 
-    fn peek(&mut self) -> Option<&Value> {
+    fn peek(&mut self) -> Option<Result<&Value, BBIReadError>> {
         match self.iter.peek() {
-            Some(Ok(v)) => Some(v),
+            Some(Ok(v)) => Some(Ok(v)),
             Some(Err(_)) => None,
             None => None,
         }
@@ -163,7 +163,7 @@ struct ChromGroupReadImpl {
 impl ChromData for ChromGroupReadImpl {
     type Output = MergingValues;
 
-    fn advance(&mut self) -> ChromDataState<Self> {
+    fn advance(&mut self) -> ChromDataState<Self::Output> {
         let next = self.iter.next();
         match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
