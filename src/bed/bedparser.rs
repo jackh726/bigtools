@@ -26,8 +26,8 @@ use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::{
-    BBIWriteOptions, ChromData, ChromDataState, ChromProcessingOutput, ReadData, WriteGroupsError,
-    WriteSummaryFuture,
+    BBIWriteOptions, ChromData, ChromDataState, ChromProcessingFnOutput, ChromProcessingOutput,
+    ReadData, WriteGroupsError, WriteSummaryFuture,
 };
 
 // FIXME: replace with LendingIterator when GATs are thing
@@ -400,8 +400,13 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
     type Output = BedChromData<S>;
 
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
-    fn advance(&mut self) -> ChromDataState<Self::Output> {
-        match self.bed_data.next_chrom() {
+    fn advance<
+        F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+    >(
+        &mut self,
+        do_read: &F,
+    ) -> io::Result<ChromDataState<Self::Output>> {
+        Ok(match self.bed_data.next_chrom() {
             Err(err) => ChromDataState::Error(err.into()),
             Ok(Some((chrom, group))) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
@@ -411,26 +416,27 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                 if let Some(c) = last {
                     // TODO: test this correctly fails
                     if !self.allow_out_of_order_chroms && c >= chrom {
-                        return ChromDataState::Error(BedParseError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string()));
+                        return Ok(ChromDataState::Error(BedParseError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                     }
                 }
 
                 // Next, make sure we have the length of the chromosome
                 let length = match self.chrom_map.get(&chrom) {
                     Some(length) => *length,
-                    None => return ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom))),
+                    None => return Ok(ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom)))),
                 };
                 // Make a new id for the chromosome
                 let chrom_id = chrom_ids.get_id(&chrom);
 
                 let read_data = (chrom, chrom_id, length, group);
-                ChromDataState::NewChrom(read_data)
+                let read = do_read(read_data)?;
+                ChromDataState::NewChrom(read)
             }
             Ok(None) => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
                 ChromDataState::Finished(chrom_ids)
             }
-        }
+        })
     }
 }
 

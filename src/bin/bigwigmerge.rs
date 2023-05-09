@@ -13,7 +13,7 @@ use bigtools::utils::filebufferedchannel;
 use bigtools::utils::idmap::IdMap;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::seekableread::ReopenableFile;
-use bigtools::{ChromData, ChromDataState};
+use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput, ReadData};
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
@@ -163,21 +163,27 @@ struct ChromGroupReadImpl {
 impl ChromData for ChromGroupReadImpl {
     type Output = MergingValues;
 
-    fn advance(&mut self) -> ChromDataState<Self::Output> {
+    fn advance<
+        F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+    >(
+        &mut self,
+        do_read: &F,
+    ) -> io::Result<ChromDataState<Self::Output>> {
         let next = self.iter.next();
-        match next {
+        Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, size, mergingvalues))) => {
                 let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
                 let read_data = (chrom, chrom_id, size, mergingvalues);
+                let read = do_read(read_data)?;
 
-                ChromDataState::NewChrom(read_data)
+                ChromDataState::NewChrom(read)
             }
             None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
                 ChromDataState::Finished(chrom_ids)
             }
-        }
+        })
     }
 }
 
