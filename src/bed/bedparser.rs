@@ -18,17 +18,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_utils::atomic::AtomicCell;
-use futures::executor::ThreadPool;
 use thiserror::Error;
 
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{
-    BBIWriteOptions, ChromData, ChromDataState, ChromProcessingFnOutput, ChromProcessingOutput,
-    ReadData, WriteGroupsError, WriteSummaryFuture,
-};
+use crate::{ChromData, ChromDataState, ChromProcessingFnOutput, ReadData};
 
 // FIXME: replace with LendingIterator when GATs are thing
 /// Essentially a combined lending iterator over the chrom (&str) and remaining
@@ -95,7 +91,6 @@ pub struct BedParser<S: StreamingBedValues> {
 
 #[derive(Debug)]
 enum ChromOpt {
-    None,
     Same,
     Diff(String),
 }
@@ -499,7 +494,6 @@ impl<V, H: BuildHasher> ChromData
                     return Ok(ChromDataState::<Self::Output>::Finished(chrom_ids));
                 }
             };
-            let chrom = curr.1;
 
             let mut file = match File::open(&_self.path) {
                 Ok(f) => f,
@@ -555,6 +549,7 @@ impl<V, H: BuildHasher> ChromData
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BBIWriteOptions;
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
