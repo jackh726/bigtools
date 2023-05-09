@@ -380,7 +380,11 @@ impl BigBedWrite {
                     });
                 }
 
-                let next_start = group.peek().and_then(|v| v.ok()).map(|v| v.start).unwrap_or(u32::max_value());
+                let next_start = group
+                    .peek()
+                    .and_then(|v| v.ok())
+                    .map(|v| v.start)
+                    .unwrap_or(u32::max_value());
 
                 while overlap
                     .head()
