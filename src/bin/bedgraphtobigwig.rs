@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 
 use bigtools::bed::indexer::index_chroms;
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bed::bedparser::{self, BedParser};
+use bigtools::bed::bedparser::{self, parse_bedgraph, BedParser};
 use bigtools::bigwig::BigWigWrite;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -129,21 +130,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         let infile = File::open(&bedgraphpath)?;
         if infile.metadata()?.len() >= 200_000_000 {
-            let chrom_indices = index_chroms(infile)?;
+            let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
 
-            let infile = File::open(&bedgraphpath)?;
-            let vals_iter = BedParser::from_bedgraph_file(infile);
-
-            /*
             let chsi = bedparser::BedParserParallelStreamingIterator::new(
-                vals_iter,
                 chrom_map.clone(),
                 chrom_indices,
                 allow_out_of_order_chroms,
+                PathBuf::from(bedgraphpath),
+                parse_bedgraph,
             );
             outb.write(chrom_map, chsi, pool)?;
-            */
-            todo!();
         } else {
             let vals_iter = BedParser::from_bedgraph_file(infile);
 
