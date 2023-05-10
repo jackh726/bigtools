@@ -221,11 +221,7 @@ impl BigBedWrite {
                     current_val.start, chrom, chrom_length
                 )));
             }
-            if let Some(next_val) = group.peek() {
-                let next_val = match next_val {
-                    Ok(v) => v,
-                    Err(e) => return Err(WriteGroupsError::SourceError(e)),
-                };
+            if let Some(Ok(next_val)) = group.peek() {
                 if current_val.start > next_val.start {
                     return Err(WriteGroupsError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",

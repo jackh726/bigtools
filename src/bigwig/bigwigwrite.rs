@@ -189,12 +189,8 @@ impl BigWigWrite {
                 )));
             }
             match group.peek() {
-                None => (),
-                Some(next_val) => {
-                    let next_val = match next_val {
-                        Ok(v) => v,
-                        Err(e) => return Err(WriteGroupsError::SourceError(e)),
-                    };
+                None | Some(Err(_)) => (),
+                Some(Ok(next_val)) => {
                     if current_val.end > next_val.start {
                         return Err(WriteGroupsError::InvalidInput(format!(
                             "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
