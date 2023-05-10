@@ -89,10 +89,48 @@ pub struct BedParser<S: StreamingBedValues> {
     state: Arc<AtomicCell<Option<BedParserState<S>>>>,
 }
 
-#[derive(Debug)]
-enum ChromOpt {
-    Same,
-    Diff(String),
+/// Defines the internal states of bed parsing
+enum StateValue<V> {
+    // No value has been loaded yet
+    Empty,
+    // A value has been loaded without error
+    // Contains the current chromosome and the value.
+    Value(String, V),
+    // A previously loaded value was taken.
+    // Contains the current chromosome.
+    EmptyValue(String),
+    // A new chromsome has been loaded
+    DiffChrom(String, V),
+    // An error has been seen
+    Error(BedParseError),
+    // We are done, either because we have run out of values or because of an error
+    Done,
+}
+
+impl<V> std::fmt::Debug for StateValue<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Empty"),
+            Self::Value(arg0, _) => f.debug_tuple("Value").field(arg0).finish(),
+            Self::EmptyValue(arg0) => f.debug_tuple("EmptyValue").field(arg0).finish(),
+            Self::DiffChrom(arg0, _) => f.debug_tuple("DiffChrom").field(arg0).finish(),
+            Self::Error(arg0) => f.debug_tuple("Error").field(arg0).finish(),
+            Self::Done => write!(f, "Done"),
+        }
+    }
+}
+
+impl<V> StateValue<V> {
+    fn active_chrom(&self) -> Option<&String> {
+        match self {
+            StateValue::Empty => None,
+            StateValue::Value(c, _) => Some(c),
+            StateValue::EmptyValue(c) => Some(c),
+            StateValue::DiffChrom(c, _) => Some(c),
+            StateValue::Error(_) => None,
+            StateValue::Done => None,
+        }
+    }
 }
 
 // Example order of state transitions
@@ -107,16 +145,14 @@ enum ChromOpt {
 #[derive(Debug)]
 struct BedParserState<S: StreamingBedValues> {
     stream: S,
-    active_chrom: Option<String>,
-    next_val: Option<(S::Value, ChromOpt)>,
+    state_value: StateValue<S::Value>,
 }
 
 impl<S: StreamingBedValues> BedParser<S> {
     pub fn new(stream: S) -> Self {
         let state = BedParserState {
             stream,
-            active_chrom: None,
-            next_val: None,
+            state_value: StateValue::Empty,
         };
         BedParser {
             state: Arc::new(AtomicCell::new(Some(state))),
@@ -213,10 +249,10 @@ impl<S: StreamingBedValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `BedChromData` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next_chrom(&mut self) -> Result<Option<(String, BedChromData<S>)>, BedParseError> {
+    pub fn next_chrom(&mut self) -> Option<(String, BedChromData<S>)> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        state.load_state(true)?;
-        let chrom = state.active_chrom.clone();
+        state.load_state(true);
+        let chrom = state.state_value.active_chrom().cloned();
         self.state.swap(Some(state));
 
         match chrom {
@@ -226,55 +262,74 @@ impl<S: StreamingBedValues> BedParser<S> {
                     curr_state: None,
                     done: false,
                 };
-                Ok(Some((chrom.to_owned(), group)))
+                Some((chrom.to_owned(), group))
             }
-            None => Ok(None),
+            None => None,
         }
     }
 }
 
 impl<S: StreamingBedValues> BedParserState<S> {
-    fn load_state(&mut self, switch_chrom: bool) -> Result<(), BedParseError> {
-        if !switch_chrom && self.active_chrom.is_none() {
-            return Ok(());
-        }
-        match (&self.active_chrom, self.next_val.take()) {
-            (None, Some((_, ChromOpt::Same))) => panic!(),
-            (None, Some((v, ChromOpt::Diff(chrom)))) => {
-                self.active_chrom = Some(chrom);
-                self.next_val = Some((v, ChromOpt::Same));
-                return Ok(());
-            }
-            (Some(_), Some(next_val)) => {
-                self.next_val = Some(next_val);
-                return Ok(());
-            }
-            _ => {}
-        }
-
-        if let Some(next) = self.stream.next() {
-            let (chrom, v) = next?;
-            let next_chrom = match &self.active_chrom {
-                // If the chromosome read is the same as the active chromosome,
-                // then nothing to do other than return `Same`
-                Some(curr_chrom) if curr_chrom == chrom => ChromOpt::Same,
-                // If it's the first, set as active and return `Same`
-                None => {
-                    self.active_chrom = Some(chrom.to_owned());
-                    ChromOpt::Same
+    fn load_state(&mut self, switch_chrom: bool) {
+        let state_value = std::mem::replace(&mut self.state_value, StateValue::Empty);
+        self.state_value = match state_value {
+            StateValue::Empty => match self.stream.next() {
+                None => StateValue::Done,
+                Some(Ok((chrom, val))) => StateValue::Value(chrom.to_owned(), val),
+                Some(Err(err)) => StateValue::Error(BedParseError::IoError(err)),
+            },
+            StateValue::Value(c, v) => StateValue::Value(c, v),
+            StateValue::EmptyValue(prev_chrom) => match self.stream.next() {
+                None => StateValue::Done,
+                Some(Ok((chrom, val))) if switch_chrom || prev_chrom == chrom => {
+                    StateValue::Value(prev_chrom, val)
                 }
-                // Otherwise, it's different, so set active to none and return Diff
-                Some(_) => {
-                    self.active_chrom = None;
-                    ChromOpt::Diff(chrom.to_owned())
-                }
-            };
-            self.next_val = Some((v, next_chrom));
-        } else {
-            self.active_chrom = None;
-        }
+                Some(Ok((chrom, val))) => StateValue::DiffChrom(chrom.to_owned(), val),
+                Some(Err(err)) => StateValue::Error(BedParseError::IoError(err)),
+            },
+            StateValue::DiffChrom(c, v) if switch_chrom => StateValue::Value(c, v),
+            StateValue::DiffChrom(c, v) => StateValue::DiffChrom(c, v),
+            StateValue::Error(e) => StateValue::Error(e),
+            StateValue::Done => StateValue::Done,
+        };
+        // For sanity, if we're switching chromosomes then we should never have an empty value or say we're in a "different" chromosome
+        debug_assert!(
+            !(switch_chrom
+                && matches!(
+                    &self.state_value,
+                    StateValue::Empty | StateValue::EmptyValue(..) | StateValue::DiffChrom(..)
+                )),
+        );
+    }
 
-        Ok(())
+    fn load_state_and_take_value(&mut self) -> Option<Result<S::Value, BedParseError>> {
+        let state_value = std::mem::replace(&mut self.state_value, StateValue::Empty);
+        let ret;
+        (self.state_value, ret) = match state_value {
+            StateValue::Empty => match self.stream.next() {
+                None => (StateValue::Done, None),
+                Some(Ok((chrom, val))) => (StateValue::EmptyValue(chrom.to_owned()), Some(Ok(val))),
+                Some(Err(err)) => (StateValue::Done, Some(Err(BedParseError::IoError(err)))),
+            },
+            StateValue::Value(c, v) => (StateValue::EmptyValue(c), Some(Ok(v))),
+            StateValue::EmptyValue(prev_chrom) => match self.stream.next() {
+                None => (StateValue::Done, None),
+                Some(Ok((chrom, val))) if prev_chrom == chrom => {
+                    (StateValue::EmptyValue(prev_chrom), Some(Ok(val)))
+                }
+                Some(Ok((chrom, val))) => (StateValue::DiffChrom(chrom.to_owned(), val), None),
+                Some(Err(err)) => (StateValue::Done, Some(Err(BedParseError::IoError(err)))),
+            },
+            StateValue::DiffChrom(c, v) => (StateValue::DiffChrom(c, v), None),
+            StateValue::Error(e) => (StateValue::Done, Some(Err(e))),
+            StateValue::Done => (StateValue::Done, None),
+        };
+        // For sanity, we shouldn't have any error or value (for the current chromosome) stored
+        debug_assert!(matches!(
+            &self.state_value,
+            StateValue::Done | StateValue::EmptyValue(..) | StateValue::DiffChrom(..)
+        ));
+        ret
     }
 }
 
@@ -319,19 +374,14 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
             return None;
         }
         let state = self.curr_state.as_mut().unwrap();
-        if let Err(e) = state.load_state(false) {
-            return Some(Err(e));
-        }
-        if state.active_chrom.is_none() {
+        let ret = state.load_state_and_take_value();
+        if matches!(state.state_value, StateValue::DiffChrom(..)) {
             self.done = true;
-            return None;
         }
-
-        let next_val = state.next_val.take()?;
-        Some(Ok(next_val.0))
+        ret
     }
 
-    fn peek(&mut self) -> Option<Result<&S::Value, Self::Error>> {
+    fn peek(&mut self) -> Option<Result<&S::Value, &Self::Error>> {
         if self.curr_state.is_none() {
             let opt_state = self.state.swap(None);
             if opt_state.is_none() {
@@ -343,15 +393,19 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
             return None;
         }
         let state = self.curr_state.as_mut().unwrap();
-        if let Err(e) = state.load_state(false) {
-            return Some(Err(e));
-        }
-        if state.active_chrom.is_none() {
+        state.load_state(false);
+        let ret = match &state.state_value {
+            StateValue::Empty => None,
+            StateValue::Value(_, val) => Some(Ok(val)),
+            StateValue::EmptyValue(_) => None,   // Shouldn't occur
+            StateValue::DiffChrom(_, _) => None, // Only `Value` is peekable
+            StateValue::Error(err) => Some(Err(err)),
+            StateValue::Done => None,
+        };
+        if matches!(&state.state_value, StateValue::DiffChrom(..)) {
             self.done = true;
-            return None;
         }
-        let state = self.curr_state.as_ref().unwrap();
-        state.next_val.as_ref().map(|v| Ok(&v.0))
+        ret
     }
 }
 
@@ -402,8 +456,7 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
         do_read: &F,
     ) -> io::Result<ChromDataState<Self::Output>> {
         Ok(match self.bed_data.next_chrom() {
-            Err(err) => ChromDataState::Error(err.into()),
-            Ok(Some((chrom, group))) => {
+            Some((chrom, group)) => {
                 let chrom_ids = self.chrom_ids.as_mut().unwrap();
 
                 // First, if we don't want to allow out of order chroms, error here
@@ -427,7 +480,7 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                 let read = do_read(read_data)?;
                 ChromDataState::NewChrom(read)
             }
-            Ok(None) => {
+            None => {
                 let chrom_ids = self.chrom_ids.take().unwrap();
                 ChromDataState::Finished(chrom_ids)
             }
@@ -506,8 +559,7 @@ impl<V, H: BuildHasher> ChromData
             });
 
             Ok(match parser.next_chrom() {
-                Err(err) => ChromDataState::Error(err.into()),
-                Ok(Some((chrom, group))) => {
+                Some((chrom, group)) => {
                     let chrom_ids = _self.chrom_ids.as_mut().unwrap();
                     let last = _self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
@@ -527,7 +579,7 @@ impl<V, H: BuildHasher> ChromData
 
                     ChromDataState::NewChrom(read)
                 }
-                Ok(None) => {
+                None => {
                     panic!("Unexpected end of file")
                 }
             })
@@ -591,17 +643,17 @@ mod tests {
             };
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100 "test1\t0");
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100 "test1\t0");
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek next group, 1 100 "test1\t0");
             check_value!(peek next group, 101 200 "test2\t0");
@@ -612,7 +664,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100 "test4\t0");
             check_value!(peek next group, 101 200 "test5\t0");
@@ -622,7 +674,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100 "test6\t0");
             assert!(group.peek().is_none());
@@ -630,7 +682,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(matches!(bgp.next_chrom(), Ok(None)));
+        assert!(matches!(bgp.next_chrom(), None));
         Ok(())
     }
 
@@ -671,17 +723,17 @@ mod tests {
             };
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100);
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100);
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
@@ -692,7 +744,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
@@ -702,7 +754,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100);
             assert!(group.peek().is_none());
@@ -710,7 +762,7 @@ mod tests {
             assert!(group.next().is_none());
             assert!(group.peek().is_none());
         }
-        assert!(matches!(bgp.next_chrom(), Ok(None)));
+        assert!(matches!(bgp.next_chrom(), None));
         Ok(())
     }
 

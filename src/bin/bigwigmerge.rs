@@ -43,10 +43,10 @@ impl ChromValues for MergingValues {
         self.iter.next()
     }
 
-    fn peek(&mut self) -> Option<Result<&Value, BBIReadError>> {
+    fn peek(&mut self) -> Option<Result<&Value, &BBIReadError>> {
         match self.iter.peek() {
             Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(_)) => None,
+            Some(Err(err)) => Some(Err(err)),
             None => None,
         }
     }
