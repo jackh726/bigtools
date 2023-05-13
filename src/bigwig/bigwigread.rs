@@ -403,7 +403,6 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     end: u32,
 ) -> io::Result<Option<Box<dyn Iterator<Item = Value> + Send>>> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
-    let mut values: Vec<Value> = Vec::new();
 
     let chrom_id = block_data_mut.read_u32()?;
     let chrom_start = block_data_mut.read_u32()?;
@@ -413,6 +412,8 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     let section_type = block_data_mut.read_u8()?;
     let _reserved = block_data_mut.read_u8()?;
     let item_count = block_data_mut.read_u16()?;
+
+    let mut values: Vec<Value> = Vec::with_capacity(item_count as usize);
 
     if chrom_id != chrom {
         return Ok(None);
