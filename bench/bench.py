@@ -25,7 +25,8 @@ def download_test_data():
             print(f"Downloading {name}")
             urllib.request.urlretrieve(url, f'./workdir/{name}')
             if name.endswith(".gz"):
-                subprocess.check_call(['gunzip', './workdir/ENCFF646AZP.bed.gz'])
+                print(f"Ungzipping {name}")
+                subprocess.check_call(['gunzip', f'./workdir/{name}'])
 
     download('https://www.encodeproject.org/files/ENCFF937MNZ/@@download/ENCFF937MNZ.bigWig', 'ENCFF937MNZ.bigWig')
     download('https://www.encodeproject.org/files/ENCFF447DHW/@@download/ENCFF447DHW.bigWig', 'ENCFF447DHW.bigWig')
@@ -40,8 +41,7 @@ def download_test_data():
 def time(exeargs_all, bench, program, rep):
     total_seconds = 0
     for i, exeargs in enumerate(exeargs_all):
-        exeargs.insert(0, '/usr/bin/time')
-        exeargs = " ".join(exeargs)
+        exeargs = '/usr/bin/time ' + " ".join(exeargs)
         print(exeargs)
         logfile = f'./workdir/output/{bench}_{program}_{rep}_{i}.log'
         with subprocess.Popen(exeargs, stderr=subprocess.PIPE, stdout=subprocess.PIPE, shell=True) as process:
@@ -125,7 +125,7 @@ def bedtobigbed(comp):
     global bigtoolspath
     if not os.path.exists('./workdir/ENCFF076CIO.sorted.bed'):
         process = subprocess.check_call('cat ./workdir/ENCFF076CIO.bed | cut -f1-3 | sort -k1,1 -k2,2n > ./workdir/ENCFF076CIO.sorted.bed', shell=True)
-    ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigBed']]
+    ucsc = [['{}/bedToBigBed'.format(ucsctoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigBed']]
     bigtools = [['{}/bedtobigbed'.format(bigtoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigBed']]
     bigtools_st = [['{}/bedtobigbed'.format(bigtoolspath), './workdir/ENCFF076CIO.sorted.bed', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigBed', '-t 1']]
     compare(comp, 'bedtobigbed', ucsc, bigtools, bigtools_st)
@@ -163,4 +163,9 @@ def main():
 if __name__ == '__main__':
     main()
 
-# To run (example): python3 bench/bench.py ~/temp /mnt/c/Users/jackh/Documents/Git/rust/bigtools/target/release
+# To run (example): python3 bench/bench.py ./workdir/kent ./target/release
+# wget http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedToBigBed
+# wget http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedGraphToBigWig
+# wget http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bigWigAverageOverBed
+# wget http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bigWigMerge
+# wget http://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bigWigToBedGraph
