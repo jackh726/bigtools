@@ -10,6 +10,7 @@ use bigtools::bbiread::BBIReadError;
 use bigtools::bigwig::{BBIRead, BigWigRead, ChromAndSize};
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use ufmt::uwrite;
 
 pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     bigwig: BigWigRead<R, S>,
@@ -50,12 +51,19 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
             ) -> Result<(), BBIReadError> {
                 for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
                     let val = raw_val?;
+                    let mut buf = String::with_capacity(50); // Estimate
+
                     // Using ryu for f32 to string conversion has a ~15% speedup
-                    let mut buffer = ryu::Buffer::new();
-                    writer.write_fmt(format_args!(
+                    uwrite!(
+                        &mut buf,
                         "{}\t{}\t{}\t{}\n",
-                        chrom.name, val.start, val.end, buffer.format(val.value),
-                    ))?;
+                        chrom.name.as_str(),
+                        val.start,
+                        val.end,
+                        ryu::Buffer::new().format(val.value)
+                    )
+                    .unwrap();
+                    writer.write(buf.as_bytes())?;
                 }
                 Ok(())
             }

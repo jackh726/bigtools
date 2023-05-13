@@ -142,11 +142,9 @@ def bigwigtobedgraph(comp):
 def main():
     global ucsctoolspath
     global bigtoolspath
-    global reps
     ucsctoolspath = sys.argv[1] if len(sys.argv) > 1 else "/bin"
     bigtoolspath = sys.argv[2] if len(sys.argv) > 2 else "/usr/local/bin"
     bench = sys.argv[3] if len(sys.argv) > 3 else None
-    reps = 3
     download_test_data()
     with open("./workdir/output/comparison.txt", "w") as comp:
         if bench is None or bench == 'bigwigaverageoverbed':
