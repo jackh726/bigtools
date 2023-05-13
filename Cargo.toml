@@ -29,12 +29,12 @@ ufmt = { version = "0.2", features = ["std"] }
 rand = "0.8"
 
 [profile.release]
-lto = false
-debug-assertions = true
-debug = true
+lto = true
+debug-assertions = false
+debug = false
 
 [profile.dev]
-opt-level = 0
+opt-level = 3
 
 [lib]
 name = "bigtools"
