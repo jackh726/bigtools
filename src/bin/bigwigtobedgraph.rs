@@ -50,9 +50,11 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
             ) -> Result<(), BBIReadError> {
                 for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
                     let val = raw_val?;
+                    // Using ryu for f32 to string conversion has a ~15% speedup
+                    let mut buffer = ryu::Buffer::new();
                     writer.write_fmt(format_args!(
                         "{}\t{}\t{}\t{}\n",
-                        chrom.name, val.start, val.end, val.value
+                        chrom.name, val.start, val.end, buffer.format(val.value),
                     ))?;
                 }
                 Ok(())

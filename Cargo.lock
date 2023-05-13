@@ -54,6 +54,7 @@ dependencies = [
  "libdeflater",
  "parking_lot",
  "rand",
+ "ryu",
  "serde",
  "tempfile",
  "thiserror",
@@ -734,6 +735,12 @@ dependencies = [
  "linux-raw-sys",
  "windows-sys 0.48.0",
 ]
+
+[[package]]
+name = "ryu"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f91339c0467de62360649f8d3e185ca8de4224ff281f66000de5eb2a77a79041"
 
 [[package]]
 name = "schannel"
