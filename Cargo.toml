@@ -23,6 +23,7 @@ attohttpc = { version = "0.25", optional = true }
 libdeflater = "0.13"
 thiserror = "1"
 ryu = "1.0"
+ufmt = { version = "0.2", features = ["std"] }
 
 [dev-dependencies]
 rand = "0.8"
