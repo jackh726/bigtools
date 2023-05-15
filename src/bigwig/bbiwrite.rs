@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
@@ -477,7 +477,7 @@ pub(crate) fn write_zooms(
         let mut buf_reader = BufReader::new(zoom_file);
         io::copy(&mut buf_reader, &mut file)?;
         let zoom_index_offset = file.tell()?;
-        //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.0, zoom_data_offset, zoom_index_offset);
+        //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.resolution, zoom_data_offset, zoom_index_offset);
         assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
         write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
 
@@ -552,7 +552,7 @@ pub(crate) async fn write_vals<
         Option<TempFileBufferWriter<File>>,
     );
 
-    let mut zooms_map: HashMap<u32, ZoomValue> =
+    let mut zooms_map: BTreeMap<u32, ZoomValue> =
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
             .map(|size| -> io::Result<_> {
