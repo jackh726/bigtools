@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if allcols {
             Name::None
         } else {
-            const NAME_COL: usize = 4;
+            const NAME_COL: usize = 3;
             const TEST_LINES: usize = 10;
             let reader = BufReader::new(File::open(bedinpath)?);
             let mut lines = reader

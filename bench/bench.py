@@ -82,12 +82,21 @@ def bigwigaverageoverbed(comp):
     global ucsctoolspath
     global bigtoolspath
     # For ucsc, we have to convert narrowPeak to bed first, including adding a unique name
-    ucsc = [
-        ['cat ./workdir/ENCFF646AZP.bed | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' > ./workdir/ENCFF646AZP_cut.bed'],
-        ['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP_cut.bed', './workdir/test_out_ucsc.bed']
-        ]
-    bigtools_st = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP.bed', './workdir/test_out_bigtools.bed']]
+    if not os.path.exists('./workdir/ENCFF646AZP_cut.bed'):
+        process = subprocess.check_call('cat ./workdir/ENCFF646AZP.bed | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' > ./workdir/ENCFF646AZP_cut.bed', shell=True)
+    ucsc = [['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP_cut.bed', './workdir/test_out_ucsc.bed']]
+    bigtools_st = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF646AZP_cut.bed', './workdir/test_out_bigtools.bed']]
     compare(comp, 'bigwigaverageoverbed', ucsc, None, bigtools_st)
+
+def bigwigaverageoverbed_long(comp):
+    global ucsctoolspath
+    global bigtoolspath
+    # For ucsc, we have to convert narrowPeak to bed first, including adding a unique name
+    if not os.path.exists('./workdir/ENCFF076CIO_cut_sample.bed'):
+        process = subprocess.check_call(f'{bigtoolspath}/bigtools chromintersect -a ./workdir/ENCFF076CIO.bed -b ./workdir/ENCFF937MNZ.bigWig -o -' + ' | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' | shuf --random-source=./workdir/ENCFF076CIO.bed | head -1000000 | sort -k1,1n > ./workdir/ENCFF076CIO_cut_sample.bed', shell=True)
+    ucsc = [['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF076CIO_cut_sample.bed', './workdir/test_out_ucsc.bed']]
+    bigtools_st = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF076CIO_cut_sample.bed', './workdir/test_out_bigtools.bed']]
+    compare(comp, 'bigwigaverageoverbed_long', ucsc, None, bigtools_st)
 
 def bigwigmerge(comp):
     global ucsctoolspath
@@ -149,6 +158,8 @@ def main():
     with open("./workdir/output/comparison.txt", "w") as comp:
         if bench is None or bench == 'bigwigaverageoverbed':
             bigwigaverageoverbed(comp)
+        if bench is None or bench == 'bigwigaverageoverbed_long':
+            bigwigaverageoverbed_long(comp)
         if bench is None or bench == 'bigwigmerge':
             bigwigmerge(comp)
         if bench is None or bench == 'bedgraphtobigwig':
