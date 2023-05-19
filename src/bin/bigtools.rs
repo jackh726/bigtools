@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
+use bigtools::{BigWigRead, BigWigReadAttachError};
 use clap::{App, Arg};
 
 use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
@@ -90,6 +92,61 @@ fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     Ok(())
 }
 
+fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<()> {
+    let chroms = match BigWigRead::from_file_and_attach(&bpath) {
+        Ok(bigwig) => bigwig.info.chrom_info,
+        Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::from_file_and_attach(bpath) {
+            Ok(bigbed) => bigbed.info.chrom_info,
+            Err(BigBedReadAttachError::NotABigBed) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Only bigWigs and bigBeds are supported as `b` files."),
+                ));
+            }
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))),
+        },
+        Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))),
+    };
+    let chroms = HashSet::from_iter(chroms.into_iter().map(|c| c.name));
+
+    fn write<T: Write>(
+        chroms: HashSet<String>,
+        apath: String,
+        mut bedoutwriter: BufWriter<T>,
+    ) -> io::Result<()> {
+        let bedin = File::open(apath)?;
+        let mut bedstream = StreamingLineReader::new(BufReader::with_capacity(64 * 1024, bedin));
+
+        while let Some(line) = bedstream.read() {
+            let line = line?;
+            let mut split = line.trim_end().splitn(4, '\t');
+            let chrom = split.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Missing chrom: {}", line),
+                )
+            })?;
+            if chroms.contains(chrom) {
+                bedoutwriter.write(line.as_bytes())?;
+            }
+        }
+        Ok(())
+    }
+
+    if outpath == "-" {
+        let stdout = io::stdout();
+        let handle = stdout.lock();
+        let bedoutwriter = BufWriter::with_capacity(64 * 1024, handle);
+        write(chroms, apath, bedoutwriter)?;
+    } else {
+        let bedout = File::create(outpath)?;
+        let bedoutwriter = BufWriter::with_capacity(64 * 1024, bedout);
+        write(chroms, apath, bedoutwriter)?;
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), BigBedReadAttachError> {
     let matches = App::new("BigTools")
         .subcommand(
@@ -110,6 +167,31 @@ fn main() -> Result<(), BigBedReadAttachError> {
                         .required(true),
                 ),
         )
+        .subcommand(
+            App::new("chromintersect")
+                .about("Create a new file of the same type, containing only data from `a` with chromosomes from `b`")
+                .arg(
+                    Arg::new("a")
+                        .short('a')
+                        .help("The file to take data from (currently supports: bed)")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("b")
+                        .short('b')
+                        .help("The file to take reference chromosomes from (currently supports: bigWig or bigBed)")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("out")
+                        .short('o')
+                        .help("The name of the output file (or - for stdout). Outputted in same format as `a`")
+                        .takes_value(true)
+                        .required(true),
+                ),
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -123,8 +205,17 @@ fn main() -> Result<(), BigBedReadAttachError> {
 
             intersect(apath, b, IntersectOptions {})?;
         }
+        Some(("chromintersect", matches)) => {
+            eprintln!("---BigTools chromintersect---");
+
+            let apath = matches.value_of("a").unwrap().to_owned();
+            let bpath = matches.value_of("b").unwrap().to_owned();
+            let outpath = matches.value_of("out").unwrap().to_owned();
+
+            chromintersect(apath, bpath, outpath)?;
+        }
         None => {
-            eprintln!("No command. Use bigtools -.help to see.help.");
+            eprintln!("No command. Use bigtools -help to see help.");
         }
         Some((subcommand, _)) => {
             panic!("BUG: unhandled subcommand: {}", subcommand);
