@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Seek, SeekFrom};
-use std::io::{BufReader, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
 use thiserror::Error;
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, BBIReader,
-    Block, ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
+    ChromAndSize, MemCachedReader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -169,7 +168,7 @@ where
 {
     pub info: BBIFileInfo,
     reopen: R,
-    reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    reader: Option<S>,
     cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
@@ -197,12 +196,10 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok("".to_string())
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
+    fn ensure_reader(&mut self) -> io::Result<&mut S> {
         if self.reader.is_none() {
-            let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
-            let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
-            self.reader.replace(file);
+            self.reader.replace(fp);
         }
         Ok(self.reader.as_mut().unwrap())
     }
@@ -264,9 +261,11 @@ where
     }
 
     pub fn get_summary(&mut self) -> io::Result<Summary> {
+        let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;
         let data_offset = self.info.header.full_data_offset;
         let reader = self.ensure_reader()?;
+        let mut reader = ByteOrdered::runtime(reader, endianness);
         reader.seek(SeekFrom::Start(summary_offset))?;
         let bases_covered = reader.read_u64()?;
         let min_val = reader.read_f64()?;
