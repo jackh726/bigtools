@@ -824,7 +824,14 @@ mod tests {
         let _reserved = file.read_u32()?;
 
         let mut blocks = vec![];
-        crate::bbiread::search_overlapping_blocks(&mut file, 0, 0, MAX_BASES, &mut blocks)?;
+        crate::bbiread::search_overlapping_blocks(
+            &mut file,
+            Endianness::native(),
+            0,
+            0,
+            MAX_BASES,
+            &mut blocks,
+        )?;
 
         let mut chrom = 0;
         let mut start = 0;

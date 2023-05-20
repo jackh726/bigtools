@@ -215,12 +215,8 @@ where
 
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
         self.ensure_reader()?;
-        let endianness = self.reader.as_ref().unwrap().endianness();
         let inner = self.reader.as_mut().unwrap();
-        Ok(ByteOrdered::runtime(
-            MemCachedRead::new(inner, &mut self.cache),
-            endianness,
-        ))
+        Ok(MemCachedRead::new(inner, &mut self.cache))
     }
 
     fn close(&mut self) {

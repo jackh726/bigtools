@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
 use std::io::{self, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
@@ -209,12 +209,8 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
 
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
         self.ensure_reader()?;
-        let endianness = self.info.header.endianness;
         let inner = self.reader.as_mut().unwrap();
-        Ok(ByteOrdered::runtime(
-            MemCachedRead::new(inner, &mut self.cache),
-            endianness,
-        ))
+        Ok(MemCachedRead::new(inner, &mut self.cache))
     }
 
     fn close(&mut self) {
@@ -404,14 +400,51 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
 ) -> io::Result<Option<Box<dyn Iterator<Item = Value> + Send>>> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
 
-    let chrom_id = block_data_mut.read_u32()?;
-    let chrom_start = block_data_mut.read_u32()?;
-    let _chrom_end = block_data_mut.read_u32()?;
-    let item_step = block_data_mut.read_u32()?;
-    let item_span = block_data_mut.read_u32()?;
-    let section_type = block_data_mut.read_u8()?;
-    let _reserved = block_data_mut.read_u8()?;
-    let item_count = block_data_mut.read_u16()?;
+    use bytes::Buf;
+    use bytes::BytesMut;
+
+    let mut bytes_header = BytesMut::zeroed(24);
+    block_data_mut.read_exact(&mut bytes_header)?;
+
+    let (chrom_id, chrom_start, item_step, item_span, section_type, item_count) =
+        match bigwig.info.header.endianness {
+            Endianness::Big => {
+                let chrom_id = bytes_header.get_u32();
+                let chrom_start = bytes_header.get_u32();
+                let _chrom_end = bytes_header.get_u32();
+                let item_step = bytes_header.get_u32();
+                let item_span = bytes_header.get_u32();
+                let section_type = bytes_header.get_u8();
+                let _reserved = bytes_header.get_u8();
+                let item_count = bytes_header.get_u16();
+                (
+                    chrom_id,
+                    chrom_start,
+                    item_step,
+                    item_span,
+                    section_type,
+                    item_count,
+                )
+            }
+            Endianness::Little => {
+                let chrom_id = bytes_header.get_u32_le();
+                let chrom_start = bytes_header.get_u32_le();
+                let _chrom_end = bytes_header.get_u32_le();
+                let item_step = bytes_header.get_u32_le();
+                let item_span = bytes_header.get_u32_le();
+                let section_type = bytes_header.get_u8();
+                let _reserved = bytes_header.get_u8();
+                let item_count = bytes_header.get_u16_le();
+                (
+                    chrom_id,
+                    chrom_start,
+                    item_step,
+                    item_span,
+                    section_type,
+                    item_count,
+                )
+            }
+        };
 
     let mut values: Vec<Value> = Vec::with_capacity(item_count as usize);
 
@@ -419,54 +452,104 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
         return Ok(None);
     }
 
-    let mut curr_start = chrom_start;
-    for _ in 0..item_count {
-        let mut value = match section_type {
-            1 => {
+    match section_type {
+        1 => {
+            let mut bytes = BytesMut::zeroed((item_count as usize) * 12);
+            block_data_mut.read_exact(&mut bytes)?;
+            for _ in 0..item_count {
                 // bedgraph
-                let chrom_start = block_data_mut.read_u32()?;
-                let chrom_end = block_data_mut.read_u32()?;
-                let value = block_data_mut.read_f32()?;
-                Value {
+                let (chrom_start, chrom_end, value) = match bigwig.info.header.endianness {
+                    Endianness::Big => {
+                        let chrom_start = bytes.get_u32();
+                        let chrom_end = bytes.get_u32();
+                        let value = bytes.get_f32();
+                        (chrom_start, chrom_end, value)
+                    }
+                    Endianness::Little => {
+                        let chrom_start = bytes.get_u32_le();
+                        let chrom_end = bytes.get_u32_le();
+                        let value = bytes.get_f32_le();
+                        (chrom_start, chrom_end, value)
+                    }
+                };
+                let mut value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
+                };
+                if value.end >= start && value.start <= end {
+                    value.start = value.start.max(start);
+                    value.end = value.end.min(end);
+                    values.push(value)
                 }
             }
-            2 => {
+        }
+        2 => {
+            let mut bytes = BytesMut::zeroed((item_count as usize) * 8);
+            block_data_mut.read_exact(&mut bytes)?;
+            for _ in 0..item_count {
                 // variable step
-                let chrom_start = block_data_mut.read_u32()?;
+                let (chrom_start, value) = match bigwig.info.header.endianness {
+                    Endianness::Big => {
+                        let chrom_start = bytes.get_u32();
+                        let value = bytes.get_f32();
+                        (chrom_start, value)
+                    }
+                    Endianness::Little => {
+                        let chrom_start = bytes.get_u32_le();
+                        let value = bytes.get_f32_le();
+                        (chrom_start, value)
+                    }
+                };
                 let chrom_end = chrom_start + item_span;
-                let value = block_data_mut.read_f32()?;
-                Value {
+                let mut value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
+                };
+                if value.end >= start && value.start <= end {
+                    value.start = value.start.max(start);
+                    value.end = value.end.min(end);
+                    values.push(value)
                 }
             }
-            3 => {
+        }
+        3 => {
+            let mut curr_start = chrom_start;
+            let mut bytes = BytesMut::zeroed((item_count as usize) * 4);
+            block_data_mut.read_exact(&mut bytes)?;
+            for _ in 0..item_count {
                 // fixed step
+                let value = match bigwig.info.header.endianness {
+                    Endianness::Big => {
+                        let value = bytes.get_f32();
+                        value
+                    }
+                    Endianness::Little => {
+                        let value = bytes.get_f32_le();
+                        value
+                    }
+                };
                 let chrom_start = curr_start;
                 curr_start += item_step;
                 let chrom_end = chrom_start + item_span;
-                let value = block_data_mut.read_f32()?;
-                Value {
+                let mut value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
+                };
+                if value.end >= start && value.start <= end {
+                    value.start = value.start.max(start);
+                    value.end = value.end.min(end);
+                    values.push(value)
                 }
             }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Unknown bigwig section type: {}", section_type),
-                ))
-            }
-        };
-        if value.end >= start && value.start <= end {
-            value.start = value.start.max(start);
-            value.end = value.end.min(end);
-            values.push(value)
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Unknown bigwig section type: {}", section_type),
+            ));
         }
     }
 

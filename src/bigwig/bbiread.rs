@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use bytes::{Buf, BytesMut};
 use thiserror::Error;
 
 use crate::bigwig::{
@@ -111,7 +112,7 @@ pub enum BBIReadError {
 pub type BBIReader<R> = ByteOrdered<BufReader<R>, Endianness>;
 // `MemCachedRead`is essentially a wrapper to allow caching hot regions of a
 // file in memory.
-pub type MemCachedReader<'a, R> = ByteOrdered<MemCachedRead<'a, BBIReader<R>>, Endianness>;
+pub type MemCachedReader<'a, R> = MemCachedRead<'a, BBIReader<R>>;
 
 pub trait BBIRead<R: SeekableRead> {
     /// Get basic info about the bbi file
@@ -159,30 +160,48 @@ pub trait BBIRead<R: SeekableRead> {
         let endianness = self.get_info().header.endianness;
         let mut file = self.ensure_mem_cached_reader()?;
         file.seek(SeekFrom::Start(at))?;
-        let mut header_data = [0; 48];
+        let mut header_data = BytesMut::zeroed(48);
         file.read_exact(&mut header_data)?;
-        let mut header_data = ByteOrdered::runtime(Cursor::new(header_data), endianness);
-        // All the following unwraps should compile to no-ops, since the underlying structure is an array
-        let magic = header_data.read_u32().unwrap();
-        if magic != CIR_TREE_MAGIC {
-            return Err(CirTreeSearchError::UnknownMagic);
-        }
-        let _blocksize = header_data.read_u32().unwrap();
-        let _item_count = header_data.read_u64().unwrap();
-        let _start_chrom_idx = header_data.read_u32().unwrap();
-        let _start_base = header_data.read_u32().unwrap();
-        let _end_chrom_idx = header_data.read_u32().unwrap();
-        let _end_base = header_data.read_u32().unwrap();
-        let _end_file_offset = header_data.read_u64().unwrap();
-        let _item_per_slot = header_data.read_u32().unwrap();
-        let _reserved = header_data.read_u32().unwrap();
+
+        match endianness {
+            Endianness::Big => {
+                let magic = header_data.get_u32();
+                if magic != CIR_TREE_MAGIC {
+                    return Err(CirTreeSearchError::UnknownMagic);
+                }
+
+                let _blocksize = header_data.get_u32();
+                let _item_count = header_data.get_u64();
+                let _start_chrom_idx = header_data.get_u32();
+                let _start_base = header_data.get_u32();
+                let _end_chrom_idx = header_data.get_u32();
+                let _end_base = header_data.get_u32();
+                let _end_file_offset = header_data.get_u64();
+                let _item_per_slot = header_data.get_u32();
+                let _reserved = header_data.get_u32();
+            }
+            Endianness::Little => {
+                let magic = header_data.get_u32_le();
+                if magic != CIR_TREE_MAGIC {
+                    return Err(CirTreeSearchError::UnknownMagic);
+                }
+
+                let _blocksize = header_data.get_u32_le();
+                let _item_count = header_data.get_u64_le();
+                let _start_chrom_idx = header_data.get_u32_le();
+                let _start_base = header_data.get_u32_le();
+                let _end_chrom_idx = header_data.get_u32_le();
+                let _end_base = header_data.get_u32_le();
+                let _end_file_offset = header_data.get_u64_le();
+                let _item_per_slot = header_data.get_u32_le();
+                let _reserved = header_data.get_u32_le();
+            }
+        };
 
         // TODO: could do some optimization here to check if our interval overlaps with any data
 
-        //eprintln!("cirTree header:\n bs: {:?}\n ic: {:?}\n sci: {:?}\n sb: {:?}\n eci: {:?}\n eb: {:?}\n efo: {:?}\n ips: {:?}\n r: {:?}", _blocksize, _item_count, _start_chrom_idx, _start_base, _end_chrom_idx, _end_base, _end_file_offset, _item_per_slot, _reserved);
         let mut blocks: Vec<Block> = vec![];
-        search_overlapping_blocks(&mut file, chrom_ix, start, end, &mut blocks)?;
-        //eprintln!("overlapping_blocks: {:?}", blocks);
+        search_overlapping_blocks(&mut file, endianness, chrom_ix, start, end, &mut blocks)?;
         Ok(blocks)
     }
 
@@ -199,46 +218,102 @@ pub trait BBIRead<R: SeekableRead> {
 }
 
 pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
-    let file = BufReader::with_capacity(128, file);
-    let mut file = ByteOrdered::runtime(file, Endianness::Little);
+    let mut file = BufReader::with_capacity(128, file);
 
-    let magic = file.read_u32()?;
-    // println!("Magic {:x?}", magic);
-    let filetype = match magic {
-        _ if magic == BIGWIG_MAGIC.to_be() => {
-            file = file.into_opposite();
-            BBIFile::BigWig
-        }
-        _ if magic == BIGWIG_MAGIC.to_le() => BBIFile::BigWig,
-        _ if magic == BIGBED_MAGIC.to_be() => {
-            file = file.into_opposite();
-            BBIFile::BigBed
-        }
-        _ if magic == BIGBED_MAGIC.to_le() => BBIFile::BigBed,
+    let mut header_data = BytesMut::zeroed(64);
+    file.read_exact(&mut header_data)?;
+
+    let magic = header_data.get_u32();
+    let (filetype, endianness) = match magic {
+        _ if magic == BIGWIG_MAGIC.to_le() => (BBIFile::BigWig, Endianness::Big),
+        _ if magic == BIGWIG_MAGIC.to_be() => (BBIFile::BigWig, Endianness::Little),
+        _ if magic == BIGBED_MAGIC.to_le() => (BBIFile::BigBed, Endianness::Big),
+        _ if magic == BIGBED_MAGIC.to_be() => (BBIFile::BigBed, Endianness::Little),
         _ => return Err(BBIFileReadInfoError::UnknownMagic),
     };
 
-    let _version = file.read_u16()?;
+    let (
+        _version,
+        zoom_levels,
+        chromosome_tree_offset,
+        full_data_offset,
+        full_index_offset,
+        _field_count,
+        _defined_field_count,
+        auto_sql_offset,
+        total_summary_offset,
+        uncompress_buf_size,
+    ) = match endianness {
+        Endianness::Big => {
+            let _version = header_data.get_u16();
 
-    // TODO: should probably handle versions < 3
-    assert!(
-        _version >= 3,
-        "Unable to read bigWigs or bigBeds with a version < 3"
-    );
+            // TODO: should probably handle versions < 3
+            assert!(
+                _version >= 3,
+                "Unable to read bigWigs or bigBeds with a version < 3"
+            );
 
-    let zoom_levels = file.read_u16()?;
-    let chromosome_tree_offset = file.read_u64()?;
-    let full_data_offset = file.read_u64()?;
-    let full_index_offset = file.read_u64()?;
-    let _field_count = file.read_u16()?;
-    let _defined_field_count = file.read_u16()?;
-    let auto_sql_offset = file.read_u64()?;
-    let total_summary_offset = file.read_u64()?;
-    let uncompress_buf_size = file.read_u32()?;
-    let _reserved = file.read_u64()?;
+            let zoom_levels = header_data.get_u16();
+            let chromosome_tree_offset = header_data.get_u64();
+            let full_data_offset = header_data.get_u64();
+            let full_index_offset = header_data.get_u64();
+            let _field_count = header_data.get_u16();
+            let _defined_field_count = header_data.get_u16();
+            let auto_sql_offset = header_data.get_u64();
+            let total_summary_offset = header_data.get_u64();
+            let uncompress_buf_size = header_data.get_u32();
+            let _reserved = header_data.get_u64();
+
+            (
+                _version,
+                zoom_levels,
+                chromosome_tree_offset,
+                full_data_offset,
+                full_index_offset,
+                _field_count,
+                _defined_field_count,
+                auto_sql_offset,
+                total_summary_offset,
+                uncompress_buf_size,
+            )
+        }
+        Endianness::Little => {
+            let _version = header_data.get_u16_le();
+
+            // TODO: should probably handle versions < 3
+            assert!(
+                _version >= 3,
+                "Unable to read bigWigs or bigBeds with a version < 3"
+            );
+
+            let zoom_levels = header_data.get_u16_le();
+            let chromosome_tree_offset = header_data.get_u64_le();
+            let full_data_offset = header_data.get_u64_le();
+            let full_index_offset = header_data.get_u64_le();
+            let _field_count = header_data.get_u16_le();
+            let _defined_field_count = header_data.get_u16_le();
+            let auto_sql_offset = header_data.get_u64_le();
+            let total_summary_offset = header_data.get_u64_le();
+            let uncompress_buf_size = header_data.get_u32_le();
+            let _reserved = header_data.get_u64_le();
+
+            (
+                _version,
+                zoom_levels,
+                chromosome_tree_offset,
+                full_data_offset,
+                full_index_offset,
+                _field_count,
+                _defined_field_count,
+                auto_sql_offset,
+                total_summary_offset,
+                uncompress_buf_size,
+            )
+        }
+    };
 
     let header = BBIHeader {
-        endianness: file.endianness(),
+        endianness,
         _version,
         zoom_levels,
         chromosome_tree_offset,
@@ -255,19 +330,45 @@ pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFile
 
     // TODO: could instead store this as an Option and only read when needed
     file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
-    let magic = file.read_u32()?;
-    let _block_size = file.read_u32()?;
-    let key_size = file.read_u32()?;
-    let val_size = file.read_u32()?;
-    let item_count = file.read_u64()?;
-    let _reserved = file.read_u64()?;
-    if magic != CHROM_TREE_MAGIC {
-        return Err(BBIFileReadInfoError::InvalidChroms);
-    }
+
+    let mut header_data = BytesMut::zeroed(32);
+    file.read_exact(&mut header_data)?;
+
+    let (key_size, val_size, item_count) = match endianness {
+        Endianness::Big => {
+            let magic = header_data.get_u32();
+            if magic != CHROM_TREE_MAGIC {
+                return Err(BBIFileReadInfoError::InvalidChroms);
+            }
+
+            let _block_size = header_data.get_u32();
+            let key_size = header_data.get_u32();
+            let val_size = header_data.get_u32();
+            let item_count = header_data.get_u64();
+            let _reserved = header_data.get_u64();
+
+            (key_size, val_size, item_count)
+        }
+        Endianness::Little => {
+            let magic = header_data.get_u32_le();
+            if magic != CHROM_TREE_MAGIC {
+                return Err(BBIFileReadInfoError::InvalidChroms);
+            }
+
+            let _block_size = header_data.get_u32_le();
+            let key_size = header_data.get_u32_le();
+            let val_size = header_data.get_u32_le();
+            let item_count = header_data.get_u64_le();
+            let _reserved = header_data.get_u64_le();
+
+            (key_size, val_size, item_count)
+        }
+    };
+
     assert_eq!(val_size, 8u32);
 
     let mut chrom_info = Vec::with_capacity(item_count as usize);
-    read_chrom_tree_block(&mut file, &mut chrom_info, key_size)?;
+    read_chrom_tree_block(&mut file, endianness, &mut chrom_info, key_size)?;
     chrom_info.sort_by(|c1, c2| c1.name.cmp(&c2.name));
 
     let info = BBIFileInfo {
@@ -281,42 +382,70 @@ pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFile
 }
 
 fn read_zoom_headers<R: SeekableRead>(
-    file: &mut ByteOrdered<BufReader<R>, Endianness>,
+    file: &mut BufReader<R>,
     header: &BBIHeader,
 ) -> io::Result<Vec<ZoomHeader>> {
+    let endianness = header.endianness;
+    let mut header_data = BytesMut::zeroed((header.zoom_levels as usize) * 24);
+    file.read_exact(&mut header_data)?;
+
     let mut zoom_headers = vec![];
-    for _ in 0..header.zoom_levels {
-        let reduction_level = file.read_u32()?;
-        let _reserved = file.read_u32()?;
-        let data_offset = file.read_u64()?;
-        let index_offset = file.read_u64()?;
+    match endianness {
+        Endianness::Big => {
+            for _ in 0..header.zoom_levels {
+                let reduction_level = header_data.get_u32();
+                let _reserved = header_data.get_u32();
+                let data_offset = header_data.get_u64();
+                let index_offset = header_data.get_u64();
 
-        //println!("Zoom header: reductionLevel: {:?} Reserved: {:?} Data offset: {:?} Index offset: {:?}", reduction_level, _reserved, data_offset, index_offset);
+                zoom_headers.push(ZoomHeader {
+                    reduction_level,
+                    data_offset,
+                    index_offset,
+                });
+            }
+        }
+        Endianness::Little => {
+            for _ in 0..header.zoom_levels {
+                let reduction_level = header_data.get_u32_le();
+                let _reserved = header_data.get_u32_le();
+                let data_offset = header_data.get_u64_le();
+                let index_offset = header_data.get_u64_le();
 
-        zoom_headers.push(ZoomHeader {
-            reduction_level,
-            data_offset,
-            index_offset,
-        });
-    }
+                zoom_headers.push(ZoomHeader {
+                    reduction_level,
+                    data_offset,
+                    index_offset,
+                });
+            }
+        }
+    };
 
     Ok(zoom_headers)
 }
 
 fn read_chrom_tree_block<R: SeekableRead>(
-    f: &mut ByteOrdered<BufReader<R>, Endianness>,
+    f: &mut BufReader<R>,
+    endianness: Endianness,
     chroms: &mut Vec<ChromInfo>,
     key_size: u32,
 ) -> io::Result<()> {
-    let isleaf = f.read_u8()?;
-    let _reserved = f.read_u8()?;
-    let count = f.read_u16()?;
+    let mut header_data = BytesMut::zeroed(4);
+    f.read_exact(&mut header_data)?;
+
+    let isleaf = header_data.get_u8();
+    let _reserved = header_data.get_u8();
+    let count = match endianness {
+        Endianness::Big => header_data.get_u16(),
+        Endianness::Little => header_data.get_u16_le(),
+    };
 
     if isleaf == 1 {
+        let mut bytes = BytesMut::zeroed((key_size as usize + 8) * (count as usize));
+        f.read_exact(&mut bytes)?;
+
         for _ in 0..count {
-            let mut key_bytes = vec![0u8; key_size as usize];
-            f.read_exact(&mut key_bytes)?;
-            let key_string = match String::from_utf8(key_bytes) {
+            let key_string = match std::str::from_utf8(&bytes.as_ref()[0..(key_size as usize)]) {
                 Ok(s) => s.trim_matches(char::from(0)).to_owned(),
                 Err(_) => {
                     return Err(io::Error::new(
@@ -325,8 +454,12 @@ fn read_chrom_tree_block<R: SeekableRead>(
                     ))
                 }
             };
-            let chrom_id = f.read_u32()?;
-            let chrom_size = f.read_u32()?;
+            bytes.advance(key_size as usize);
+
+            let (chrom_id, chrom_size) = match endianness {
+                Endianness::Big => (bytes.get_u32(), bytes.get_u32()),
+                Endianness::Little => (bytes.get_u32_le(), bytes.get_u32_le()),
+            };
             chroms.push(ChromInfo {
                 name: key_string,
                 id: chrom_id,
@@ -337,19 +470,25 @@ fn read_chrom_tree_block<R: SeekableRead>(
         // First, go through and get child blocks
         let mut children: Vec<u64> = vec![];
         children.reserve_exact(count as usize);
+
+        let mut bytes = BytesMut::zeroed((key_size as usize + 8) * (count as usize));
+        f.read_exact(&mut bytes)?;
+
         for _ in 0..count {
             // We don't need this, but have to read it
-            let mut key_bytes = vec![0u8; key_size as usize];
-            f.read_exact(&mut key_bytes)?;
+            bytes.advance(key_size as usize);
 
             // TODO: could add specific find here by comparing key string
-            let child_offset = f.read_u64()?;
+            let child_offset = match endianness {
+                Endianness::Big => bytes.get_u64(),
+                Endianness::Little => bytes.get_u64_le(),
+            };
             children.push(child_offset);
         }
         // Then go through each child block
         for child in children {
             f.seek(SeekFrom::Start(child))?;
-            read_chrom_tree_block(f, chroms, key_size)?;
+            read_chrom_tree_block(f, endianness, chroms, key_size)?;
         }
     }
     Ok(())
@@ -385,57 +524,139 @@ fn overlaps(
 }
 
 pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
-    file: &mut ByteOrdered<R, Endianness>,
+    file: &mut R,
+    endianness: Endianness,
     chrom_ix: u32,
     start: u32,
     end: u32,
     blocks: &mut Vec<Block>,
 ) -> io::Result<()> {
-    //eprintln!("Searching for blocks overlapping {:?}:{:?}-{:?}", chrom_ix, start, end);
+    let mut header_data = BytesMut::zeroed(4);
+    file.read_exact(&mut header_data)?;
 
-    let isleaf: u8 = file.read_u8()?;
+    let isleaf: u8 = header_data.get_u8();
     assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
-    let _reserved = file.read_u8()?;
-    let count: u16 = file.read_u16()?;
-    //eprintln!("Index: {:?} {:?} {:?}", isleaf, _reserved, count);
+    let _reserved = header_data.get_u8();
 
-    let mut childblocks: Vec<u64> = vec![];
-    for _ in 0..count {
-        let start_chrom_ix = file.read_u32()?;
-        let start_base = file.read_u32()?;
-        let end_chrom_ix = file.read_u32()?;
-        let end_base = file.read_u32()?;
-        let block_overlaps = overlaps(
-            chrom_ix,
-            start,
-            end,
-            start_chrom_ix,
-            start_base,
-            end_chrom_ix,
-            end_base,
-        );
-        if isleaf == 1 {
-            let data_offset = file.read_u64()?;
-            let data_size = file.read_u64()?;
+    let count = match endianness {
+        Endianness::Big => header_data.get_u16(),
+        Endianness::Little => header_data.get_u16_le(),
+    };
+
+    if isleaf == 1 {
+        let mut bytes = BytesMut::zeroed((count as usize) * 32);
+        file.read_exact(&mut bytes)?;
+
+        for _ in 0..count {
+            let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size) =
+                match endianness {
+                    Endianness::Big => {
+                        let start_chrom_ix = bytes.get_u32();
+                        let start_base = bytes.get_u32();
+                        let end_chrom_ix = bytes.get_u32();
+                        let end_base = bytes.get_u32();
+                        let data_offset = bytes.get_u64();
+                        let data_size = bytes.get_u64();
+
+                        (
+                            start_chrom_ix,
+                            start_base,
+                            end_chrom_ix,
+                            end_base,
+                            data_offset,
+                            data_size,
+                        )
+                    }
+                    Endianness::Little => {
+                        let start_chrom_ix = bytes.get_u32_le();
+                        let start_base = bytes.get_u32_le();
+                        let end_chrom_ix = bytes.get_u32_le();
+                        let end_base = bytes.get_u32_le();
+                        let data_offset = bytes.get_u64_le();
+                        let data_size = bytes.get_u64_le();
+
+                        (
+                            start_chrom_ix,
+                            start_base,
+                            end_chrom_ix,
+                            end_base,
+                            data_offset,
+                            data_size,
+                        )
+                    }
+                };
+            let block_overlaps = overlaps(
+                chrom_ix,
+                start,
+                end,
+                start_chrom_ix,
+                start_base,
+                end_chrom_ix,
+                end_base,
+            );
             if block_overlaps {
-                //eprintln!("Overlaps (leaf): {:?}:{:?}-{:?}:{:?} {:?} {:?}", start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size);
                 blocks.push(Block {
                     offset: data_offset,
                     size: data_size,
                 });
             }
-        } else {
-            let data_offset = file.read_u64()?;
+        }
+    } else {
+        let mut bytes = BytesMut::zeroed((count as usize) * 24);
+        file.read_exact(&mut bytes)?;
+
+        let mut childblocks: Vec<u64> = vec![];
+        for _ in 0..count {
+            let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset) = match endianness
+            {
+                Endianness::Big => {
+                    let start_chrom_ix = bytes.get_u32();
+                    let start_base = bytes.get_u32();
+                    let end_chrom_ix = bytes.get_u32();
+                    let end_base = bytes.get_u32();
+                    let data_offset = bytes.get_u64();
+
+                    (
+                        start_chrom_ix,
+                        start_base,
+                        end_chrom_ix,
+                        end_base,
+                        data_offset,
+                    )
+                }
+                Endianness::Little => {
+                    let start_chrom_ix = bytes.get_u32_le();
+                    let start_base = bytes.get_u32_le();
+                    let end_chrom_ix = bytes.get_u32_le();
+                    let end_base = bytes.get_u32_le();
+                    let data_offset = bytes.get_u64_le();
+
+                    (
+                        start_chrom_ix,
+                        start_base,
+                        end_chrom_ix,
+                        end_base,
+                        data_offset,
+                    )
+                }
+            };
+            let block_overlaps = overlaps(
+                chrom_ix,
+                start,
+                end,
+                start_chrom_ix,
+                start_base,
+                end_chrom_ix,
+                end_base,
+            );
             if block_overlaps {
-                //eprintln!("Overlaps (non-leaf): {:?}:{:?}-{:?}:{:?} {:?}", start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset);
                 childblocks.push(data_offset);
             }
         }
-    }
-    for childblock in childblocks {
-        //eprintln!("Seeking to {:?}", childblock);
-        file.seek(SeekFrom::Start(childblock))?;
-        search_overlapping_blocks(file, chrom_ix, start, end, blocks)?;
+        for childblock in childblocks {
+            file.seek(SeekFrom::Start(childblock))?;
+            search_overlapping_blocks(file, endianness, chrom_ix, start, end, blocks)?;
+        }
     }
     Ok(())
 }
@@ -494,29 +715,65 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     let itemcount = len / (4 * 8);
     let mut records = Vec::with_capacity(itemcount);
 
-    for _ in 0..itemcount {
-        let chrom_id = data_mut.read_u32()?;
-        let chrom_start = data_mut.read_u32()?;
-        let chrom_end = data_mut.read_u32()?;
-        let bases_covered = u64::from(data_mut.read_u32()?);
-        let min_val = f64::from(data_mut.read_f32()?);
-        let max_val = f64::from(data_mut.read_f32()?);
-        let sum = f64::from(data_mut.read_f32()?);
-        let sum_squares = f64::from(data_mut.read_f32()?);
-        if chrom_id == chrom && chrom_end >= start && chrom_start <= end {
-            records.push(ZoomRecord {
-                chrom: chrom_id,
-                start: chrom_start,
-                end: chrom_end,
-                summary: Summary {
-                    total_items: 0,
-                    bases_covered,
-                    min_val,
-                    max_val,
-                    sum,
-                    sum_squares,
-                },
-            });
+    let endianness = bbifile.get_info().header.endianness;
+
+    let mut bytes = BytesMut::zeroed(itemcount * 64);
+    data_mut.read_exact(&mut bytes)?;
+
+    match endianness {
+        Endianness::Big => {
+            for _ in 0..itemcount {
+                let chrom_id = bytes.get_u32();
+                let chrom_start = bytes.get_u32();
+                let chrom_end = bytes.get_u32();
+                let bases_covered = u64::from(bytes.get_u32());
+                let min_val = f64::from(bytes.get_f32());
+                let max_val = f64::from(bytes.get_f32());
+                let sum = f64::from(bytes.get_f32());
+                let sum_squares = f64::from(bytes.get_f32());
+                if chrom_id == chrom && chrom_end >= start && chrom_start <= end {
+                    records.push(ZoomRecord {
+                        chrom: chrom_id,
+                        start: chrom_start,
+                        end: chrom_end,
+                        summary: Summary {
+                            total_items: 0,
+                            bases_covered,
+                            min_val,
+                            max_val,
+                            sum,
+                            sum_squares,
+                        },
+                    });
+                }
+            }
+        }
+        Endianness::Little => {
+            for _ in 0..itemcount {
+                let chrom_id = bytes.get_u32_le();
+                let chrom_start = bytes.get_u32_le();
+                let chrom_end = bytes.get_u32_le();
+                let bases_covered = u64::from(bytes.get_u32_le());
+                let min_val = f64::from(bytes.get_f32_le());
+                let max_val = f64::from(bytes.get_f32_le());
+                let sum = f64::from(bytes.get_f32_le());
+                let sum_squares = f64::from(bytes.get_f32_le());
+                if chrom_id == chrom && chrom_end >= start && chrom_start <= end {
+                    records.push(ZoomRecord {
+                        chrom: chrom_id,
+                        start: chrom_start,
+                        end: chrom_end,
+                        summary: Summary {
+                            total_items: 0,
+                            bases_covered,
+                            min_val,
+                            max_val,
+                            sum,
+                            sum_squares,
+                        },
+                    });
+                }
+            }
         }
     }
 
