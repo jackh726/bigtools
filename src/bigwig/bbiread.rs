@@ -1,8 +1,8 @@
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::vec::Vec;
 
-use byteordered::{ByteOrdered, Endianness};
+use byteordered::Endianness;
 use bytes::{Buf, BytesMut};
 use thiserror::Error;
 
@@ -109,10 +109,9 @@ pub enum BBIReadError {
     IoError(#[from] io::Error),
 }
 
-pub type BBIReader<R> = ByteOrdered<BufReader<R>, Endianness>;
 // `MemCachedRead`is essentially a wrapper to allow caching hot regions of a
 // file in memory.
-pub type MemCachedReader<'a, R> = MemCachedRead<'a, BBIReader<R>>;
+pub type MemCachedReader<'a, R> = MemCachedRead<'a, R>;
 
 pub trait BBIRead<R: SeekableRead> {
     /// Get basic info about the bbi file
@@ -122,7 +121,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn autosql(&mut self) -> io::Result<String>;
 
     /// Gets a reader to the underlying file
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<R>>;
+    fn ensure_reader(&mut self) -> io::Result<&mut R>;
 
     /// Gets a reader to the underlying file which caches the reads
     fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, R>>;
@@ -217,9 +216,7 @@ pub trait BBIRead<R: SeekableRead> {
     }
 }
 
-pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
-    let mut file = BufReader::with_capacity(128, file);
-
+pub(crate) fn read_info<R: SeekableRead>(mut file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
     let mut header_data = BytesMut::zeroed(64);
     file.read_exact(&mut header_data)?;
 
@@ -382,7 +379,7 @@ pub(crate) fn read_info<R: SeekableRead>(file: R) -> Result<BBIFileInfo, BBIFile
 }
 
 fn read_zoom_headers<R: SeekableRead>(
-    file: &mut BufReader<R>,
+    file: &mut R,
     header: &BBIHeader,
 ) -> io::Result<Vec<ZoomHeader>> {
     let endianness = header.endianness;
@@ -425,7 +422,7 @@ fn read_zoom_headers<R: SeekableRead>(
 }
 
 fn read_chrom_tree_block<R: SeekableRead>(
-    f: &mut BufReader<R>,
+    f: &mut R,
     endianness: Endianness,
     chroms: &mut Vec<ChromInfo>,
     key_size: u32,
@@ -666,16 +663,10 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     bbifile: &mut B,
     block: &Block,
     known_offset: u64,
-) -> io::Result<ByteOrdered<Cursor<Vec<u8>>, Endianness>> {
+) -> io::Result<Cursor<Vec<u8>>> {
     use libdeflater::Decompressor;
 
-    let (endianness, uncompress_buf_size) = {
-        let info = bbifile.get_info();
-        (
-            info.header.endianness,
-            info.header.uncompress_buf_size as usize,
-        )
-    };
+    let uncompress_buf_size = bbifile.get_info().header.uncompress_buf_size as usize;
     let file = bbifile.ensure_reader()?;
 
     // TODO: Could minimize this by chunking block reads
@@ -698,7 +689,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
         raw_data
     };
 
-    Ok(ByteOrdered::runtime(Cursor::new(block_data), endianness))
+    Ok(Cursor::new(block_data))
 }
 
 pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
@@ -710,7 +701,7 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     end: u32,
 ) -> Result<Box<dyn Iterator<Item = ZoomRecord> + Send>, BBIReadError> {
     let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
-    let len = data_mut.inner_mut().get_mut().len();
+    let len = data_mut.get_mut().len();
     assert_eq!(len % (4 * 8), 0);
     let itemcount = len / (4 * 8);
     let mut records = Vec::with_capacity(itemcount);

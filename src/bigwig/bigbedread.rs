@@ -3,12 +3,12 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
-use byteordered::{ByteOrdered, Endianness};
+use byteordered::ByteOrdered;
 use thiserror::Error;
 
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, BBIReader,
-    Block, ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
+    ChromAndSize, MemCachedReader, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -160,7 +160,7 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
 pub struct BigBedRead<R, S> {
     pub info: BBIFileInfo,
     reopen: R,
-    reader: Option<ByteOrdered<BufReader<S>, Endianness>>,
+    reader: Option<S>,
     cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
@@ -191,6 +191,7 @@ where
     fn autosql(&mut self) -> io::Result<String> {
         self.ensure_reader()?;
         let reader = self.reader.as_mut().unwrap();
+        let mut reader = BufReader::new(reader);
         reader.seek(SeekFrom::Start(self.info.header.auto_sql_offset))?;
         let mut buffer = Vec::new();
         reader.read_until(b'\0', &mut buffer)?;
@@ -200,12 +201,10 @@ where
         Ok(autosql)
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut BBIReader<S>> {
+    fn ensure_reader(&mut self) -> io::Result<&mut S> {
         if self.reader.is_none() {
-            let endianness = self.info.header.endianness;
             let fp = self.reopen.reopen()?;
-            let file = ByteOrdered::runtime(BufReader::new(fp), endianness);
-            self.reader.replace(file);
+            self.reader.replace(fp);
         }
         // FIXME: In theory, can get rid of this unwrap by doing a `match` with
         // `Option::insert` in the `None` case, but that currently runs into
@@ -364,7 +363,8 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
     start: u32,
     end: u32,
 ) -> Result<Box<dyn Iterator<Item = BedEntry> + Send>, BBIReadError> {
-    let mut block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
+    let block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
+    let mut block_data_mut = ByteOrdered::runtime(block_data_mut, bigbed.info.header.endianness);
     let mut entries: Vec<BedEntry> = Vec::new();
 
     let mut read_entry = || -> io::Result<BedEntry> {
