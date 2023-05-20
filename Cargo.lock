@@ -46,6 +46,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "byteordered",
+ "bytes",
  "clap",
  "crossbeam-channel",
  "crossbeam-utils",
