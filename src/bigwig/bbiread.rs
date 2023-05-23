@@ -533,19 +533,21 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
     };
 
     if isleaf == 1 {
-        let mut bytes = BytesMut::zeroed((count as usize) * 32);
+        let mut bytes = vec![0u8; (count as usize) * 32];
         file.read_exact(&mut bytes)?;
 
-        for _ in 0..count {
+        for i in 0..(count as usize) {
+            let istart = i*32;
+            let bytes: &[u8; 32] = &bytes[istart..istart+32].try_into().unwrap();
             let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size) =
                 match endianness {
                     Endianness::Big => {
-                        let start_chrom_ix = bytes.get_u32();
-                        let start_base = bytes.get_u32();
-                        let end_chrom_ix = bytes.get_u32();
-                        let end_base = bytes.get_u32();
-                        let data_offset = bytes.get_u64();
-                        let data_size = bytes.get_u64();
+                        let start_chrom_ix = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                        let start_base = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                        let end_chrom_ix = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                        let end_base = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+                        let data_offset = u64::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]]);
+                        let data_size = u64::from_be_bytes([bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31]]);
 
                         (
                             start_chrom_ix,
@@ -557,12 +559,12 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
                         )
                     }
                     Endianness::Little => {
-                        let start_chrom_ix = bytes.get_u32_le();
-                        let start_base = bytes.get_u32_le();
-                        let end_chrom_ix = bytes.get_u32_le();
-                        let end_base = bytes.get_u32_le();
-                        let data_offset = bytes.get_u64_le();
-                        let data_size = bytes.get_u64_le();
+                        let start_chrom_ix = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                        let start_base = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                        let end_chrom_ix = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                        let end_base = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+                        let data_offset = u64::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]]);
+                        let data_size = u64::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31]]);
 
                         (
                             start_chrom_ix,
@@ -591,19 +593,21 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
             }
         }
     } else {
-        let mut bytes = BytesMut::zeroed((count as usize) * 24);
+        let mut bytes = vec![0u8; (count as usize) * 32];
         file.read_exact(&mut bytes)?;
 
         let mut childblocks: Vec<u64> = vec![];
-        for _ in 0..count {
+        for i in 0..(count as usize) {
+            let istart = i*24;
+            let bytes: &[u8; 24] = &bytes[istart..istart+24].try_into().unwrap();
             let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset) = match endianness
             {
                 Endianness::Big => {
-                    let start_chrom_ix = bytes.get_u32();
-                    let start_base = bytes.get_u32();
-                    let end_chrom_ix = bytes.get_u32();
-                    let end_base = bytes.get_u32();
-                    let data_offset = bytes.get_u64();
+                    let start_chrom_ix = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let start_base = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let end_chrom_ix = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                    let end_base = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+                    let data_offset = u64::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]]);
 
                     (
                         start_chrom_ix,
@@ -614,11 +618,11 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
                     )
                 }
                 Endianness::Little => {
-                    let start_chrom_ix = bytes.get_u32_le();
-                    let start_base = bytes.get_u32_le();
-                    let end_chrom_ix = bytes.get_u32_le();
-                    let end_base = bytes.get_u32_le();
-                    let data_offset = bytes.get_u64_le();
+                    let start_chrom_ix = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let start_base = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let end_chrom_ix = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                    let end_base = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+                    let data_offset = u64::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]]);
 
                     (
                         start_chrom_ix,
