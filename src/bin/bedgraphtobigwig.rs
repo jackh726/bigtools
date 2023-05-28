@@ -47,6 +47,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
                 .takes_value(true)
                 .default_value("all"))
+        .arg(Arg::new("parallel")
+                .short('p')
+                .help("Set whether to read and convert the bedGraph in parallel. Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.")
+                .takes_value(true)
+                .default_value("auto"))
         .get_matches();
 
     let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
@@ -129,7 +134,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         outb.write(chrom_map, chsi, pool)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
-        if infile.metadata()?.len() >= 200_000_000 {
+        let large_file = infile.metadata()?.len() >= 200_000_000;
+        let parallel = matches.value_of("auto");
+        let parallel = match (nthreads, parallel) {
+            (1, _) | (_, None) | (_, Some("auto")) => large_file,
+            (_, Some("yes")) => true,
+            (_, Some("no")) => false,
+            (_, Some(v)) => {
+                eprintln!(
+                    "Unexpected value for `parallel`: \"{}\". Defaulting to `auto`.",
+                    v
+                );
+                true
+            }
+        };
+        if parallel {
             let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
 
             let chsi = bedparser::BedParserParallelStreamingIterator::new(

@@ -125,9 +125,12 @@ def bedgraphtobigwig(comp):
     bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
     compare(comp, 'bedgraphtobigwig_small', ucsc, bigtools, bigtools_st)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
-    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig']]
-    bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
-    compare(comp, 'bedgraphtobigwig_medium', ucsc, bigtools, bigtools_st)
+    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-p no']]
+    bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no']]
+    compare(comp, 'bedgraphtobigwig_medium_serial', ucsc, bigtools, bigtools_st)
+    ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
+    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-p yes']]
+    compare(comp, 'bedgraphtobigwig_medium_parallel', ucsc, bigtools, None)
 
 def bedtobigbed(comp):
     global ucsctoolspath
