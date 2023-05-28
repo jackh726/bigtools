@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
-    ChromAndSize, MemCachedReader, ZoomIntervalIter,
+    ChromAndSize, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
@@ -212,7 +212,7 @@ where
         Ok(self.reader.as_mut().unwrap())
     }
 
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, S>> {
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedRead<'_, S>> {
         self.ensure_reader()?;
         let inner = self.reader.as_mut().unwrap();
         Ok(MemCachedRead::new(inner, &mut self.cache))
