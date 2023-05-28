@@ -1,4 +1,4 @@
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, SeekFrom};
 use std::marker::PhantomData;
 use std::vec::Vec;
 
@@ -10,7 +10,6 @@ use crate::bigwig::{
     BBIFile, Summary, ZoomHeader, ZoomRecord, BIGBED_MAGIC, BIGWIG_MAGIC, CHROM_TREE_MAGIC,
     CIR_TREE_MAGIC,
 };
-use crate::utils::mem_cached_file::MemCachedRead;
 use crate::utils::seekableread::SeekableRead;
 
 #[derive(Copy, Clone, Debug)]
@@ -119,9 +118,6 @@ pub trait BBIRead<R: SeekableRead> {
     /// Gets a reader to the underlying file
     fn ensure_reader(&mut self) -> io::Result<&mut R>;
 
-    /// Gets a reader to the underlying file which caches the reads
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedRead<'_, R>>;
-
     /// Manually close the open file descriptor (if it exists). If any
     /// operations are performed after this is called, the file descriptor
     /// will be reopened.
@@ -153,7 +149,7 @@ pub trait BBIRead<R: SeekableRead> {
         };
 
         let endianness = self.get_info().header.endianness;
-        let mut file = self.ensure_mem_cached_reader()?;
+        let mut file = self.ensure_reader()?;
         file.seek(SeekFrom::Start(at))?;
         let mut header_data = BytesMut::zeroed(48);
         file.read_exact(&mut header_data)?;
