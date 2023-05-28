@@ -129,11 +129,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     outb.autosql = Some(autosql);
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserStreamingIterator::new(
-        vals_iter,
-        chrom_map.clone(),
-        allow_out_of_order_chroms,
-    );
+    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
     outb.write(chrom_map, chsi, pool)?;
 
     Ok(())

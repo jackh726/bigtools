@@ -10,9 +10,8 @@
 //! The final layer of abstraction is a thin wrapper around the previous to provide some optional
 //! error checking and to keep track of the chromosomes seen.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs::File;
-use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,9 +21,8 @@ use thiserror::Error;
 
 use crate::bigwig::{BedEntry, Value};
 use crate::utils::chromvalues::ChromValues;
-use crate::utils::idmap::IdMap;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ChromProcessingFnOutput, ReadData};
+use crate::{ChromData, ChromDataState, ChromProcessingFnOutput};
 
 // FIXME: replace with LendingIterator when GATs are thing
 /// Essentially a combined lending iterator over the chrom (&str) and remaining
@@ -421,44 +419,34 @@ impl<S: StreamingBedValues> Drop for BedChromData<S> {
 // Chromosome tracking and optional error reporting
 // ------------------------------------------------
 
-pub struct BedParserStreamingIterator<S: StreamingBedValues, H: BuildHasher> {
+pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: BedParser<S>,
-    chrom_map: HashMap<String, u32, H>,
     allow_out_of_order_chroms: bool,
-    chrom_ids: Option<IdMap>,
     last_chrom: Option<String>,
 }
 
-impl<S: StreamingBedValues, H: BuildHasher> BedParserStreamingIterator<S, H> {
-    pub fn new(
-        bed_data: BedParser<S>,
-        chrom_map: HashMap<String, u32, H>,
-        allow_out_of_order_chroms: bool,
-    ) -> Self {
+impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
+    pub fn new(bed_data: BedParser<S>, allow_out_of_order_chroms: bool) -> Self {
         BedParserStreamingIterator {
             bed_data,
-            chrom_map,
             allow_out_of_order_chroms,
-            chrom_ids: Some(IdMap::default()),
             last_chrom: None,
         }
     }
 }
 
-impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIterator<S, H> {
+impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
     type Output = BedChromData<S>;
 
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
     fn advance<
-        F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
     >(
         &mut self,
-        do_read: &F,
+        do_read: &mut F,
     ) -> io::Result<ChromDataState<Self::Output>> {
         Ok(match self.bed_data.next_chrom() {
             Some((chrom, group)) => {
-                let chrom_ids = self.chrom_ids.as_mut().unwrap();
-
                 // First, if we don't want to allow out of order chroms, error here
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
@@ -468,30 +456,16 @@ impl<S: StreamingBedValues, H: BuildHasher> ChromData for BedParserStreamingIter
                     }
                 }
 
-                // Next, make sure we have the length of the chromosome
-                let length = match self.chrom_map.get(&chrom) {
-                    Some(length) => *length,
-                    None => return Ok(ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom)))),
-                };
-                // Make a new id for the chromosome
-                let chrom_id = chrom_ids.get_id(&chrom);
-
-                let read_data = (chrom, chrom_id, length, group);
-                let read = do_read(read_data)?;
+                let read = do_read(chrom, group)?;
                 ChromDataState::NewChrom(read)
             }
-            None => {
-                let chrom_ids = self.chrom_ids.take().unwrap();
-                ChromDataState::Finished(chrom_ids)
-            }
+            None => ChromDataState::Finished,
         })
     }
 }
 
-pub struct BedParserParallelStreamingIterator<V, O: ChromValues, H: BuildHasher> {
-    chrom_map: HashMap<String, u32, H>,
+pub struct BedParserParallelStreamingIterator<V, O: ChromValues> {
     allow_out_of_order_chroms: bool,
-    chrom_ids: Option<IdMap>,
     last_chrom: Option<String>,
 
     chrom_indices: Vec<(u64, String)>,
@@ -501,9 +475,8 @@ pub struct BedParserParallelStreamingIterator<V, O: ChromValues, H: BuildHasher>
     queued_reads: VecDeque<io::Result<ChromDataState<O>>>,
 }
 
-impl<V, O: ChromValues, H: BuildHasher> BedParserParallelStreamingIterator<V, O, H> {
+impl<V, O: ChromValues> BedParserParallelStreamingIterator<V, O> {
     pub fn new(
-        chrom_map: HashMap<String, u32, H>,
         mut chrom_indices: Vec<(u64, String)>,
         allow_out_of_order_chroms: bool,
         path: PathBuf,
@@ -514,9 +487,7 @@ impl<V, O: ChromValues, H: BuildHasher> BedParserParallelStreamingIterator<V, O,
         chrom_indices.reverse();
 
         BedParserParallelStreamingIterator {
-            chrom_map,
             allow_out_of_order_chroms,
-            chrom_ids: Some(IdMap::default()),
             last_chrom: None,
 
             chrom_indices,
@@ -528,23 +499,22 @@ impl<V, O: ChromValues, H: BuildHasher> BedParserParallelStreamingIterator<V, O,
     }
 }
 
-impl<V, H: BuildHasher> ChromData
-    for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>, H>
+impl<V> ChromData
+    for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>>
 {
     type Output = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn advance<
-        F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
     >(
         &mut self,
-        do_read: &F,
+        do_read: &mut F,
     ) -> io::Result<ChromDataState<Self::Output>> {
-        let begin_next = |_self: &mut Self| -> io::Result<_> {
+        let mut begin_next = |_self: &mut Self| -> io::Result<_> {
             let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
                 None => {
-                    let chrom_ids = _self.chrom_ids.take().unwrap();
-                    return Ok(ChromDataState::<Self::Output>::Finished(chrom_ids));
+                    return Ok(ChromDataState::<Self::Output>::Finished);
                 }
             };
 
@@ -560,7 +530,6 @@ impl<V, H: BuildHasher> ChromData
 
             Ok(match parser.next_chrom() {
                 Some((chrom, group)) => {
-                    let chrom_ids = _self.chrom_ids.as_mut().unwrap();
                     let last = _self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
                         // TODO: test this correctly fails
@@ -568,14 +537,8 @@ impl<V, H: BuildHasher> ChromData
                             return Ok(ChromDataState::Error(BedParseError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                         }
                     }
-                    let length = match _self.chrom_map.get(&chrom) {
-                        Some(length) => *length,
-                        None => return Ok(ChromDataState::Error(BedParseError::InvalidInput(format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", chrom)))),
-                    };
-                    let chrom_id = chrom_ids.get_id(&chrom);
 
-                    let read_data = (chrom, chrom_id, length, group);
-                    let read = do_read(read_data)?;
+                    let read = do_read(chrom, group)?;
 
                     ChromDataState::NewChrom(read)
                 }
@@ -772,7 +735,7 @@ mod tests {
         dir.push("resources/test");
         dir.push("multi_chrom.bedGraph");
 
-        let chrom_map = HashMap::from([
+        let chrom_map = std::collections::HashMap::from([
             ("chr1".to_owned(), 100000),
             ("chr2".to_owned(), 100000),
             ("chr3".to_owned(), 100000),
@@ -785,7 +748,6 @@ mod tests {
             crate::bed::indexer::index_chroms(File::open(dir.clone())?)?;
 
         let mut chsi = BedParserParallelStreamingIterator::new(
-            chrom_map,
             chrom_indices,
             true,
             PathBuf::from(dir.clone()),
@@ -797,36 +759,55 @@ mod tests {
             .create()
             .expect("Unable to create thread pool.");
         let options = BBIWriteOptions::default();
-        let do_read = |read: ReadData<_>| {
-            crate::BigWigWrite::begin_processing_chrom(read, pool.clone(), options)
+
+        let mut chrom_ids = crate::utils::idmap::IdMap::default();
+        let mut do_read = |chrom: String, data| -> io::Result<ChromProcessingFnOutput<BedChromData<BedFileStream<Value, BufReader<File>>>>> {
+            let length = match chrom_map.get(&chrom) {
+                Some(length) => *length,
+                None => return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", 0),
+                )),
+            };
+            // Make a new id for the chromosome
+            let chrom_id = chrom_ids.get_id(&chrom);
+
+            crate::BigWigWrite::begin_processing_chrom(
+                chrom,
+                data,
+                pool.clone(),
+                options,
+                chrom_id,
+                length,
+            )
         };
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
+            chsi.advance(&mut do_read),
             Ok(ChromDataState::NewChrom(..))
         ));
         assert!(matches!(
-            chsi.advance(&do_read),
-            Ok(ChromDataState::Finished(..))
+            chsi.advance(&mut do_read),
+            Ok(ChromDataState::Finished)
         ));
 
         Ok(())

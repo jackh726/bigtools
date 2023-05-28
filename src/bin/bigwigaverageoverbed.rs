@@ -1,11 +1,12 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 
+use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::{App, Arg};
 
 use bigtools::bigwig::BigWigRead;
-use bigtools::utils::misc::{bigwig_average_over_bed, BigWigAverageOverBedOptions, Name};
+use bigtools::utils::misc::{stats_for_bed_item, Name};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BigWigAverageOverBed")
@@ -24,9 +25,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .index(3)
                 .required(true)
             )
-        .arg(Arg::new("allcols")
-                .short('a')
-                .help("If set, the output will be a bed with all columns of the input, with additional states at the end. Otherwise, the ouput will be a tsv with the name (or the chrom, start, and end in the form `chrom:start-end` if names are not unique) followed by stats.")
+        .arg(Arg::new("namecol")
+                .short('n')
+                .help("Supports three types of options: `interval`, `none`, or a column number (one indexed). If `interval`, the name column in the output will be the interval in the form of `chrom:start-end`. If `none`, then all columns will be included in the output file. Otherwise, the one-indexed column will be used as the name. By default, column 4 is used as a name column.")
+                .default_value("4")
             )
         .get_matches();
 
@@ -34,63 +36,52 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bedinpath = matches.value_of("bedin").unwrap();
     let bedoutpath = matches.value_of("output").unwrap();
 
-    let allcols = matches.is_present("allcols");
-
-    let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+    let mut inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
     let mut bedoutwriter = BufWriter::new(outbed);
 
-    let name: Name = {
-        if allcols {
-            Name::None
-        } else {
-            const NAME_COL: usize = 3;
-            const TEST_LINES: usize = 10;
-            let reader = BufReader::new(File::open(bedinpath)?);
-            let mut lines = reader
-                .lines()
-                .take(TEST_LINES)
-                .map(|line| -> io::Result<Option<String>> {
-                    let l = line?;
-                    let cols = l
-                        .trim()
-                        .split('\t')
-                        .take((NAME_COL + 1).max(3))
-                        .collect::<Vec<_>>();
-                    if cols.len() < 3 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Not enough columns. Expected >= 3.",
-                        ));
-                    }
-                    Ok(cols.get(NAME_COL - 1).map(|s| s.to_string()))
-                })
-                .collect::<io::Result<Vec<_>>>()?;
-            lines.sort();
-            lines.dedup();
-            if lines.len() != TEST_LINES {
-                eprintln!(
-                    "Name column ({}) is not unique. Using interval as the name.",
-                    NAME_COL
-                );
-                Name::None
-            } else {
-                Name::Column(std::num::NonZeroUsize::new(NAME_COL).unwrap())
+    let bedin = BufReader::new(File::open(bedinpath)?);
+    let mut bedstream = StreamingLineReader::new(bedin);
+
+    let name = match matches.value_of("namecol") {
+        Some("interval") => Name::Interval,
+        Some("none") => Name::None,
+        Some(col) => {
+            let col = col.parse::<usize>();
+            match col {
+                Ok(col) if col > 0 => Name::Column(col - 1),
+                Ok(_) => return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid name column option. Column values are one-indexed, so should not be zero.",
+                ).into()),
+                Err(_) => return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid name column option. Allowed options are `interval`, `none`, or an one-indexed integer value for a given column.",
+                ).into()),
             }
         }
+        None => Name::Column(3),
     };
 
-    let options = BigWigAverageOverBedOptions { name, allcols };
-    let bedin = BufReader::new(File::open(bedinpath)?);
-    let iter = bigwig_average_over_bed(bedin, inbigwig, options)?;
-    for entry in iter {
-        let entry = entry?;
-        let name = entry.name;
+    loop {
+        let line = match bedstream.read() {
+            None => break,
+            Some(Err(e)) => {
+                return Err(e.into());
+            }
+            Some(Ok(line)) => line,
+        };
+
+        let entry = match stats_for_bed_item(name, line, &mut inbigwig) {
+            Ok(stats) => stats,
+            Err(e) => return Err(e.into()),
+        };
+
         let stats = format!(
             "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
             entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
         );
-        writeln!(&mut bedoutwriter, "{}\t{}", name, stats)?
+        writeln!(&mut bedoutwriter, "{}\t{}", entry.name, stats)?
     }
 
     Ok(())

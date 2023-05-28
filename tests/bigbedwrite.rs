@@ -46,7 +46,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
-    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, chrom_map.clone(), false);
+    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool).unwrap();
 
     let mut bwread =

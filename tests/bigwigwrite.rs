@@ -39,7 +39,7 @@ fn test() -> Result<(), Box<dyn Error>> {
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
 
-    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, chrom_map.clone(), false);
+    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
@@ -93,7 +93,7 @@ fn test_multi() -> io::Result<()> {
     chrom_map.insert("chr5".to_string(), 181538259);
     chrom_map.insert("chr6".to_string(), 170805979);
 
-    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, chrom_map.clone(), false);
+    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool.clone()).unwrap();
 
     let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
