@@ -109,10 +109,6 @@ pub enum BBIReadError {
     IoError(#[from] io::Error),
 }
 
-// `MemCachedRead`is essentially a wrapper to allow caching hot regions of a
-// file in memory.
-pub type MemCachedReader<'a, R> = MemCachedRead<'a, R>;
-
 pub trait BBIRead<R: SeekableRead> {
     /// Get basic info about the bbi file
     fn get_info(&self) -> &BBIFileInfo;
@@ -124,7 +120,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn ensure_reader(&mut self) -> io::Result<&mut R>;
 
     /// Gets a reader to the underlying file which caches the reads
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedReader<'_, R>>;
+    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedRead<'_, R>>;
 
     /// Manually close the open file descriptor (if it exists). If any
     /// operations are performed after this is called, the file descriptor
