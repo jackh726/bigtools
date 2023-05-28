@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
@@ -11,7 +10,6 @@ use crate::bbiread::{
     ChromAndSize, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
-use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
 use crate::utils::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
 struct IntervalIter<'a, I, R, S>
@@ -161,7 +159,6 @@ pub struct BigBedRead<R, S> {
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<S>,
-    cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigBedRead<R, S>
@@ -174,7 +171,6 @@ where
             info: self.info.clone(),
             reopen: self.reopen.clone(),
             reader: None,
-            cache: HashMap::new(),
         }
     }
 }
@@ -210,12 +206,6 @@ where
         // `Option::insert` in the `None` case, but that currently runs into
         // lifetime issues.
         Ok(self.reader.as_mut().unwrap())
-    }
-
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedRead<'_, S>> {
-        self.ensure_reader()?;
-        let inner = self.reader.as_mut().unwrap();
-        Ok(MemCachedRead::new(inner, &mut self.cache))
     }
 
     fn close(&mut self) {
@@ -262,7 +252,6 @@ where
             info,
             reopen,
             reader: None,
-            cache: HashMap::new(),
         })
     }
 

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
@@ -11,7 +10,6 @@ use crate::bbiread::{
     ChromAndSize, ZoomIntervalIter,
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
-use crate::utils::mem_cached_file::{MemCachedRead, CACHE_SIZE};
 use crate::utils::seekableread::{Reopen, ReopenableFile, SeekableRead};
 
 struct IntervalIter<'a, I, R, S>
@@ -169,7 +167,6 @@ where
     pub info: BBIFileInfo,
     reopen: R,
     reader: Option<S>,
-    cache: HashMap<usize, [u8; CACHE_SIZE]>,
 }
 
 impl<R, S> Clone for BigWigRead<R, S>
@@ -182,7 +179,6 @@ where
             info: self.info.clone(),
             reopen: self.reopen.clone(),
             reader: None,
-            cache: HashMap::new(),
         }
     }
 }
@@ -202,12 +198,6 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
             self.reader.replace(fp);
         }
         Ok(self.reader.as_mut().unwrap())
-    }
-
-    fn ensure_mem_cached_reader(&mut self) -> io::Result<MemCachedRead<'_, S>> {
-        self.ensure_reader()?;
-        let inner = self.reader.as_mut().unwrap();
-        Ok(MemCachedRead::new(inner, &mut self.cache))
     }
 
     fn close(&mut self) {
@@ -256,7 +246,6 @@ where
             info,
             reopen,
             reader: None,
-            cache: HashMap::new(),
         })
     }
 
