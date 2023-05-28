@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
@@ -496,22 +496,22 @@ pub(crate) fn write_zooms(
     Ok(zoom_entries)
 }
 
-pub type ReadData<I> = (String, u32, u32, I);
-
 /// Potential states encountered when reading `ChromData`
 pub enum ChromDataState<Output: ChromValues> {
     /// We've encountered a new chromosome
     NewChrom(ChromProcessingFnOutput<Output>),
-    Finished(IdMap),
+    Finished,
     Error(<Output as ChromValues>::Error),
 }
 
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
     type Output: ChromValues;
-    fn advance<F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>>(
+    fn advance<
+        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+    >(
         &mut self,
-        do_read: &F,
+        do_read: &mut F,
     ) -> io::Result<ChromDataState<Self::Output>>;
 }
 
@@ -524,9 +524,12 @@ pub(crate) async fn write_vals<
     Values: ChromValues,
     V: ChromData<Output = Values>,
     F: Fn(
-        ReadData<V::Output>,
+        String,
+        V::Output,
         ThreadPool,
         BBIWriteOptions,
+        u32,
+        u32,
     ) -> io::Result<ChromProcessingFnOutput<Values>>,
 >(
     mut vals_iter: V,
@@ -534,6 +537,7 @@ pub(crate) async fn write_vals<
     options: BBIWriteOptions,
     begin_processing_chrom: F,
     pool: ThreadPool,
+    chrom_sizes: HashMap<String, u32>,
 ) -> Result<
     (
         IdMap,
@@ -570,10 +574,29 @@ pub(crate) async fn write_vals<
     let mut summary: Option<Summary> = None;
     let mut max_uncompressed_buf_size = 0;
 
-    let do_read = |read: ReadData<V::Output>| begin_processing_chrom(read, pool.clone(), options);
+    let mut chrom_ids = IdMap::default();
+
+    let mut do_read = |chrom: String, data: _| -> io::Result<ChromProcessingFnOutput<Values>> {
+        let length = match chrom_sizes.get(&chrom) {
+            Some(length) => *length,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                    "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
+                    chrom
+                ),
+                ))
+            }
+        };
+        // Make a new id for the chromosome
+        let chrom_id = chrom_ids.get_id(&chrom);
+
+        begin_processing_chrom(chrom, data, pool.clone(), options, chrom_id, length)
+    };
 
     let chrom_ids = loop {
-        match vals_iter.advance(&do_read)? {
+        match vals_iter.advance(&mut do_read)? {
             ChromDataState::NewChrom(read) => {
                 let (
                     summary_future,
@@ -639,7 +662,7 @@ pub(crate) async fn write_vals<
                     }
                 }
             }
-            ChromDataState::Finished(chrom_ids) => break chrom_ids,
+            ChromDataState::Finished => break chrom_ids,
             ChromDataState::Error(err) => return Err(WriteGroupsError::SourceError(err)),
         }
     };

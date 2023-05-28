@@ -10,10 +10,9 @@ use bigtools::bigwig::Value;
 use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::filebufferedchannel;
-use bigtools::utils::idmap::IdMap;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::seekableread::ReopenableFile;
-use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput, ReadData};
+use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput};
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
@@ -157,32 +156,26 @@ pub fn get_merged_vals(
 
 struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>> + Send>,
-    chrom_ids: Option<IdMap>,
 }
 
 impl ChromData for ChromGroupReadImpl {
     type Output = MergingValues;
 
     fn advance<
-        F: Fn(ReadData<Self::Output>) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
     >(
         &mut self,
-        do_read: &F,
+        do_read: &mut F,
     ) -> io::Result<ChromDataState<Self::Output>> {
         let next = self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, size, mergingvalues))) => {
-                let chrom_id = self.chrom_ids.as_mut().unwrap().get_id(&chrom);
-                let read_data = (chrom, chrom_id, size, mergingvalues);
-                let read = do_read(read_data)?;
+            Some(Ok((chrom, _, mergingvalues))) => {
+                let read = do_read(chrom, mergingvalues)?;
 
                 ChromDataState::NewChrom(read)
             }
-            None => {
-                let chrom_ids = self.chrom_ids.take().unwrap();
-                ChromDataState::Finished(chrom_ids)
-            }
+            None => ChromDataState::Finished,
         })
     }
 }
@@ -277,7 +270,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .expect("Unable to create thread pool.");
             let all_values = ChromGroupReadImpl {
                 iter: Box::new(iter),
-                chrom_ids: Some(IdMap::default()),
             };
             outb.write(chrom_map, all_values, pool)?;
         }

@@ -126,11 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // FIXME: This will lock on every line read, when we should be able to lock once
         let vals_iter = BedParser::from_bedgraph_file(stdin);
 
-        let chsi = bedparser::BedParserStreamingIterator::new(
-            vals_iter,
-            chrom_map.clone(),
-            allow_out_of_order_chroms,
-        );
+        let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
         outb.write(chrom_map, chsi, pool)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
@@ -152,7 +148,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
 
             let chsi = bedparser::BedParserParallelStreamingIterator::new(
-                chrom_map.clone(),
                 chrom_indices,
                 allow_out_of_order_chroms,
                 PathBuf::from(bedgraphpath),
@@ -162,11 +157,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             let vals_iter = BedParser::from_bedgraph_file(infile);
 
-            let chsi = bedparser::BedParserStreamingIterator::new(
-                vals_iter,
-                chrom_map.clone(),
-                allow_out_of_order_chroms,
-            );
+            let chsi =
+                bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
             outb.write(chrom_map, chsi, pool)?;
         }
     };
