@@ -119,6 +119,16 @@ impl<V> std::fmt::Debug for StateValue<V> {
 }
 
 impl<V> StateValue<V> {
+    fn take_error(&mut self) -> Option<BedParseError> {
+        let v = std::mem::replace(self, StateValue::Done);
+        let ret;
+        (*self, ret) = match v {
+            StateValue::Error(e) => (StateValue::Done, Some(e)),
+            s => (s, None),
+        };
+        ret
+    }
+
     fn active_chrom(&self) -> Option<&String> {
         match self {
             StateValue::Empty => None,
@@ -247,11 +257,16 @@ impl<S: StreamingBedValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `BedChromData` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next_chrom(&mut self) -> Option<(String, BedChromData<S>)> {
+    pub fn next_chrom(&mut self) -> Option<Result<(String, BedChromData<S>), BedParseError>> {
         let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
         state.load_state(true);
+        let error = state.state_value.take_error();
         let chrom = state.state_value.active_chrom().cloned();
         self.state.swap(Some(state));
+
+        if let Some(e) = error {
+            return Some(Err(e));
+        }
 
         match chrom {
             Some(chrom) => {
@@ -260,7 +275,7 @@ impl<S: StreamingBedValues> BedParser<S> {
                     curr_state: None,
                     done: false,
                 };
-                Some((chrom.to_owned(), group))
+                Some(Ok((chrom.to_owned(), group)))
             }
             None => None,
         }
@@ -446,7 +461,7 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
         do_read: &mut F,
     ) -> io::Result<ChromDataState<Self::Output>> {
         Ok(match self.bed_data.next_chrom() {
-            Some((chrom, group)) => {
+            Some(Ok((chrom, group))) => {
                 // First, if we don't want to allow out of order chroms, error here
                 let last = self.last_chrom.replace(chrom.clone());
                 if let Some(c) = last {
@@ -459,6 +474,7 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
                 let read = do_read(chrom, group)?;
                 ChromDataState::NewChrom(read)
             }
+            Some(Err(e)) => ChromDataState::Error(e),
             None => ChromDataState::Finished,
         })
     }
@@ -529,7 +545,7 @@ impl<V> ChromData
             });
 
             Ok(match parser.next_chrom() {
-                Some((chrom, group)) => {
+                Some(Ok((chrom, group))) => {
                     let last = _self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
                         // TODO: test this correctly fails
@@ -542,6 +558,7 @@ impl<V> ChromData
 
                     ChromDataState::NewChrom(read)
                 }
+                Some(Err(e)) => ChromDataState::Error(e),
                 None => {
                     panic!("Unexpected end of file")
                 }
@@ -606,17 +623,17 @@ mod tests {
             };
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100 "test1\t0");
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100 "test1\t0");
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek next group, 1 100 "test1\t0");
             check_value!(peek next group, 101 200 "test2\t0");
@@ -627,7 +644,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100 "test4\t0");
             check_value!(peek next group, 101 200 "test5\t0");
@@ -637,7 +654,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100 "test6\t0");
             assert!(group.peek().is_none());
@@ -686,17 +703,17 @@ mod tests {
             };
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100);
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek group, 1 100);
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr17");
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
@@ -707,7 +724,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
@@ -717,7 +734,7 @@ mod tests {
             assert!(group.peek().is_none());
         }
         {
-            let (chrom, mut group) = bgp.next_chrom().unwrap();
+            let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100);
             assert!(group.peek().is_none());
@@ -761,7 +778,11 @@ mod tests {
         let options = BBIWriteOptions::default();
 
         let mut chrom_ids = crate::utils::idmap::IdMap::default();
-        let mut do_read = |chrom: String, data| -> io::Result<ChromProcessingFnOutput<BedChromData<BedFileStream<Value, BufReader<File>>>>> {
+        let mut do_read = |chrom: String,
+                           data|
+         -> io::Result<
+            ChromProcessingFnOutput<BedChromData<BedFileStream<Value, BufReader<File>>>>,
+        > {
             let length = match chrom_map.get(&chrom) {
                 Some(length) => *length,
                 None => return Err(io::Error::new(
