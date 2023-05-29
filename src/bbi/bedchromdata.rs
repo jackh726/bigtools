@@ -35,19 +35,20 @@ impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
     }
 }
 
-impl<S: StreamingBedValues, E: From<io::Error>> ChromData<E> for BedParserStreamingIterator<S> {
-    type Output = BedChromData<S>;
+impl<S: StreamingBedValues + 'static, E: From<io::Error> + 'static> ChromData<E> for BedParserStreamingIterator<S> {
+    type Error = BedValueError;
+    type Output<'a> = BedChromData<S>;
 
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
     fn advance<
-        F: FnMut(
+        F: for<'a> FnMut(
             String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+            Self::Output<'a>,
+        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
+    ) -> Result<ChromDataState<Self::Error>, E> {
         Ok(match self.bed_data.next_chrom() {
             Some(Ok((chrom, group))) => {
                 // First, if we don't want to allow out of order chroms, error here
@@ -103,25 +104,26 @@ impl<V, O: ChromValues, E> BedParserParallelStreamingIterator<V, O, E> {
     }
 }
 
-impl<V, E: From<io::Error>> ChromData<E>
+impl<V: 'static, E: From<io::Error> + 'static> ChromData<E>
     for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>, E>
 {
-    type Output = BedChromData<BedFileStream<V, BufReader<File>>>;
+    type Error = BedValueError;
+    type Output<'a> = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn advance<
-        F: FnMut(
+        F: for<'a> FnMut(
             String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+            Self::Output<'a>,
+        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
+    ) -> Result<ChromDataState<Self::Error>, E> {
         let mut begin_next = |_self: &mut Self| -> Result<_, E> {
             let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
                 None => {
-                    return Ok(ChromDataState::<<Self::Output as ChromValues>::Error>::Finished);
+                    return Ok(ChromDataState::<Self::Error>::Finished);
                 }
             };
 

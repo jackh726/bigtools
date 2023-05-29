@@ -193,7 +193,7 @@ impl<V> StateValue<V> {
             StateValue::Value(c, _) => Some(c),
             StateValue::EmptyValue(c) => Some(c),
             StateValue::DiffChrom(c, _) => Some(c),
-            StateValue::Error(_) => None,
+            StateValue::Error(e) => None,
             StateValue::Done => None,
         }
     }

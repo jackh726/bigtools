@@ -507,24 +507,25 @@ pub enum ChromDataState<Error> {
 }
 
 /// Effectively like an Iterator of chromosome data
-pub trait ChromData<E: From<io::Error>>: Sized {
-    type Output: ChromValues;
+pub trait ChromData<E: From<io::Error> + 'static>: Sized {
+    type Error;
+    type Output<'a>: ChromValues<Error = Self::Error> where Self: 'a;
     fn advance<
-        F: FnMut(
+        F: for<'a> FnMut(
             String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+            Self::Output<'a>,
+        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E>;
+    ) -> Result<ChromDataState<Self::Error>, E>;
 }
 
 pub type ChromProcessingFnOutput<Error> = (WriteSummaryFuture<Error>, ChromProcessingOutput<Error>);
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
-    V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
+    V: for<'a> ChromData<WriteGroupsError<Values::Error>, Error = Values::Error, Output<'a> = Values> + 'static,
     Fut: Future<Output = Result<Summary, WriteGroupsError<Values::Error>>> + Send + 'static,
     G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
@@ -544,7 +545,7 @@ pub(crate) async fn write_vals<
         usize,
     ),
     WriteGroupsError<Values::Error>,
-> {
+> where <Values as ChromValues>::Error: Send {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
         Vec<Box<dyn Iterator<Item = Section>>>,
@@ -575,8 +576,8 @@ pub(crate) async fn write_vals<
     let mut do_read = |chrom: String,
                        data: _|
      -> Result<
-        ChromProcessingFnOutput<<Values as ChromValues>::Error>,
-        WriteGroupsError<_>,
+        ChromProcessingFnOutput<Values::Error>,
+        WriteGroupsError<Values::Error>,
     > {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,

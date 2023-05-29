@@ -35,13 +35,13 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
+        V: for<'a> ChromData<WriteGroupsError<Values::Error>, Error = Values::Error, Output<'a> = Values> + 'static,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         pool: ThreadPool,
-    ) -> Result<(), WriteGroupsError<Values::Error>> {
+    ) -> Result<(), WriteGroupsError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 

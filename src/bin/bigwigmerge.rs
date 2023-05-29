@@ -197,18 +197,19 @@ struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
-impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {
-    type Output = MergingValues;
+impl<E: From<io::Error> + 'static> ChromData<E> for ChromGroupReadImpl {
+    type Error = MergingValuesError;
+    type Output<'a> = MergingValues;
 
     fn advance<
-        F: FnMut(
+        F: for<'a> FnMut(
             String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+            Self::Output<'a>,
+        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
+    ) -> Result<ChromDataState<Self::Error>, E> {
         let next = self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
