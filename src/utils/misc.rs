@@ -1,9 +1,11 @@
 use std::io::{self, BufRead};
 
 use crate::bbiread::BBIReadError;
+use crate::bed::bedparser::parse_bed;
 use crate::bigwig::BigWigRead;
 use crate::utils::file::seekableread::{Reopen, SeekableRead};
 use crate::utils::file::streaming_linereader::StreamingLineReader;
+use crate::BedEntry;
 
 #[derive(Copy, Clone)]
 pub enum Name {
@@ -23,25 +25,13 @@ pub struct BigWigAverageOverBedEntry {
 
 pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
     name: Name,
-    line: &str,
+    chrom: &str,
+    entry: BedEntry,
     bigwig: &mut BigWigRead<R, S>,
 ) -> Result<BigWigAverageOverBedEntry, BBIReadError> {
-    let cols = line.trim_end().split('\t').collect::<Vec<_>>();
-    if cols.len() < 3 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid bed: A minimum of 3 columns must be specified (chrom, start, end).",
-        )
-        .into());
-    }
+    let start = entry.start;
+    let end = entry.end;
 
-    let chrom = cols[0];
-    let start = cols[1]
-        .parse::<u32>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid start: not an integer"))?;
-    let end = cols[2]
-        .parse::<u32>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid end: not an integer"))?;
     let interval = bigwig
         .get_interval(chrom, start, end)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -62,17 +52,24 @@ pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
     };
 
     let name = match name {
-        Name::Column(col) => {
-            match cols.get(col) {
-                Some(v) => v.to_string(),
-                None => return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", cols.len(), col+1)
-                ).into()),
+        Name::Column(col) => match col {
+            0 => chrom.to_string(),
+            1 => start.to_string(),
+            2 => end.to_string(),
+            _ => {
+                let mut cols = entry.rest.split('\t');
+                let v = cols.nth(col - 3);
+                match v {
+                        Some(v) => v.to_string(),
+                        None => return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", entry.rest.split('\t').collect::<Vec<_>>().len() + 3, col+1)
+                        ).into()),
+                    }
             }
-        }
+        },
         Name::Interval => format!("{}:{}-{}", chrom, start, end),
-        Name::None => cols.join("\t"),
+        Name::None => format!("{}\t{}\t{}\t{}\n", chrom, start, end, entry.rest),
     };
 
     Ok(BigWigAverageOverBedEntry {
@@ -105,7 +102,16 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
                 }
                 Ok(line) => line,
             };
-            match stats_for_bed_item(name, line, &mut bigwig) {
+            let (chrom, entry) = match parse_bed(line) {
+                None => return None,
+                Some(Err(e)) => {
+                    error = true;
+                    return Some(Err(e.into()));
+                }
+                Some(Ok(v)) => v,
+            };
+
+            match stats_for_bed_item(name, chrom, entry, &mut bigwig) {
                 Err(e) => {
                     error = true;
                     Some(Err(e))
