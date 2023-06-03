@@ -95,8 +95,9 @@ def bigwigaverageoverbed_long(comp):
     if not os.path.exists('./workdir/ENCFF076CIO_cut_sample.bed'):
         process = subprocess.check_call(f'{bigtoolspath}/bigtools chromintersect -a ./workdir/ENCFF076CIO.bed -b ./workdir/ENCFF937MNZ.bigWig -o -' + ' | cut -f1-3 | awk -v OFS=\'\\t\' \'{print $1,$2,$3, NR}\' | shuf --random-source=./workdir/ENCFF076CIO.bed | head -1000000 | sort -k1,1 -k2,2n > ./workdir/ENCFF076CIO_cut_sample.bed', shell=True)
     ucsc = [['{}/bigWigAverageOverBed'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF076CIO_cut_sample.bed', './workdir/test_out_ucsc.bed']]
+    bigtools_mt = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF076CIO_cut_sample.bed', './workdir/test_out_bigtools.bed', '-t 4']]
     bigtools_st = [['{}/bigwigaverageoverbed'.format(bigtoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF076CIO_cut_sample.bed', './workdir/test_out_bigtools.bed']]
-    compare(comp, 'bigwigaverageoverbed_long', ucsc, None, bigtools_st)
+    compare(comp, 'bigwigaverageoverbed_long', ucsc, bigtools_mt, bigtools_st)
 
 def bigwigmerge(comp):
     global ucsctoolspath
@@ -125,12 +126,9 @@ def bedgraphtobigwig(comp):
     bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1']]
     compare(comp, 'bedgraphtobigwig_small', ucsc, bigtools, bigtools_st)
     ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
-    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-p no']]
+    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p yes']]
     bigtools_st = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no']]
-    compare(comp, 'bedgraphtobigwig_medium_serial', ucsc, bigtools, bigtools_st)
-    ucsc = [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']]
-    bigtools = [['{}/bedgraphtobigwig'.format(bigtoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-p yes']]
-    compare(comp, 'bedgraphtobigwig_medium_parallel', ucsc, bigtools, None)
+    compare(comp, 'bedgraphtobigwig_medium', ucsc, bigtools, bigtools_st)
 
 def bedtobigbed(comp):
     global ucsctoolspath
