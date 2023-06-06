@@ -3,10 +3,11 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+use bigtools::bedchromdata::BedParserStreamingIterator;
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bed::bedparser::{self, BedParser};
+use bigtools::bed::bedparser::BedParser;
 use bigtools::bigwig::BigBedWrite;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -129,7 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     outb.autosql = Some(autosql);
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+    let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
     outb.write(chrom_map, chsi, pool)?;
 
     Ok(())
