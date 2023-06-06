@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
 use clap::{App, Arg};
+use thiserror::Error;
 
 use bigtools::bbiread::BBIReadError;
 use bigtools::bigwig::Value;
@@ -16,15 +17,15 @@ use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput};
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
-    iter: std::iter::Peekable<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>>,
+    iter: std::iter::Peekable<Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>>,
 }
 
 impl MergingValues {
     pub fn new<I: 'static>(iters: Vec<I>) -> Self
     where
-        I: Iterator<Item = Result<Value, BBIReadError>> + Send,
+        I: Iterator<Item = Result<Value, MergingValuesError>> + Send,
     {
-        let iter: Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send> = Box::new(
+        let iter: Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send> = Box::new(
             merge_sections_many(iters)
                 .filter(|x| x.as_ref().map(|v| v.value != 0.0).unwrap_or(true)),
         );
@@ -34,15 +35,31 @@ impl MergingValues {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum MergingValuesError {
+    #[error("{}", .0)]
+    BBIReadError(#[from] BBIReadError),
+    #[error("{}", .0)]
+    MismatchedChroms(String),
+    #[error("{}", .0)]
+    Other(String),
+    #[error("{}", .0)]
+    IoError(#[from] io::Error),
+}
+
 impl ChromValues for MergingValues {
     type Value = Value;
-    type Error = BBIReadError;
+    type Error = MergingValuesError;
 
-    fn next(&mut self) -> Option<Result<Value, BBIReadError>> {
-        self.iter.next()
+    fn next(&mut self) -> Option<Result<Value, MergingValuesError>> {
+        match self.iter.next() {
+            Some(Ok(v)) => Some(Ok(v)),
+            Some(Err(e)) => Some(Err(e.into())),
+            None => None,
+        }
     }
 
-    fn peek(&mut self) -> Option<Result<&Value, &BBIReadError>> {
+    fn peek(&mut self) -> Option<Result<&Value, &MergingValuesError>> {
         match self.iter.peek() {
             Some(Ok(v)) => Some(Ok(v)),
             Some(Err(err)) => Some(Err(err)),
@@ -56,10 +73,10 @@ pub fn get_merged_vals(
     max_zooms: usize,
 ) -> Result<
     (
-        impl Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>>,
+        impl Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>>,
         HashMap<String, u32>,
     ),
-    BBIReadError,
+    MergingValuesError,
 > {
     let (chrom_sizes, chrom_map) = {
         // NOTE: We don't need to worry about max fds here because chroms are cached.
@@ -84,10 +101,9 @@ pub fn get_merged_vals(
             let size = sizes[0];
             if !sizes.iter().all(|s| *s == size) {
                 eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-                return Err(BBIReadError::IoError(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Invalid input (nonmatching chroms)",
-                )));
+                return Err(MergingValuesError::MismatchedChroms(
+                    "Invalid input (nonmatching chroms)".to_owned(),
+                ));
             }
 
             chrom_sizes.insert(chrom.clone(), (size, bws));
@@ -109,10 +125,10 @@ pub fn get_merged_vals(
         if bws.len() > max_bw_fds {
             eprintln!("Number of bigWigs to merge would exceed the maximum number of file descriptors. Splitting into chunks.");
 
-            let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>> = bws
+            let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>> = bws
                 .into_iter()
                 .map(|b| {
-                    let iter = b.get_interval_move(&chrom, 1, size)?;
+                    let iter = b.get_interval_move(&chrom, 1, size).map(|i| i.map(|r| r.map_err(|e| MergingValuesError::BBIReadError(e))))?;
                     Ok(Box::new(iter) as Box<_>)
                 })
                 .collect::<Result<Vec<_>, BBIReadError>>()?;
@@ -121,7 +137,7 @@ pub fn get_merged_vals(
                 merges = {
                     let len = merges.len();
                     let mut vals = merges.into_iter().peekable();
-                    let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
+                    let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>> = Vec::with_capacity(len/max_bw_fds+1);
 
                     while vals.peek().is_some() {
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
@@ -143,7 +159,7 @@ pub fn get_merged_vals(
         } else {
             let iters: Vec<_> = bws
                 .into_iter()
-                .map(|b| b.get_interval_move(&chrom, 1, size))
+                .map(|b| b.get_interval_move(&chrom, 1, size).map(|i| i.map(|r| r.map_err(|e| MergingValuesError::BBIReadError(e)))))
                 .collect::<Result<Vec<_>, _>>()?;
             let mergingvalues = MergingValues::new(iters);
 
@@ -155,7 +171,7 @@ pub fn get_merged_vals(
 }
 
 struct ChromGroupReadImpl {
-    iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
 impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {

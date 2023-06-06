@@ -11,6 +11,7 @@ use crate::bbiread::{
 };
 use crate::bigwig::{BBIFile, BedEntry, ZoomRecord};
 use crate::utils::seekableread::{Reopen, ReopenableFile, SeekableRead};
+use crate::{ChromIdNotFound, CirTreeSearchError};
 
 struct IntervalIter<'a, I, R, S>
 where
@@ -184,7 +185,7 @@ where
         &self.info
     }
 
-    fn autosql(&mut self) -> io::Result<String> {
+    fn autosql(&mut self) -> Result<String, BBIReadError> {
         self.ensure_reader()?;
         let reader = self.reader.as_mut().unwrap();
         let mut reader = BufReader::new(reader);
@@ -193,7 +194,7 @@ where
         reader.read_until(b'\0', &mut buffer)?;
         buffer.pop();
         let autosql = String::from_utf8(buffer)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid autosql: not UTF-8"))?;
+            .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
         Ok(autosql)
     }
 
@@ -232,6 +233,26 @@ impl BigBedRead<ReopenableFile, File> {
             eprintln!("Error when opening: {}", path);
         }
         b
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ZoomIntervalError {
+    #[error("The passed reduction level was not found")]
+    ReductionLevelNotFound,
+    #[error("{}", .0)]
+    BBIReadError(BBIReadError),
+}
+
+impl From<ChromIdNotFound> for ZoomIntervalError {
+    fn from(e: ChromIdNotFound) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::InvalidChromosome(e.0))
+    }
+}
+
+impl From<CirTreeSearchError> for ZoomIntervalError {
+    fn from(e: CirTreeSearchError) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
     }
 }
 
@@ -314,7 +335,7 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, BBIReadError>
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, ZoomIntervalError>
     {
         let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
@@ -325,9 +346,7 @@ where
         {
             Some(h) => h,
             None => {
-                return Err(
-                    io::Error::new(io::ErrorKind::Other, "No reduction level found.").into(),
-                );
+                return Err(ZoomIntervalError::ReductionLevelNotFound);
             }
         };
 
@@ -356,12 +375,14 @@ fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
     let mut block_data_mut = ByteOrdered::runtime(block_data_mut, bigbed.info.header.endianness);
     let mut entries: Vec<BedEntry> = Vec::new();
 
-    let mut read_entry = || -> io::Result<BedEntry> {
+    let mut read_entry = || -> Result<BedEntry, BBIReadError> {
         let chrom_id = block_data_mut.read_u32()?;
         let chrom_start = block_data_mut.read_u32()?;
         let chrom_end = block_data_mut.read_u32()?;
         if chrom_start == 0 && chrom_end == 0 {
-            return Err(io::Error::new(io::ErrorKind::Other, ""));
+            return Err(BBIReadError::InvalidFile(
+                "Chrom start and end both equal 0.".to_owned(),
+            ));
         }
         // FIXME: should this just return empty?
         assert_eq!(

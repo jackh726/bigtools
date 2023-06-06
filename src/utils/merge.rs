@@ -1,4 +1,4 @@
-use crate::{bigwig::Value, BBIReadError};
+use crate::bigwig::Value;
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
@@ -499,11 +499,9 @@ where
     }
 }
 
-pub fn merge_sections_many<I>(
-    sections: Vec<I>,
-) -> impl Iterator<Item = Result<Value, BBIReadError>> + Send
+pub fn merge_sections_many<I, E>(sections: Vec<I>) -> impl Iterator<Item = Result<Value, E>> + Send
 where
-    I: Iterator<Item = Result<Value, BBIReadError>> + Send,
+    I: Iterator<Item = Result<Value, E>> + Send,
 {
     ValueIter {
         error: false,
@@ -527,7 +525,7 @@ mod tests {
         let second = generate_sections_seq(50, end, 12345);
         //println!("Running merge many with: \n{:?} \n{:?}", first, second);
         let merged = merge_sections_many(vec![
-            first.into_iter().map(Result::Ok),
+            first.into_iter().map(Result::Ok::<_, ()>),
             second.into_iter().map(Result::Ok),
         ])
         .collect::<Vec<_>>();

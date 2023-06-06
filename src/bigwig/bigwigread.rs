@@ -11,6 +11,7 @@ use crate::bbiread::{
 };
 use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::utils::seekableread::{Reopen, ReopenableFile, SeekableRead};
+use crate::{ChromIdNotFound, CirTreeSearchError};
 
 struct IntervalIter<'a, I, R, S>
 where
@@ -34,7 +35,7 @@ where
     R: Reopen<S>,
     S: SeekableRead,
 {
-    type Item = io::Result<Value>;
+    type Item = Result<Value, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -188,7 +189,7 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         &self.info
     }
 
-    fn autosql(&mut self) -> io::Result<String> {
+    fn autosql(&mut self) -> Result<String, BBIReadError> {
         Ok("".to_string())
     }
 
@@ -226,6 +227,26 @@ impl BigWigRead<ReopenableFile, File> {
             eprintln!("Error when opening: {}", path);
         }
         b
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ZoomIntervalError {
+    #[error("The passed reduction level was not found")]
+    ReductionLevelNotFound,
+    #[error("{}", .0)]
+    BBIReadError(BBIReadError),
+}
+
+impl From<ChromIdNotFound> for ZoomIntervalError {
+    fn from(e: ChromIdNotFound) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::InvalidChromosome(e.0))
+    }
+}
+
+impl From<CirTreeSearchError> for ZoomIntervalError {
+    fn from(e: CirTreeSearchError) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
     }
 }
 
@@ -278,7 +299,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = io::Result<Value>> + Send + 'a, BBIReadError> {
+    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + Send + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
@@ -317,7 +338,7 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, BBIReadError>
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, ZoomIntervalError>
     {
         let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
@@ -327,11 +348,7 @@ where
             .find(|h| h.reduction_level == reduction_level)
         {
             Some(h) => h,
-            None => {
-                return Err(
-                    io::Error::new(io::ErrorKind::Other, "No reduction level found.").into(),
-                );
-            }
+            None => return Err(ZoomIntervalError::ReductionLevelNotFound),
         };
 
         let index_offset = zoom_header.index_offset;
@@ -356,7 +373,7 @@ where
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self
             .get_overlapping_blocks(chrom_name, start, end)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| BBIReadError::CirTreeSearchError(e))?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.ensure_reader()?.tell()?;
@@ -385,7 +402,7 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
     chrom: u32,
     start: u32,
     end: u32,
-) -> io::Result<Option<Box<dyn Iterator<Item = Value> + Send>>> {
+) -> Result<Option<Box<dyn Iterator<Item = Value> + Send>>, BBIReadError> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
 
     use bytes::Buf;
@@ -567,10 +584,10 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
             }
         }
         _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Unknown bigwig section type: {}", section_type),
-            ));
+            return Err(BBIReadError::InvalidFile(format!(
+                "Unknown bigwig section type: {}",
+                section_type
+            )))
         }
     }
 

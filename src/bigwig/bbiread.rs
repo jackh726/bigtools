@@ -62,7 +62,7 @@ pub struct BBIFileInfo {
     pub chrom_info: Vec<ChromInfo>,
 }
 
-pub(crate) struct ChromIdNotFound(String);
+pub(crate) struct ChromIdNotFound(pub(crate) String);
 
 impl From<ChromIdNotFound> for BBIReadError {
     fn from(e: ChromIdNotFound) -> Self {
@@ -107,6 +107,8 @@ pub enum BBIReadError {
     InvalidChromosome(String),
     #[error("Invalid magic (likely a bug).")]
     UnknownMagic,
+    #[error("The file was invalid: {}", .0)]
+    InvalidFile(String),
     #[error("Error searching the cir tree.")]
     CirTreeSearchError(#[from] CirTreeSearchError),
     #[error("Error parsing bed-like data.")]
@@ -120,7 +122,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn get_info(&self) -> &BBIFileInfo;
 
     /// Reads the autosql from the bbi file
-    fn autosql(&mut self) -> io::Result<String>;
+    fn autosql(&mut self) -> Result<String, BBIReadError>;
 
     /// Gets a reader to the underlying file
     fn ensure_reader(&mut self) -> io::Result<&mut R>;
@@ -363,7 +365,8 @@ pub(crate) fn read_info<R: SeekableRead>(mut file: R) -> Result<BBIFileInfo, BBI
     assert_eq!(val_size, 8u32);
 
     let mut chrom_info = Vec::with_capacity(item_count as usize);
-    read_chrom_tree_block(&mut file, endianness, &mut chrom_info, key_size)?;
+    read_chrom_tree_block(&mut file, endianness, &mut chrom_info, key_size)
+        .map_err(|_| BBIFileReadInfoError::InvalidChroms)?;
     chrom_info.sort_by(|c1, c2| c1.name.cmp(&c2.name));
 
     let info = BBIFileInfo {
@@ -419,12 +422,20 @@ fn read_zoom_headers<R: SeekableRead>(
     Ok(zoom_headers)
 }
 
+#[derive(Error, Debug)]
+pub enum ChromTreeBlockReadError {
+    #[error("{}", .0)]
+    InvalidFile(String),
+    #[error("Error occurred: {}", .0)]
+    IoError(#[from] io::Error),
+}
+
 fn read_chrom_tree_block<R: SeekableRead>(
     f: &mut R,
     endianness: Endianness,
     chroms: &mut Vec<ChromInfo>,
     key_size: u32,
-) -> io::Result<()> {
+) -> Result<(), ChromTreeBlockReadError> {
     let mut header_data = BytesMut::zeroed(4);
     f.read_exact(&mut header_data)?;
 
@@ -443,9 +454,8 @@ fn read_chrom_tree_block<R: SeekableRead>(
             let key_string = match std::str::from_utf8(&bytes.as_ref()[0..(key_size as usize)]) {
                 Ok(s) => s.trim_matches(char::from(0)).to_owned(),
                 Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Invalid file format: Invalid utf-8 string.",
+                    return Err(ChromTreeBlockReadError::InvalidFile(
+                        "Invalid file format: Invalid utf-8 string.".to_owned(),
                     ))
                 }
             };

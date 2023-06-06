@@ -57,7 +57,7 @@ impl BigBedWrite {
             .clone()
             .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "Invalid autosql: null byte in string")
+            WriteGroupsError::InvalidInput("Invalid autosql: null byte in string".to_owned())
         })?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
