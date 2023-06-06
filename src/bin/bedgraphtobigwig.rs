@@ -5,10 +5,11 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 use bigtools::bed::indexer::index_chroms;
+use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use clap::{App, Arg};
 
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bed::bedparser::{self, parse_bedgraph, BedParser};
+use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
 use bigtools::bigwig::BigWigWrite;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -126,7 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // FIXME: This will lock on every line read, when we should be able to lock once
         let vals_iter = BedParser::from_bedgraph_file(stdin);
 
-        let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+        let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
         outb.write(chrom_map, chsi, pool)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
@@ -147,7 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if parallel {
             let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
 
-            let chsi = bedparser::BedParserParallelStreamingIterator::new(
+            let chsi = BedParserParallelStreamingIterator::new(
                 chrom_indices,
                 allow_out_of_order_chroms,
                 PathBuf::from(bedgraphpath),
@@ -157,8 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             let vals_iter = BedParser::from_bedgraph_file(infile);
 
-            let chsi =
-                bedparser::BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+            let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
             outb.write(chrom_map, chsi, pool)?;
         }
     };

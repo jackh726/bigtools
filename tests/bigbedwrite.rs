@@ -1,5 +1,7 @@
 use std::error::Error;
 
+use bigtools::bedchromdata::BedParserStreamingIterator;
+
 #[test]
 fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     use std::collections::HashMap;
@@ -8,7 +10,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     use tempfile;
 
-    use bigtools::bed::bedparser::{self, BedParser};
+    use bigtools::bed::bedparser::BedParser;
     use bigtools::bigwig::{BBIRead, BigBedRead, BigBedWrite};
     use bigtools::utils::chromvalues::ChromValues;
 
@@ -46,7 +48,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
-    let chsi = bedparser::BedParserStreamingIterator::new(vals_iter, false);
+    let chsi = BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool).unwrap();
 
     let mut bwread =

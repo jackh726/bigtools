@@ -1,5 +1,6 @@
 pub mod bbiread;
 pub mod bbiwrite;
+pub mod bedchromdata;
 pub mod bigbedread;
 pub mod bigbedwrite;
 pub mod bigwigread;

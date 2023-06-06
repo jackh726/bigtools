@@ -446,20 +446,50 @@ fn get_block_values<R: Reopen<S>, S: SeekableRead>(
             block_data_mut.read_exact(&mut bytes)?;
             assert!(bytes.len() == (item_count as usize) * 12);
             for i in 0..(item_count as usize) {
-                let istart = i*12;
-                let block_item_data: &[u8; 12] = bytes[istart..istart+12].try_into().unwrap();
+                let istart = i * 12;
+                let block_item_data: &[u8; 12] = bytes[istart..istart + 12].try_into().unwrap();
                 // bedgraph
                 let (chrom_start, chrom_end, value) = match bigwig.info.header.endianness {
                     Endianness::Big => {
-                        let chrom_start = u32::from_be_bytes([block_item_data[0], block_item_data[1], block_item_data[2], block_item_data[3]]);
-                        let chrom_end = u32::from_be_bytes([block_item_data[4], block_item_data[5], block_item_data[6], block_item_data[7]]);
-                        let value = f32::from_be_bytes([block_item_data[8], block_item_data[9], block_item_data[10], block_item_data[11]]);
+                        let chrom_start = u32::from_be_bytes([
+                            block_item_data[0],
+                            block_item_data[1],
+                            block_item_data[2],
+                            block_item_data[3],
+                        ]);
+                        let chrom_end = u32::from_be_bytes([
+                            block_item_data[4],
+                            block_item_data[5],
+                            block_item_data[6],
+                            block_item_data[7],
+                        ]);
+                        let value = f32::from_be_bytes([
+                            block_item_data[8],
+                            block_item_data[9],
+                            block_item_data[10],
+                            block_item_data[11],
+                        ]);
                         (chrom_start, chrom_end, value)
                     }
                     Endianness::Little => {
-                        let chrom_start = u32::from_le_bytes([block_item_data[0], block_item_data[1], block_item_data[2], block_item_data[3]]);
-                        let chrom_end = u32::from_le_bytes([block_item_data[4], block_item_data[5], block_item_data[6], block_item_data[7]]);
-                        let value = f32::from_le_bytes([block_item_data[8], block_item_data[9], block_item_data[10], block_item_data[11]]);
+                        let chrom_start = u32::from_le_bytes([
+                            block_item_data[0],
+                            block_item_data[1],
+                            block_item_data[2],
+                            block_item_data[3],
+                        ]);
+                        let chrom_end = u32::from_le_bytes([
+                            block_item_data[4],
+                            block_item_data[5],
+                            block_item_data[6],
+                            block_item_data[7],
+                        ]);
+                        let value = f32::from_le_bytes([
+                            block_item_data[8],
+                            block_item_data[9],
+                            block_item_data[10],
+                            block_item_data[11],
+                        ]);
                         (chrom_start, chrom_end, value)
                     }
                 };
