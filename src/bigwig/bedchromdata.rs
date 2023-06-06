@@ -35,16 +35,16 @@ impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
     }
 }
 
-impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
+impl<S: StreamingBedValues, E: From<io::Error>> ChromData<E> for BedParserStreamingIterator<S> {
     type Output = BedChromData<S>;
 
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
     fn advance<
-        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> Result<ChromProcessingFnOutput<Self::Output>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> io::Result<ChromDataState<Self::Output>> {
+    ) -> Result<ChromDataState<Self::Output>, E> {
         Ok(match self.bed_data.next_chrom() {
             Some(Ok((chrom, group))) => {
                 // First, if we don't want to allow out of order chroms, error here
@@ -65,7 +65,7 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
     }
 }
 
-pub struct BedParserParallelStreamingIterator<V, O: ChromValues> {
+pub struct BedParserParallelStreamingIterator<V, O: ChromValues, E> {
     allow_out_of_order_chroms: bool,
     last_chrom: Option<String>,
 
@@ -73,10 +73,10 @@ pub struct BedParserParallelStreamingIterator<V, O: ChromValues> {
     parse_fn: Parser<V>,
     path: PathBuf,
 
-    queued_reads: VecDeque<io::Result<ChromDataState<O>>>,
+    queued_reads: VecDeque<Result<ChromDataState<O>, E>>,
 }
 
-impl<V, O: ChromValues> BedParserParallelStreamingIterator<V, O> {
+impl<V, O: ChromValues, E> BedParserParallelStreamingIterator<V, O, E> {
     pub fn new(
         mut chrom_indices: Vec<(u64, String)>,
         allow_out_of_order_chroms: bool,
@@ -100,18 +100,18 @@ impl<V, O: ChromValues> BedParserParallelStreamingIterator<V, O> {
     }
 }
 
-impl<V> ChromData
-    for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>>
+impl<V, E: From<io::Error>> ChromData<E>
+    for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>, E>
 {
     type Output = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn advance<
-        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> Result<ChromProcessingFnOutput<Self::Output>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> io::Result<ChromDataState<Self::Output>> {
-        let mut begin_next = |_self: &mut Self| -> io::Result<_> {
+    ) -> Result<ChromDataState<Self::Output>, E> {
+        let mut begin_next = |_self: &mut Self| -> Result<_, E> {
             let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
                 None => {
@@ -195,7 +195,7 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
 mod tests {
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
-    use crate::{BBIWriteOptions, Value};
+    use crate::{BBIWriteOptions, Value, WriteGroupsError};
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
@@ -234,15 +234,18 @@ mod tests {
         let mut chrom_ids = crate::utils::idmap::IdMap::default();
         let mut do_read = |chrom: String,
                            data|
-         -> io::Result<
+         -> Result<
             ChromProcessingFnOutput<BedChromData<BedFileStream<Value, BufReader<File>>>>,
+            WriteGroupsError<BedValueError>,
         > {
             let length = match chrom_map.get(&chrom) {
                 Some(length) => *length,
-                None => return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Input bedGraph contains chromosome that isn't in the input chrom sizes: {}", 0),
-                )),
+                None => {
+                    return Err(WriteGroupsError::InvalidChromosome(format!(
+                        "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
+                        chrom
+                    )));
+                }
             };
             // Make a new id for the chromosome
             let chrom_id = chrom_ids.get_id(&chrom);

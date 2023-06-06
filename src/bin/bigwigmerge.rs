@@ -158,15 +158,15 @@ struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), BBIReadError>> + Send>,
 }
 
-impl ChromData for ChromGroupReadImpl {
+impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {
     type Output = MergingValues;
 
     fn advance<
-        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
+        F: FnMut(String, Self::Output) -> Result<ChromProcessingFnOutput<Self::Output>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> io::Result<ChromDataState<Self::Output>> {
+    ) -> Result<ChromDataState<Self::Output>, E> {
         let next = self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
