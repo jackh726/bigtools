@@ -62,17 +62,21 @@ pub struct BBIFileInfo {
     pub chrom_info: Vec<ChromInfo>,
 }
 
+pub(crate) struct ChromIdNotFound(String);
+
+impl From<ChromIdNotFound> for BBIReadError {
+    fn from(e: ChromIdNotFound) -> Self {
+        BBIReadError::InvalidChromosome(e.0)
+    }
+}
+
 impl BBIFileInfo {
-    pub(crate) fn chrom_id(&self, chrom_name: &str) -> io::Result<u32> {
+    pub(crate) fn chrom_id(&self, chrom_name: &str) -> Result<u32, ChromIdNotFound> {
         let chrom_info = &self.chrom_info;
         let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
-        //println!("Chrom: {:?}", chrom);
         match chrom {
             Some(c) => Ok(c.id),
-            None => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("{} not found.", chrom_name),
-            )),
+            None => Err(ChromIdNotFound(chrom_name.to_owned())),
         }
     }
 }
@@ -140,7 +144,6 @@ pub trait BBIRead<R: SeekableRead> {
         let chrom_ix = {
             let chrom_info = &self.get_info().chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
-            //println!("Chrom: {:?}", chrom);
             match chrom {
                 Some(c) => c.id,
                 None => {

@@ -125,8 +125,8 @@ pub struct BedIteratorStream<V, I> {
     curr: Option<(String, V)>,
 }
 
-impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> StreamingBedValues
-    for BedIteratorStream<V, I>
+impl<V: Clone, E: Into<BedValueError>, I: Iterator<Item = Result<(String, V), E>>>
+    StreamingBedValues for BedIteratorStream<V, I>
 {
     type Value = V;
 
@@ -235,7 +235,9 @@ impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>>> {
     }
 }
 
-impl<V: Clone, I: Iterator<Item = io::Result<(String, V)>>> BedParser<BedIteratorStream<V, I>> {
+impl<V: Clone, E: Into<BedValueError>, I: Iterator<Item = Result<(String, V), E>>>
+    BedParser<BedIteratorStream<V, I>>
+{
     pub fn wrap_iter(iter: I) -> Self {
         BedParser::new(BedIteratorStream { iter, curr: None })
     }
@@ -373,17 +375,16 @@ impl<S: StreamingBedValues> Drop for BedChromData<S> {
 mod tests {
     use super::*;
     use std::fs::File;
-    use std::io;
     use std::path::PathBuf;
 
     use crate::utils::chromvalues::ChromValues;
 
     #[test]
-    fn test_bed_works() -> io::Result<()> {
+    fn test_bed_works() {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         dir.push("resources/test");
         dir.push("small.bed");
-        let f = File::open(dir)?;
+        let f = File::open(dir).unwrap();
         let mut bgp = BedParser::from_bed_file(f);
         macro_rules! check_value {
             ($c:ident $chrom:literal) => {
@@ -455,15 +456,14 @@ mod tests {
             assert!(group.peek().is_none());
         }
         assert!(matches!(bgp.next_chrom(), None));
-        Ok(())
     }
 
     #[test]
-    fn test_bedgraph_works() -> io::Result<()> {
+    fn test_bedgraph_works() {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         dir.push("resources/test");
         dir.push("small.bedGraph");
-        let f = File::open(dir)?;
+        let f = File::open(dir).unwrap();
         let mut bgp = BedParser::from_bedgraph_file(f);
         macro_rules! check_value {
             ($c:ident $chrom:literal) => {
@@ -535,6 +535,5 @@ mod tests {
             assert!(group.peek().is_none());
         }
         assert!(matches!(bgp.next_chrom(), None));
-        Ok(())
     }
 }

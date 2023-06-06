@@ -99,6 +99,8 @@ pub enum WriteGroupsError<SourceError> {
     #[error("{}", .0)]
     InvalidInput(String),
     #[error("{}", .0)]
+    InvalidChromosome(String),
+    #[error("{}", .0)]
     IoError(#[from] io::Error),
     #[error("SourceError")]
     SourceError(SourceError),
@@ -505,14 +507,12 @@ pub enum ChromDataState<Output: ChromValues> {
 }
 
 /// Effectively like an Iterator of chromosome data
-pub trait ChromData: Sized {
+pub trait ChromData<E: From<io::Error>>: Sized {
     type Output: ChromValues;
-    fn advance<
-        F: FnMut(String, Self::Output) -> io::Result<ChromProcessingFnOutput<Self::Output>>,
-    >(
+    fn advance<F: FnMut(String, Self::Output) -> Result<ChromProcessingFnOutput<Self::Output>, E>>(
         &mut self,
         do_read: &mut F,
-    ) -> io::Result<ChromDataState<Self::Output>>;
+    ) -> Result<ChromDataState<Self::Output>, E>;
 }
 
 pub type ChromProcessingFnOutput<Values> = (
@@ -522,7 +522,7 @@ pub type ChromProcessingFnOutput<Values> = (
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
-    V: ChromData<Output = Values>,
+    V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
     F: Fn(
         String,
         V::Output,
@@ -530,7 +530,7 @@ pub(crate) async fn write_vals<
         BBIWriteOptions,
         u32,
         u32,
-    ) -> io::Result<ChromProcessingFnOutput<Values>>,
+    ) -> Result<ChromProcessingFnOutput<Values>, WriteGroupsError<Values::Error>>,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
@@ -576,24 +576,22 @@ pub(crate) async fn write_vals<
 
     let mut chrom_ids = IdMap::default();
 
-    let mut do_read = |chrom: String, data: _| -> io::Result<ChromProcessingFnOutput<Values>> {
-        let length = match chrom_sizes.get(&chrom) {
-            Some(length) => *length,
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
+    let mut do_read =
+        |chrom: String, data: _| -> Result<ChromProcessingFnOutput<Values>, WriteGroupsError<_>> {
+            let length = match chrom_sizes.get(&chrom) {
+                Some(length) => *length,
+                None => {
+                    return Err(WriteGroupsError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
-                ),
-                ))
-            }
-        };
-        // Make a new id for the chromosome
-        let chrom_id = chrom_ids.get_id(&chrom);
+                )));
+                }
+            };
+            // Make a new id for the chromosome
+            let chrom_id = chrom_ids.get_id(&chrom);
 
-        begin_processing_chrom(chrom, data, pool.clone(), options, chrom_id, length)
-    };
+            begin_processing_chrom(chrom, data, pool.clone(), options, chrom_id, length)
+        };
 
     let chrom_ids = loop {
         match vals_iter.advance(&mut do_read)? {
@@ -831,10 +829,7 @@ mod tests {
 
         let magic = file.read_u32()?;
         if magic != CIR_TREE_MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Invalid file format: CIR_TREE_MAGIC does not match.",
-            ));
+            panic!("Invalid file format: CIR_TREE_MAGIC does not match.");
         }
         let _blocksize = file.read_u32()?;
         let _item_count = file.read_u64()?;

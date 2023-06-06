@@ -35,7 +35,7 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Output = Values>,
+        V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
@@ -349,10 +349,13 @@ impl BigWigWrite {
         options: BBIWriteOptions,
         chrom_id: u32,
         chrom_length: u32,
-    ) -> io::Result<(
-        WriteSummaryFuture<I::Error>,
-        ChromProcessingOutput<I::Error>,
-    )> {
+    ) -> Result<
+        (
+            WriteSummaryFuture<I::Error>,
+            ChromProcessingOutput<I::Error>,
+        ),
+        WriteGroupsError<I::Error>,
+    > {
         let (procesing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
 
         let (f_remote, f_handle) = BigWigWrite::process_group(
