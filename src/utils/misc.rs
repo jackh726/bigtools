@@ -1,11 +1,13 @@
-use std::io::{self, BufRead};
+use std::io::BufRead;
 
 use crate::bbiread::BBIReadError;
-use crate::bed::bedparser::parse_bed;
+use crate::bed::bedparser::{parse_bed, BedValueError};
 use crate::bigwig::BigWigRead;
 use crate::utils::file::seekableread::{Reopen, SeekableRead};
 use crate::utils::file::streaming_linereader::StreamingLineReader;
 use crate::BedEntry;
+
+use thiserror::Error;
 
 #[derive(Copy, Clone)]
 pub enum Name {
@@ -23,18 +25,30 @@ pub struct BigWigAverageOverBedEntry {
     pub mean: f64,
 }
 
+#[derive(Error, Debug)]
+pub enum StatsError {
+    #[error("{}", .0)]
+    BBIReadError(#[from] BBIReadError),
+    #[error("{}", .0)]
+    InvalidNameCol(String),
+}
+
 pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
     name: Name,
     chrom: &str,
     entry: BedEntry,
     bigwig: &mut BigWigRead<R, S>,
-) -> Result<BigWigAverageOverBedEntry, BBIReadError> {
+) -> Result<BigWigAverageOverBedEntry, StatsError> {
     let start = entry.start;
     let end = entry.end;
 
     let interval = bigwig
         .get_interval(chrom, start, end)?
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>();
+    let interval = match interval {
+        Ok(i) => i,
+        Err(e) => return Err(e.into()),
+    };
 
     let mut bases = 0;
     let mut sum = 0.0;
@@ -61,10 +75,7 @@ pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
                 let v = cols.nth(col - 3);
                 match v {
                         Some(v) => v.to_string(),
-                        None => return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", entry.rest.split('\t').collect::<Vec<_>>().len() + 3, col+1)
-                        ).into()),
+                        None => return Err(StatsError::InvalidNameCol(format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", entry.rest.split('\t').collect::<Vec<_>>().len() + 3, col+1))),
                     }
             }
         },
@@ -82,23 +93,31 @@ pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
     })
 }
 
+#[derive(Error, Debug)]
+pub enum BigWigAverageOverBedError {
+    #[error("{}", .0)]
+    StatsError(#[from] StatsError),
+    #[error("{}", .0)]
+    BedValueError(#[from] BedValueError),
+}
+
 pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
     bed: impl BufRead,
     mut bigwig: BigWigRead<R, S>,
     name: Name,
-) -> Result<impl Iterator<Item = Result<BigWigAverageOverBedEntry, BBIReadError>>, BBIReadError> {
+) -> impl Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> {
     let mut bedstream = StreamingLineReader::new(bed);
 
     let mut error: bool = false;
     let iter = std::iter::from_fn(
-        move || -> Option<Result<BigWigAverageOverBedEntry, BBIReadError>> {
+        move || -> Option<Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> {
             if error {
                 return None;
             }
             let line = match bedstream.read()? {
                 Err(e) => {
                     error = true;
-                    return Some(Err(e.into()));
+                    return Some(Err(BedValueError::IoError(e).into()));
                 }
                 Ok(line) => line,
             };
@@ -114,12 +133,12 @@ pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static
             match stats_for_bed_item(name, chrom, entry, &mut bigwig) {
                 Err(e) => {
                     error = true;
-                    Some(Err(e))
+                    Some(Err(e.into()))
                 }
                 Ok(v) => Some(Ok(v)),
             }
         },
     );
 
-    Ok(iter)
+    iter
 }
