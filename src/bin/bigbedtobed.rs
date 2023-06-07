@@ -6,8 +6,8 @@ use clap::{App, Arg};
 
 use futures::task::SpawnExt;
 
+use bigtools::bbi::{BBIRead, BigBedRead, ChromAndSize};
 use bigtools::bbiread::BBIReadError;
-use bigtools::bigwig::{BBIRead, BigBedRead, ChromAndSize};
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 

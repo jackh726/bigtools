@@ -5,7 +5,7 @@ use std::io::{self, BufReader, BufWriter, Write};
 use bigtools::{BigWigRead, BigWigReadAttachError};
 use clap::{App, Arg};
 
-use bigtools::bigwig::{BigBedRead, BigBedReadAttachError};
+use bigtools::bbi::{BigBedRead, BigBedReadAttachError};
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 

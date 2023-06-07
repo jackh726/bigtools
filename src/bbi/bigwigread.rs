@@ -5,11 +5,11 @@ use std::vec::Vec;
 use byteordered::{ByteOrdered, Endianness};
 use thiserror::Error;
 
+use crate::bbi::{BBIFile, Summary, Value, ZoomRecord};
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
     ChromAndSize, ZoomIntervalIter,
 };
-use crate::bigwig::{BBIFile, Summary, Value, ZoomRecord};
 use crate::utils::seekableread::{Reopen, ReopenableFile, SeekableRead};
 use crate::{ChromIdNotFound, CirTreeSearchError};
 

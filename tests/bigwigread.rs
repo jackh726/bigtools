@@ -4,7 +4,7 @@ use std::error::Error;
 fn test_valid_read() -> Result<(), Box<dyn Error>> {
     use std::path::PathBuf;
 
-    use bigtools::bigwig::{BBIRead, BigWigRead};
+    use bigtools::bbi::{BBIRead, BigWigRead};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
@@ -42,7 +42,7 @@ fn test_valid_read() -> Result<(), Box<dyn Error>> {
 fn test_values() -> Result<(), Box<dyn Error>> {
     use std::path::PathBuf;
 
-    use bigtools::bigwig::BigWigRead;
+    use bigtools::bbi::BigWigRead;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");

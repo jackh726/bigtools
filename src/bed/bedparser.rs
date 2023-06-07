@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crossbeam_utils::atomic::AtomicCell;
 use thiserror::Error;
 
-use crate::bigwig::{BedEntry, Value};
+use crate::bbi::{BedEntry, Value};
 use crate::utils::streaming_linereader::StreamingLineReader;
 
 pub fn parse_bed<'a>(s: &'a str) -> Option<Result<(&'a str, BedEntry), BedValueError>> {

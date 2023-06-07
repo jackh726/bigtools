@@ -6,9 +6,9 @@ use std::io::{BufRead, BufReader};
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use clap::{App, Arg};
 
+use bigtools::bbi::BigBedWrite;
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::BedParser;
-use bigtools::bigwig::BigBedWrite;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BedToBigBed")

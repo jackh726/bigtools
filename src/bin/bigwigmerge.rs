@@ -6,9 +6,9 @@ use std::io::{self, BufRead, BufReader};
 use clap::{App, Arg};
 use thiserror::Error;
 
+use bigtools::bbi::Value;
+use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::bbiread::BBIReadError;
-use bigtools::bigwig::Value;
-use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::filebufferedchannel;
 use bigtools::utils::merge::merge_sections_many;

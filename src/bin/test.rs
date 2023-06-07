@@ -2,7 +2,7 @@ use std::error::Error;
 
 use clap::{App, Arg};
 
-use bigtools::bigwig::BigBedRead;
+use bigtools::bbi::BigBedRead;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Testing")

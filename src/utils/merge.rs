@@ -1,4 +1,4 @@
-use crate::bigwig::Value;
+use crate::bbi::Value;
 
 /// Returns:
 ///  (val, None, None, overhang or None) when merging two does not break up one, and may or may not add an overhang (one.start == two.start)
