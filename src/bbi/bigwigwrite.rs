@@ -13,12 +13,12 @@ use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
 use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
 
+use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
     write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
     WriteGroupsError,
 };
-use crate::bigwig::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 
 pub struct BigWigWrite {
     pub path: String,

@@ -5,8 +5,8 @@ use std::path::Path;
 
 use clap::{App, Arg};
 
+use bigtools::bbi::BigWigRead;
 use bigtools::bbiread::BBIReadError;
-use bigtools::bigwig::BigWigRead;
 use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 

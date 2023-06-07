@@ -6,11 +6,11 @@ use byteordered::Endianness;
 use bytes::{Buf, BytesMut};
 use thiserror::Error;
 
-use crate::bed::bedparser::BedValueError;
-use crate::bigwig::{
+use crate::bbi::{
     BBIFile, Summary, ZoomHeader, ZoomRecord, BIGBED_MAGIC, BIGWIG_MAGIC, CHROM_TREE_MAGIC,
     CIR_TREE_MAGIC,
 };
+use crate::bed::bedparser::BedValueError;
 use crate::utils::seekableread::SeekableRead;
 
 #[derive(Copy, Clone, Debug)]

@@ -21,7 +21,7 @@ use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-use crate::bigwig::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
+use crate::bbi::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
 
 pub(crate) struct ZoomInfo {
     resolution: u32,

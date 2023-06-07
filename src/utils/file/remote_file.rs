@@ -229,7 +229,7 @@ impl Reopen<RemoteFile> for RemoteFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bigwig::{BigBedRead, BigWigRead};
+    use crate::bbi::{BigBedRead, BigWigRead};
 
     #[ignore]
     #[test]

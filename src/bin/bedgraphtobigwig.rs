@@ -8,9 +8,9 @@ use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use clap::{App, Arg};
 
+use bigtools::bbi::BigWigWrite;
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
-use bigtools::bigwig::BigWigWrite;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("BedGraphToBigWig")

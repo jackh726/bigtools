@@ -11,8 +11,8 @@ fn test() -> Result<(), Box<dyn Error>> {
 
     use tempfile;
 
+    use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
     use bigtools::bed::bedparser::BedParser;
-    use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
     use bigtools::utils::chromvalues::ChromValues;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -68,8 +68,8 @@ fn test_multi() -> io::Result<()> {
 
     use tempfile;
 
+    use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
     use bigtools::bed::bedparser::BedParser;
-    use bigtools::bigwig::{BBIRead, BigWigRead, BigWigWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");

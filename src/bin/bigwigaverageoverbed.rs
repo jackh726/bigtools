@@ -10,7 +10,7 @@ use bigtools::utils::seekableread::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::{App, Arg};
 
-use bigtools::bigwig::BigWigRead;
+use bigtools::bbi::BigWigRead;
 use bigtools::utils::misc::{stats_for_bed_item, Name};
 use crossbeam_channel::TryRecvError;
 

@@ -15,12 +15,12 @@ use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
 
+use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
     write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
     WriteGroupsError,
 };
-use crate::bigwig::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 
 pub struct BigBedWrite {
     pub path: String,

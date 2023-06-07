@@ -27,7 +27,7 @@ Bigtools is written in Rust and published to `crates.io`, so binaries can be ins
 ### Example
 
 ```rust,norun
-use bigtools::bigwigread::BigWigRead;
+use bigtools::bbiread::BigWigRead;
 
 let mut reader = BigWigRead::from("test.bigWig").unwrap();
 let chr1 = reader.get_interval("chr1", 0, 10000).unwrap();

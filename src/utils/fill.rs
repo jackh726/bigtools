@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::bigwig::Value;
+use crate::bbi::Value;
 
 struct FillValues<I>
 where
