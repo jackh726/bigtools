@@ -13,13 +13,12 @@ use crate::bbiread::{
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{ChromIdNotFound, CirTreeSearchError};
 
-struct IntervalIter<'a, I, R, S>
+struct IntervalIter<'a, I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    bigbed: &'a mut BigBedRead<R, S>,
+    bigbed: &'a mut BigBedRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = BedEntry> + Send + 'a>>,
@@ -28,11 +27,10 @@ where
     end: u32,
 }
 
-impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
+impl<'a, I, R> Iterator for IntervalIter<'a, I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
     type Item = Result<BedEntry, BBIReadError>;
 
@@ -72,13 +70,12 @@ where
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R, S>
+struct OwnedIntervalIter<I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    bigbed: BigBedRead<R, S>,
+    bigbed: BigBedRead<R>,
     known_offset: u64,
     blocks: I,
     vals: Option<Box<dyn Iterator<Item = BedEntry> + Send>>,
@@ -87,11 +84,10 @@ where
     end: u32,
 }
 
-impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
+impl<I, R> Iterator for OwnedIntervalIter<I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
     type Item = Result<BedEntry, BBIReadError>;
 
@@ -156,40 +152,33 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
     }
 }
 
-pub struct BigBedRead<R, S> {
+pub struct BigBedRead<R> {
     pub info: BBIFileInfo,
-    reopen: R,
-    reader: Option<S>,
+    read: R,
 }
 
-impl<R, S> Clone for BigBedRead<R, S>
-where
-    R: Reopen<S>,
-    S: SeekableRead,
-{
-    fn clone(&self) -> Self {
-        BigBedRead {
+impl<R: Reopen> Reopen for BigBedRead<R> {
+    fn reopen(&self) -> io::Result<Self> {
+        Ok(BigBedRead {
             info: self.info.clone(),
-            reopen: self.reopen.clone(),
-            reader: None,
-        }
+            read: self.read.reopen()?,
+        })
     }
 }
 
-impl<R, S> BBIRead<S> for BigBedRead<R, S>
+impl<R> BBIRead<R> for BigBedRead<R>
 where
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
 
     fn autosql(&mut self) -> Result<String, BBIReadError> {
-        self.ensure_reader()?;
-        let reader = self.reader.as_mut().unwrap();
+        let auto_sql_offset = self.info.header.auto_sql_offset;
+        let reader = self.reader();
         let mut reader = BufReader::new(reader);
-        reader.seek(SeekFrom::Start(self.info.header.auto_sql_offset))?;
+        reader.seek(SeekFrom::Start(auto_sql_offset))?;
         let mut buffer = Vec::new();
         reader.read_until(b'\0', &mut buffer)?;
         buffer.pop();
@@ -198,19 +187,8 @@ where
         Ok(autosql)
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut S> {
-        if self.reader.is_none() {
-            let fp = self.reopen.reopen()?;
-            self.reader.replace(fp);
-        }
-        // FIXME: In theory, can get rid of this unwrap by doing a `match` with
-        // `Option::insert` in the `None` case, but that currently runs into
-        // lifetime issues.
-        Ok(self.reader.as_mut().unwrap())
-    }
-
-    fn close(&mut self) {
-        self.reader.take();
+    fn reader(&mut self) -> &mut R {
+        &mut self.read
     }
 
     fn get_chroms(&self) -> Vec<ChromAndSize> {
@@ -225,9 +203,12 @@ where
     }
 }
 
-impl BigBedRead<ReopenableFile, File> {
+impl BigBedRead<ReopenableFile> {
     pub fn from_file_and_attach(path: String) -> Result<Self, BigBedReadAttachError> {
-        let reopen = ReopenableFile { path: path.clone() };
+        let reopen = ReopenableFile {
+            path: path.clone(),
+            file: File::open(&path)?,
+        };
         let b = BigBedRead::from(reopen);
         if b.is_err() {
             eprintln!("Error when opening: {}", path);
@@ -256,24 +237,18 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
-impl<R, S> BigBedRead<R, S>
+impl<R> BigBedRead<R>
 where
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    pub fn from(reopen: R) -> Result<Self, BigBedReadAttachError> {
-        let file = reopen.reopen()?;
-        let info = read_info(file)?;
+    pub fn from(mut read: R) -> Result<Self, BigBedReadAttachError> {
+        let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigBed => {}
             _ => return Err(BigBedReadAttachError::NotABigBed),
         }
 
-        Ok(BigBedRead {
-            info,
-            reopen,
-            reader: None,
-        })
+        Ok(BigBedRead { info, read })
     }
 
     pub fn get_interval<'a>(
@@ -363,8 +338,8 @@ where
 }
 
 // TODO: remove expected_chrom
-fn get_block_entries<R: Reopen<S>, S: SeekableRead>(
-    bigbed: &mut BigBedRead<R, S>,
+fn get_block_entries<R: SeekableRead>(
+    bigbed: &mut BigBedRead<R>,
     block: Block,
     known_offset: &mut u64,
     expected_chrom: u32,

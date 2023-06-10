@@ -125,12 +125,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn autosql(&mut self) -> Result<String, BBIReadError>;
 
     /// Gets a reader to the underlying file
-    fn ensure_reader(&mut self) -> io::Result<&mut R>;
-
-    /// Manually close the open file descriptor (if it exists). If any
-    /// operations are performed after this is called, the file descriptor
-    /// will be reopened.
-    fn close(&mut self);
+    fn reader(&mut self) -> &mut R;
 
     fn get_chroms(&self) -> Vec<ChromAndSize>;
 
@@ -157,7 +152,7 @@ pub trait BBIRead<R: SeekableRead> {
         };
 
         let endianness = self.get_info().header.endianness;
-        let mut file = self.ensure_reader()?;
+        let mut file = self.reader();
         file.seek(SeekFrom::Start(at))?;
         let mut header_data = BytesMut::zeroed(48);
         file.read_exact(&mut header_data)?;
@@ -216,7 +211,9 @@ pub trait BBIRead<R: SeekableRead> {
     }
 }
 
-pub(crate) fn read_info<R: SeekableRead>(mut file: R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+pub(crate) fn read_info<R: SeekableRead>(
+    mut file: &mut R,
+) -> Result<BBIFileInfo, BBIFileReadInfoError> {
     let mut header_data = BytesMut::zeroed(64);
     file.read_exact(&mut header_data)?;
 
@@ -709,7 +706,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     use libdeflater::Decompressor;
 
     let uncompress_buf_size = bbifile.get_info().header.uncompress_buf_size as usize;
-    let file = bbifile.ensure_reader()?;
+    let file = bbifile.reader();
 
     // TODO: Could minimize this by chunking block reads
     // FIXME: this relies on the current state of "store a BufReader as a reader"

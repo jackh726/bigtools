@@ -87,12 +87,12 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let parallel = nthreads > 1;
 
     if parallel {
-        fn process_chrom<R: Reopen<S>, S: SeekableRead>(
+        fn process_chrom<R: Reopen + SeekableRead>(
             start: u64,
             chrom: String,
             bedinpath: String,
             name: Name,
-            inbigwig: &mut BigWigRead<R, S>,
+            inbigwig: &mut BigWigRead<R>,
         ) -> Result<File, Box<dyn Error + Send + Sync>> {
             let mut tmp = tempfile::tempfile()?;
 
@@ -159,25 +159,25 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .unwrap();
         }
         drop(chrom_data_sender);
-        let inbigwig_ = inbigwig.clone();
-        let chrom_data_receiver_ = chrom_data_receiver.clone();
-        let do_process_chrom = move || {
-            let mut inbigwig = inbigwig_;
-            let chrom_data_receiver = chrom_data_receiver_;
-            loop {
-                let next_chrom = chrom_data_receiver.recv();
-                let (start, chrom, bedinpath, result_sender) = match next_chrom {
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-
-                let result = process_chrom(start, chrom, bedinpath, name, &mut inbigwig);
-                result_sender.send(result).unwrap();
-            }
-        };
         let mut threads = Vec::with_capacity(nthreads - 1);
         for _ in 0..(nthreads - 1) {
-            let join_handle = std::thread::spawn(do_process_chrom.clone());
+            let inbigwig_ = inbigwig.reopen()?;
+            let chrom_data_receiver_ = chrom_data_receiver.clone();
+            let do_process_chrom = move || {
+                let mut inbigwig = inbigwig_;
+                let chrom_data_receiver = chrom_data_receiver_;
+                loop {
+                    let next_chrom = chrom_data_receiver.recv();
+                    let (start, chrom, bedinpath, result_sender) = match next_chrom {
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+
+                    let result = process_chrom(start, chrom, bedinpath, name, &mut inbigwig);
+                    result_sender.send(result).unwrap();
+                }
+            };
+            let join_handle = std::thread::spawn(do_process_chrom);
             threads.push(join_handle);
         }
         while let Some(result_receiver) = chrom_data.pop_front() {

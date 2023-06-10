@@ -6,14 +6,14 @@ use bigtools::{BigWigRead, BigWigReadAttachError};
 use clap::{App, Arg};
 
 use bigtools::bbi::{BigBedRead, BigBedReadAttachError};
-use bigtools::utils::reopen::{Reopen, SeekableRead};
+use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct IntersectOptions {}
 
-fn intersect<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+fn intersect<R: SeekableRead + 'static>(
     apath: String,
-    mut b: BigBedRead<R, S>,
+    mut b: BigBedRead<R>,
     _options: IntersectOptions,
 ) -> io::Result<()> {
     let bedin = File::open(apath)?;
