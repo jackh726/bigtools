@@ -7,7 +7,7 @@ use clap::{App, Arg};
 
 use bigtools::bbi::BigWigRead;
 use bigtools::bbiread::BBIReadError;
-use bigtools::utils::reopen::{Reopen, SeekableRead};
+use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct Options {
@@ -15,9 +15,9 @@ struct Options {
     delimiter: String,
 }
 
-fn write<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+fn write<R: SeekableRead + 'static>(
     bedinpath: &Path,
-    mut bigwigin: BigWigRead<R, S>,
+    mut bigwigin: BigWigRead<R>,
     out: File,
     options: Options,
 ) -> Result<(), BBIReadError> {

@@ -12,8 +12,8 @@ use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use ufmt::uwrite;
 
-pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
-    bigwig: BigWigRead<R, S>,
+pub fn write_bg<R: Reopen + SeekableRead + 'static>(
+    bigwig: BigWigRead<R>,
     mut out_file: File,
     nthreads: usize,
 ) -> Result<(), BBIReadError> {
@@ -40,12 +40,12 @@ pub fn write_bg<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
         .get_chroms()
         .into_iter()
         .map(|chrom| {
-            let bigwig = bigwig.clone();
+            let bigwig = bigwig.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
                 TempFileBuffer::new()?;
             let writer = io::BufWriter::new(file);
-            async fn file_future<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
-                mut bigwig: BigWigRead<R, S>,
+            async fn file_future<R: Reopen + SeekableRead + 'static>(
+                mut bigwig: BigWigRead<R>,
                 chrom: ChromAndSize,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
             ) -> Result<(), BBIReadError> {

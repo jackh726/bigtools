@@ -3,7 +3,7 @@ use std::io::BufRead;
 use crate::bbi::BigWigRead;
 use crate::bbiread::BBIReadError;
 use crate::bed::bedparser::{parse_bed, BedValueError};
-use crate::utils::file::reopen::{Reopen, SeekableRead};
+use crate::utils::file::reopen::SeekableRead;
 use crate::utils::file::streaming_linereader::StreamingLineReader;
 use crate::BedEntry;
 
@@ -33,11 +33,11 @@ pub enum StatsError {
     InvalidNameCol(String),
 }
 
-pub fn stats_for_bed_item<R: Reopen<S>, S: SeekableRead>(
+pub fn stats_for_bed_item<R: SeekableRead>(
     name: Name,
     chrom: &str,
     entry: BedEntry,
-    bigwig: &mut BigWigRead<R, S>,
+    bigwig: &mut BigWigRead<R>,
 ) -> Result<BigWigAverageOverBedEntry, StatsError> {
     let start = entry.start;
     let end = entry.end;
@@ -101,9 +101,9 @@ pub enum BigWigAverageOverBedError {
     BedValueError(#[from] BedValueError),
 }
 
-pub fn bigwig_average_over_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
+pub fn bigwig_average_over_bed<R: SeekableRead + 'static>(
     bed: impl BufRead,
-    mut bigwig: BigWigRead<R, S>,
+    mut bigwig: BigWigRead<R>,
     name: Name,
 ) -> impl Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> {
     let mut bedstream = StreamingLineReader::new(bed);

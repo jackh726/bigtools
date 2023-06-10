@@ -215,7 +215,7 @@ impl Clone for RemoteFile {
     }
 }
 
-impl Reopen<RemoteFile> for RemoteFile {
+impl Reopen for RemoteFile {
     fn reopen(&self) -> io::Result<RemoteFile> {
         Ok(RemoteFile {
             url: self.url.clone(),

@@ -11,8 +11,8 @@ use bigtools::bbiread::BBIReadError;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
-    bigbed: BigBedRead<R, S>,
+pub fn write_bed<R: Reopen + SeekableRead + 'static>(
+    bigbed: BigBedRead<R>,
     mut out_file: File,
     nthreads: usize,
 ) -> Result<(), BBIReadError> {
@@ -25,12 +25,12 @@ pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
         .get_chroms()
         .into_iter()
         .map(|chrom| {
-            let bigbed = bigbed.clone();
+            let bigbed = bigbed.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
                 TempFileBuffer::new()?;
             let writer = io::BufWriter::new(file);
-            async fn file_future<R: Reopen<S> + 'static, S: SeekableRead + 'static>(
-                mut bigbed: BigBedRead<R, S>,
+            async fn file_future<R: SeekableRead + 'static>(
+                mut bigbed: BigBedRead<R>,
                 chrom: ChromAndSize,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
             ) -> Result<(), BBIReadError> {

@@ -13,13 +13,12 @@ use crate::bbiread::{
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{ChromIdNotFound, CirTreeSearchError};
 
-struct IntervalIter<'a, I, R, S>
+struct IntervalIter<'a, I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    bigwig: &'a mut BigWigRead<R, S>,
+    bigwig: &'a mut BigWigRead<R>,
     known_offset: u64,
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
@@ -29,11 +28,10 @@ where
     end: u32,
 }
 
-impl<'a, I, R, S> Iterator for IntervalIter<'a, I, R, S>
+impl<'a, I, R> Iterator for IntervalIter<'a, I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
     type Item = Result<Value, BBIReadError>;
 
@@ -74,13 +72,12 @@ where
 }
 
 /// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R, S>
+struct OwnedIntervalIter<I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    bigwig: BigWigRead<R, S>,
+    bigwig: BigWigRead<R>,
     known_offset: u64,
     blocks: I,
     // TODO: use type_alias_impl_trait to remove Box
@@ -90,11 +87,10 @@ where
     end: u32,
 }
 
-impl<I, R, S> Iterator for OwnedIntervalIter<I, R, S>
+impl<I, R> Iterator for OwnedIntervalIter<I, R>
 where
     I: Iterator<Item = Block> + Send,
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
     type Item = Result<Value, BBIReadError>;
 
@@ -160,31 +156,21 @@ impl From<BBIFileReadInfoError> for BigWigReadAttachError {
     }
 }
 
-pub struct BigWigRead<R, S>
-where
-    R: Reopen<S>,
-    S: SeekableRead,
-{
+pub struct BigWigRead<R> {
     pub info: BBIFileInfo,
-    reopen: R,
-    reader: Option<S>,
+    read: R,
 }
 
-impl<R, S> Clone for BigWigRead<R, S>
-where
-    R: Reopen<S>,
-    S: SeekableRead,
-{
-    fn clone(&self) -> Self {
-        BigWigRead {
+impl<R: Reopen> Reopen for BigWigRead<R> {
+    fn reopen(&self) -> io::Result<Self> {
+        Ok(BigWigRead {
             info: self.info.clone(),
-            reopen: self.reopen.clone(),
-            reader: None,
-        }
+            read: self.read.reopen()?,
+        })
     }
 }
 
-impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
+impl<R: SeekableRead> BBIRead<R> for BigWigRead<R> {
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -193,16 +179,8 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
         Ok("".to_string())
     }
 
-    fn ensure_reader(&mut self) -> io::Result<&mut S> {
-        if self.reader.is_none() {
-            let fp = self.reopen.reopen()?;
-            self.reader.replace(fp);
-        }
-        Ok(self.reader.as_mut().unwrap())
-    }
-
-    fn close(&mut self) {
-        self.reader.take();
+    fn reader(&mut self) -> &mut R {
+        &mut self.read
     }
 
     fn get_chroms(&self) -> Vec<ChromAndSize> {
@@ -217,10 +195,11 @@ impl<R: Reopen<S>, S: SeekableRead> BBIRead<S> for BigWigRead<R, S> {
     }
 }
 
-impl BigWigRead<ReopenableFile, File> {
+impl BigWigRead<ReopenableFile> {
     pub fn from_file_and_attach(path: &str) -> Result<Self, BigWigReadAttachError> {
         let reopen = ReopenableFile {
             path: path.to_string(),
+            file: File::open(path)?,
         };
         let b = BigWigRead::from(reopen);
         if b.is_err() {
@@ -250,31 +229,37 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
-impl<R, S> BigWigRead<R, S>
+impl<R> BigWigRead<R>
 where
-    R: Reopen<S>,
-    S: SeekableRead,
+    R: SeekableRead,
 {
-    pub fn from(reopen: R) -> Result<Self, BigWigReadAttachError> {
-        let file = reopen.reopen()?;
-        let info = read_info(file)?;
+    pub fn from(mut read: R) -> Result<Self, BigWigReadAttachError> {
+        let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigWig => {}
             _ => return Err(BigWigReadAttachError::NotABigWig),
         }
 
-        Ok(BigWigRead {
-            info,
-            reopen,
-            reader: None,
-        })
+        Ok(BigWigRead { info, read })
+    }
+
+    pub fn inner_read(&self) -> &R {
+        &self.read
+    }
+
+    /// Does *not* check if the passed `R` matches the provided info (including if the `R` is a bigWig at all!)
+    pub fn with_info(info: BBIFileInfo, read: R) -> Self {
+        BigWigRead {
+            info: info,
+            read: read,
+        }
     }
 
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;
         let data_offset = self.info.header.full_data_offset;
-        let reader = self.ensure_reader()?;
+        let reader = self.reader();
         let mut reader = ByteOrdered::runtime(reader, endianness);
         reader.seek(SeekFrom::Start(summary_offset))?;
         let bases_covered = reader.read_u64()?;
@@ -376,7 +361,7 @@ where
             .map_err(|e| BBIReadError::CirTreeSearchError(e))?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
-        let mut known_offset = self.ensure_reader()?.tell()?;
+        let mut known_offset = self.reader().tell()?;
         for block in blocks {
             let block_values = get_block_values(self, block, &mut known_offset, chrom, start, end)?;
             let block_values = match block_values {
@@ -395,8 +380,8 @@ where
     }
 }
 
-fn get_block_values<R: Reopen<S>, S: SeekableRead>(
-    bigwig: &mut BigWigRead<R, S>,
+fn get_block_values<R: SeekableRead>(
+    bigwig: &mut BigWigRead<R>,
     block: Block,
     known_offset: &mut u64,
     chrom: u32,

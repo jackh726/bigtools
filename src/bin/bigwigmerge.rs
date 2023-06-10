@@ -69,7 +69,7 @@ impl ChromValues for MergingValues {
 }
 
 pub fn get_merged_vals(
-    bigwigs: Vec<BigWigRead<ReopenableFile, File>>,
+    bigwigs: Vec<BigWigRead<ReopenableFile>>,
     max_zooms: usize,
 ) -> Result<
     (
@@ -89,15 +89,32 @@ pub fn get_merged_vals(
             if chrom_sizes.get(&chrom).is_some() {
                 continue;
             }
-            let (sizes, bws): (Vec<u32>, Vec<BigWigRead<ReopenableFile, File>>) = bigwigs
-                .iter()
-                .map(|w| {
-                    let chroms = w.get_chroms();
-                    let res = chroms.iter().find(|v| v.name == chrom);
-                    res.map(|s| (s.length, w.clone()))
-                })
-                .flatten()
-                .unzip();
+            let mut size = None;
+            let sizes = Vec::with_capacity(bigwigs.len());
+            let mut bws = Vec::with_capacity(bigwigs.len());
+            for w in bigwigs.iter() {
+                let chroms = w.get_chroms();
+                let res = chroms.iter().find(|v| v.name == chrom);
+                let res = match res {
+                    Some(res) => res,
+                    None => continue,
+                };
+                match size {
+                    Some(all_size) => {
+                        if all_size != res.length {
+                            eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
+                            return Err(MergingValuesError::MismatchedChroms(
+                                "Invalid input (nonmatching chroms)".to_owned(),
+                            ));
+                        }
+                    }
+                    None => {
+                        size = Some(res.length);
+                    }
+                }
+                // We don't want to a new file descriptor for every chrom
+                bws.push((w.info.clone(), w.inner_read().path.to_string()));
+            }
             let size = sizes[0];
             if !sizes.iter().all(|s| *s == size) {
                 eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
@@ -128,6 +145,8 @@ pub fn get_merged_vals(
             let mut merges: Vec<Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>> = bws
                 .into_iter()
                 .map(|b| {
+                    let f = ReopenableFile { file: File::open(&b.1)?, path: b.1 };
+                    let b = BigWigRead::with_info(b.0, f);
                     let iter = b.get_interval_move(&chrom, 1, size).map(|i| i.map(|r| r.map_err(|e| MergingValuesError::BBIReadError(e))))?;
                     Ok(Box::new(iter) as Box<_>)
                 })
@@ -159,7 +178,11 @@ pub fn get_merged_vals(
         } else {
             let iters: Vec<_> = bws
                 .into_iter()
-                .map(|b| b.get_interval_move(&chrom, 1, size).map(|i| i.map(|r| r.map_err(|e| MergingValuesError::BBIReadError(e)))))
+                .map(|b| {
+                    let f = ReopenableFile { file: File::open(&b.1)?, path: b.1 };
+                    let b = BigWigRead::with_info(b.0, f);
+                    b.get_interval_move(&chrom, 1, size).map(|i| i.map(|r| r.map_err(|e| MergingValuesError::BBIReadError(e))))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let mergingvalues = MergingValues::new(iters);
 
@@ -223,14 +246,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     let output = matches.value_of("output").unwrap().to_owned();
-    let mut bigwigs: Vec<BigWigRead<ReopenableFile, File>> = vec![];
+    let mut bigwigs: Vec<BigWigRead<ReopenableFile>> = vec![];
 
     if let Some(bws) = matches.values_of("bigwig") {
         for name in bws {
-            match BigWigRead::from_file_and_attach(name).map(|mut bw| {
-                bw.close();
-                bw
-            }) {
+            match BigWigRead::from_file_and_attach(name) {
                 Ok(bw) => bigwigs.push(bw),
                 Err(e) => {
                     eprintln!("Error when opening bigwig ({}): {:?}", name, e);
@@ -251,10 +271,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let lines = BufReader::new(list_file).lines();
             for line in lines {
                 let name = line?;
-                match BigWigRead::from_file_and_attach(&name).map(|mut bw| {
-                    bw.close();
-                    bw
-                }) {
+                match BigWigRead::from_file_and_attach(&name) {
                     Ok(bw) => bigwigs.push(bw),
                     Err(e) => {
                         eprintln!("Error when opening bigwig ({}): {:?}", name, e);
