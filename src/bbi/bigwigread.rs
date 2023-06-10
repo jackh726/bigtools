@@ -137,20 +137,6 @@ impl<R: SeekableRead> BBIRead for BigWigRead<R> {
     }
 }
 
-impl BigWigRead<ReopenableFile> {
-    pub fn from_file_and_attach(path: &str) -> Result<Self, BigWigReadAttachError> {
-        let reopen = ReopenableFile {
-            path: path.to_string(),
-            file: File::open(path)?,
-        };
-        let b = BigWigRead::from(reopen);
-        if b.is_err() {
-            eprintln!("Error when opening: {}", path);
-        }
-        b
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum ZoomIntervalError {
     #[error("The passed reduction level was not found")]
@@ -171,11 +157,25 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
+impl BigWigRead<ReopenableFile> {
+    pub fn open_file(path: &str) -> Result<Self, BigWigReadAttachError> {
+        let reopen = ReopenableFile {
+            path: path.to_string(),
+            file: File::open(path)?,
+        };
+        let b = BigWigRead::open(reopen);
+        if b.is_err() {
+            eprintln!("Error when opening: {}", path);
+        }
+        b
+    }
+}
+
 impl<R> BigWigRead<R>
 where
     R: SeekableRead,
 {
-    pub fn from(mut read: R) -> Result<Self, BigWigReadAttachError> {
+    pub fn open(mut read: R) -> Result<Self, BigWigReadAttachError> {
         let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigWig => {}

@@ -12,7 +12,7 @@ fn test_valid_read() -> Result<(), Box<dyn Error>> {
     let mut valid_bigwig = dir.clone();
     valid_bigwig.push("valid.bigWig");
 
-    let mut bwread = BigWigRead::from_file_and_attach(&valid_bigwig.to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::open_file(&valid_bigwig.to_string_lossy()).unwrap();
 
     // Test that chrom tree parsing works
     let chroms = bwread.get_chroms();
@@ -50,7 +50,7 @@ fn test_values() -> Result<(), Box<dyn Error>> {
     let mut valid_bigwig = dir.clone();
     valid_bigwig.push("valid.bigWig");
 
-    let mut bwread = BigWigRead::from_file_and_attach(&valid_bigwig.to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::open_file(&valid_bigwig.to_string_lossy()).unwrap();
 
     let vals = bwread.values("chr17", 0, 59899)?;
     assert_eq!(vals.len(), 59899);

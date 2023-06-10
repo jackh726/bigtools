@@ -146,16 +146,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         if bigwigpath.starts_with("http") {
             use bigtools::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
-            let inbigwig = BigWigRead::from(f)?;
+            let inbigwig = BigWigRead::open(f)?;
             write(bedin, inbigwig, out, options)?;
         } else {
-            let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+            let inbigwig = BigWigRead::open_file(bigwigpath)?;
             write(bedin, inbigwig, out, options)?;
         }
     }
     #[cfg(not(feature = "remote"))]
     {
-        let inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+        let inbigwig = BigWigRead::open_file(bigwigpath)?;
         write(&bedin, inbigwig, out, options)?;
     }
 

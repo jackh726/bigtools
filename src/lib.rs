@@ -5,7 +5,11 @@ The original file format specification for bigWig and bigBed files is defined in
 
 ## Reading
 
-The entrypoint to reading bigWigs and bigBeds is [`BigWigRead::from`] and [`BigBedRead::from`], respectively.
+The entrypoint to reading bigWigs and bigBeds is [`BigWigRead::open`] and
+[`BigBedRead::open`], respectively. These take any type that implements both
+[`Read`][std::io::Read] and [`Seek`][std::io::Seek]. There are also
+[`BigWigRead::open_file`] and [`BigBedRead::open_file`], which take a `&str` and
+will open a `File`.
 
 ## Writing
 

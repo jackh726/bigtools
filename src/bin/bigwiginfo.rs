@@ -19,18 +19,18 @@ fn main() -> Result<(), BigWigReadAttachError> {
         if bigwigpath.starts_with("http") {
             use bigtools::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
-            let mut bigwig = BigWigRead::from(f)?;
+            let mut bigwig = BigWigRead::open(f)?;
             println!("Header: {:?}", bigwig.info.header);
             println!("Summary: {:?}", bigwig.get_summary());
         } else {
-            let mut bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+            let mut bigwig = BigWigRead::open_file(bigwigpath)?;
             println!("Header: {:?}", bigwig.info.header);
             println!("Summary: {:?}", bigwig.get_summary());
         }
     }
     #[cfg(not(feature = "remote"))]
     {
-        let mut bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+        let mut bigwig = BigWigRead::open_file(bigwigpath)?;
         println!("Header: {:?}", bigwig.info.header);
         println!("Summary: {:?}", bigwig.get_summary());
     }
