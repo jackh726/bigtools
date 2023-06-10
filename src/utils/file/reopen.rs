@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::io::{self, Read, Seek};
-use std::marker::Send;
 
 /// A helper trait that for things that implement `Read`, `Seek`, and `Send`
 pub trait SeekableRead: Seek + Read {}
@@ -8,7 +7,7 @@ impl<T> SeekableRead for T where T: Seek + Read {}
 
 /// Indicates something that can be *reopened*. Importantly, reopening should be independent
 /// with respect to seeks and reads from the original object.
-pub trait Reopen: Sized + Send {
+pub trait Reopen: Sized {
     fn reopen(&self) -> io::Result<Self>;
 }
 

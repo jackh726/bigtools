@@ -11,7 +11,7 @@ use bigtools::bbiread::BBIReadError;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
-pub fn write_bed<R: Reopen + SeekableRead + 'static>(
+pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     bigbed: BigBedRead<R>,
     mut out_file: File,
     nthreads: usize,
