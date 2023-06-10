@@ -121,10 +121,6 @@ impl<R: SeekableRead> BBIRead for BigWigRead<R> {
         &self.info
     }
 
-    fn autosql(&mut self) -> Result<String, BBIReadError> {
-        Ok("".to_string())
-    }
-
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }

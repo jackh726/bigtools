@@ -122,9 +122,6 @@ pub trait BBIRead {
     /// Get basic info about the bbi file
     fn get_info(&self) -> &BBIFileInfo;
 
-    /// Reads the autosql from the bbi file
-    fn autosql(&mut self) -> Result<String, BBIReadError>;
-
     /// Gets a reader to the underlying file
     fn reader(&mut self) -> &mut Self::Read;
 
