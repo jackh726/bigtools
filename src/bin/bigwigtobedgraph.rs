@@ -12,7 +12,7 @@ use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use ufmt::uwrite;
 
-pub fn write_bg<R: Reopen + SeekableRead + 'static>(
+pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     bigwig: BigWigRead<R>,
     mut out_file: File,
     nthreads: usize,
