@@ -21,8 +21,7 @@ where
     bigwig: &'a mut BigWigRead<R>,
     known_offset: u64,
     blocks: I,
-    // TODO: use type_alias_impl_trait to remove Box
-    vals: Option<Box<dyn Iterator<Item = Value> + Send + 'a>>,
+    vals: Option<std::vec::IntoIter<Value>>,
     chrom: u32,
     start: u32,
     end: u32,
@@ -80,8 +79,7 @@ where
     bigwig: BigWigRead<R>,
     known_offset: u64,
     blocks: I,
-    // TODO: use type_alias_impl_trait to remove Box
-    vals: Option<Box<dyn Iterator<Item = Value> + Send>>,
+    vals: Option<std::vec::IntoIter<Value>>,
     chrom: u32,
     start: u32,
     end: u32,
@@ -387,7 +385,7 @@ fn get_block_values<R: SeekableRead>(
     chrom: u32,
     start: u32,
     end: u32,
-) -> Result<Option<Box<dyn Iterator<Item = Value> + Send>>, BBIReadError> {
+) -> Result<Option<std::vec::IntoIter<Value>>, BBIReadError> {
     let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
 
     use bytes::Buf;
@@ -577,5 +575,5 @@ fn get_block_values<R: SeekableRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(Some(Box::new(values.into_iter())))
+    Ok(Some(values.into_iter()))
 }

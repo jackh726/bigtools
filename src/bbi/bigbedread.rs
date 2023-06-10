@@ -21,7 +21,7 @@ where
     bigbed: &'a mut BigBedRead<R>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item = BedEntry> + Send + 'a>>,
+    vals: Option<std::vec::IntoIter<BedEntry>>,
     expected_chrom: u32,
     start: u32,
     end: u32,
@@ -78,7 +78,7 @@ where
     bigbed: BigBedRead<R>,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item = BedEntry> + Send>>,
+    vals: Option<std::vec::IntoIter<BedEntry>>,
     expected_chrom: u32,
     start: u32,
     end: u32,
@@ -344,7 +344,7 @@ fn get_block_entries<R: SeekableRead>(
     expected_chrom: u32,
     start: u32,
     end: u32,
-) -> Result<Box<dyn Iterator<Item = BedEntry> + Send>, BBIReadError> {
+) -> Result<std::vec::IntoIter<BedEntry>, BBIReadError> {
     let block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
     let mut block_data_mut = ByteOrdered::runtime(block_data_mut, bigbed.info.header.endianness);
     let mut entries: Vec<BedEntry> = Vec::new();
@@ -387,5 +387,5 @@ fn get_block_entries<R: SeekableRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(Box::new(entries.into_iter()))
+    Ok(entries.into_iter())
 }
