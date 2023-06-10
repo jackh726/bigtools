@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
@@ -13,12 +14,14 @@ use crate::bbiread::{
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{ChromIdNotFound, CirTreeSearchError};
 
-struct IntervalIter<'a, I, R>
+struct IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
     R: SeekableRead,
+    B: BorrowMut<BigWigRead<R>>,
 {
-    bigwig: &'a mut BigWigRead<R>,
+    r: std::marker::PhantomData<R>,
+    bigwig: B,
     known_offset: u64,
     blocks: I,
     vals: Option<std::vec::IntoIter<Value>>,
@@ -27,10 +30,11 @@ where
     end: u32,
 }
 
-impl<'a, I, R> Iterator for IntervalIter<'a, I, R>
+impl<I, R, B> Iterator for IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
     R: SeekableRead,
+    B: BorrowMut<BigWigRead<R>>,
 {
     type Item = Result<Value, BBIReadError>;
 
@@ -49,7 +53,7 @@ where
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
                     match get_block_values(
-                        self.bigwig,
+                        self.bigwig.borrow_mut(),
                         current_block,
                         &mut self.known_offset,
                         self.chrom,
@@ -62,64 +66,6 @@ where
                         Ok(None) => {}
                         Err(e) => {
                             return Some(Err(e));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R>
-where
-    I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
-{
-    bigwig: BigWigRead<R>,
-    known_offset: u64,
-    blocks: I,
-    vals: Option<std::vec::IntoIter<Value>>,
-    chrom: u32,
-    start: u32,
-    end: u32,
-}
-
-impl<I, R> Iterator for OwnedIntervalIter<I, R>
-where
-    I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
-{
-    type Item = Result<Value, BBIReadError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match &mut self.vals {
-                Some(vals) => match vals.next() {
-                    Some(v) => {
-                        return Some(Ok(v));
-                    }
-                    None => {
-                        self.vals = None;
-                    }
-                },
-                None => {
-                    // TODO: Could minimize this by chunking block reads
-                    let current_block = self.blocks.next()?;
-                    match get_block_values(
-                        &mut self.bigwig,
-                        current_block,
-                        &mut self.known_offset,
-                        self.chrom,
-                        self.start,
-                        self.end,
-                    ) {
-                        Ok(Some(vals)) => {
-                            self.vals = Some(vals);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            return Some(Err(e.into()));
                         }
                     }
                 }
@@ -286,6 +232,7 @@ where
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
+            r: std::marker::PhantomData,
             bigwig: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
@@ -304,7 +251,8 @@ where
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
-        Ok(OwnedIntervalIter {
+        Ok(IntervalIter {
+            r: std::marker::PhantomData,
             bigwig: self,
             known_offset: 0,
             blocks: blocks.into_iter(),

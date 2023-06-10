@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::vec::Vec;
@@ -13,12 +14,14 @@ use crate::bbiread::{
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{ChromIdNotFound, CirTreeSearchError};
 
-struct IntervalIter<'a, I, R>
+struct IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
     R: SeekableRead,
+    B: BorrowMut<BigBedRead<R>>,
 {
-    bigbed: &'a mut BigBedRead<R>,
+    r: std::marker::PhantomData<R>,
+    bigbed: B,
     known_offset: u64,
     blocks: I,
     vals: Option<std::vec::IntoIter<BedEntry>>,
@@ -27,10 +30,11 @@ where
     end: u32,
 }
 
-impl<'a, I, R> Iterator for IntervalIter<'a, I, R>
+impl<I, R, B> Iterator for IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
     R: SeekableRead,
+    B: BorrowMut<BigBedRead<R>>,
 {
     type Item = Result<BedEntry, BBIReadError>;
 
@@ -49,64 +53,7 @@ where
                     // TODO: Could minimize this by chunking block reads
                     let current_block = self.blocks.next()?;
                     match get_block_entries(
-                        self.bigbed,
-                        current_block,
-                        &mut self.known_offset,
-                        self.expected_chrom,
-                        self.start,
-                        self.end,
-                    ) {
-                        Ok(vals) => {
-                            self.vals = Some(vals);
-                        }
-                        Err(e) => {
-                            return Some(Err(e));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Same as IntervalIter but owned
-struct OwnedIntervalIter<I, R>
-where
-    I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
-{
-    bigbed: BigBedRead<R>,
-    known_offset: u64,
-    blocks: I,
-    vals: Option<std::vec::IntoIter<BedEntry>>,
-    expected_chrom: u32,
-    start: u32,
-    end: u32,
-}
-
-impl<I, R> Iterator for OwnedIntervalIter<I, R>
-where
-    I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
-{
-    type Item = Result<BedEntry, BBIReadError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match &mut self.vals {
-                Some(vals) => match vals.next() {
-                    Some(v) => {
-                        return Some(Ok(v));
-                    }
-                    None => {
-                        self.vals = None;
-                    }
-                },
-                None => {
-                    // TODO: Could minimize this by chunking block reads
-                    let current_block = self.blocks.next()?;
-                    match get_block_entries(
-                        &mut self.bigbed,
+                        self.bigbed.borrow_mut(),
                         current_block,
                         &mut self.known_offset,
                         self.expected_chrom,
@@ -267,6 +214,7 @@ where
             .unwrap()
             .id;
         Ok(IntervalIter {
+            r: std::marker::PhantomData,
             bigbed: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
@@ -292,7 +240,8 @@ where
             .find(|&x| x.name == chrom_name)
             .unwrap()
             .id;
-        Ok(OwnedIntervalIter {
+        Ok(IntervalIter {
+            r: std::marker::PhantomData,
             bigbed: self,
             known_offset: 0,
             blocks: blocks.into_iter(),
