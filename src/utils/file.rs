@@ -1,5 +1,5 @@
 pub mod filebufferedchannel;
-pub mod seekableread;
+pub mod reopen;
 pub mod streaming_linereader;
 pub mod tell;
 pub mod tempfilebuffer;

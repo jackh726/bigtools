@@ -8,7 +8,7 @@ use futures::task::SpawnExt;
 
 use bigtools::bbi::{BBIRead, BigBedRead, ChromAndSize};
 use bigtools::bbiread::BBIReadError;
-use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 
 pub fn write_bed<R: Reopen<S> + 'static, S: SeekableRead + 'static>(

@@ -7,7 +7,7 @@ use clap::{App, Arg};
 
 use bigtools::bbi::BigWigRead;
 use bigtools::bbiread::BBIReadError;
-use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct Options {

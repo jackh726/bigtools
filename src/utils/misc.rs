@@ -3,7 +3,7 @@ use std::io::BufRead;
 use crate::bbi::BigWigRead;
 use crate::bbiread::BBIReadError;
 use crate::bed::bedparser::{parse_bed, BedValueError};
-use crate::utils::file::seekableread::{Reopen, SeekableRead};
+use crate::utils::file::reopen::{Reopen, SeekableRead};
 use crate::utils::file::streaming_linereader::StreamingLineReader;
 use crate::BedEntry;
 

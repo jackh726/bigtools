@@ -12,7 +12,7 @@ use bigtools::bbiread::BBIReadError;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::filebufferedchannel;
 use bigtools::utils::merge::merge_sections_many;
-use bigtools::utils::seekableread::ReopenableFile;
+use bigtools::utils::reopen::ReopenableFile;
 use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput};
 
 pub struct MergingValues {
