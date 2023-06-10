@@ -114,7 +114,9 @@ impl<R: Reopen> Reopen for BigWigRead<R> {
     }
 }
 
-impl<R: SeekableRead> BBIRead<R> for BigWigRead<R> {
+impl<R: SeekableRead> BBIRead for BigWigRead<R> {
+    type Read = R;
+
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }

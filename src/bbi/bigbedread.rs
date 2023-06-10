@@ -113,10 +113,9 @@ impl<R: Reopen> Reopen for BigBedRead<R> {
     }
 }
 
-impl<R> BBIRead<R> for BigBedRead<R>
-where
-    R: SeekableRead,
-{
+impl<R: SeekableRead> BBIRead for BigBedRead<R> {
+    type Read = R;
+
     fn get_info(&self) -> &BBIFileInfo {
         &self.info
     }
