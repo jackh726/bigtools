@@ -284,7 +284,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + Send + 'a, BBIReadError> {
+    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(IntervalIter {
@@ -303,7 +303,7 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + Send, BBIReadError> {
+    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         Ok(OwnedIntervalIter {
@@ -323,7 +323,7 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send + 'a, ZoomIntervalError>
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
         let chrom = self.info.chrom_id(chrom_name)?;
         let zoom_header = match self
