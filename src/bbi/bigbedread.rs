@@ -120,19 +120,6 @@ impl<R: SeekableRead> BBIRead for BigBedRead<R> {
         &self.info
     }
 
-    fn autosql(&mut self) -> Result<String, BBIReadError> {
-        let auto_sql_offset = self.info.header.auto_sql_offset;
-        let reader = self.reader();
-        let mut reader = BufReader::new(reader);
-        reader.seek(SeekFrom::Start(auto_sql_offset))?;
-        let mut buffer = Vec::new();
-        reader.read_until(b'\0', &mut buffer)?;
-        buffer.pop();
-        let autosql = String::from_utf8(buffer)
-            .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
-        Ok(autosql)
-    }
-
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }
@@ -195,6 +182,19 @@ where
         }
 
         Ok(BigBedRead { info, read })
+    }
+
+    pub fn autosql(&mut self) -> Result<String, BBIReadError> {
+        let auto_sql_offset = self.info.header.auto_sql_offset;
+        let reader = self.reader();
+        let mut reader = BufReader::new(reader);
+        reader.seek(SeekFrom::Start(auto_sql_offset))?;
+        let mut buffer = Vec::new();
+        reader.read_until(b'\0', &mut buffer)?;
+        buffer.pop();
+        let autosql = String::from_utf8(buffer)
+            .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
+        Ok(autosql)
     }
 
     pub fn get_interval<'a>(
