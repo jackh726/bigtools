@@ -24,7 +24,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
     let _index = matches.is_present("index");
     let _data = matches.is_present("data");
 
-    let _bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+    let _bigwig = BigWigRead::open_file(bigwigpath)?;
 
     unimplemented!();
     //Ok(())

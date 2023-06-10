@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let bedinpath = matches.value_of("bedin").unwrap();
     let bedoutpath = matches.value_of("output").unwrap();
 
-    let mut inbigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+    let mut inbigwig = BigWigRead::open_file(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
     let mut bedoutwriter = BufWriter::new(outbed);
 

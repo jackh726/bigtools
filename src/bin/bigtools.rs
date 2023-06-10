@@ -93,9 +93,9 @@ fn intersect<R: SeekableRead + 'static>(
 }
 
 fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<()> {
-    let chroms = match BigWigRead::from_file_and_attach(&bpath) {
+    let chroms = match BigWigRead::open_file(&bpath) {
         Ok(bigwig) => bigwig.info.chrom_info,
-        Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::from_file_and_attach(bpath) {
+        Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::open_file(bpath) {
             Ok(bigbed) => bigbed.info.chrom_info,
             Err(BigBedReadAttachError::NotABigBed) => {
                 return Err(io::Error::new(
@@ -201,7 +201,7 @@ fn main() -> Result<(), BigBedReadAttachError> {
             let apath = matches.value_of("a").unwrap().to_owned();
             let bpath = matches.value_of("b").unwrap().to_owned();
 
-            let b = BigBedRead::from_file_and_attach(bpath)?;
+            let b = BigBedRead::open_file(bpath)?;
 
             intersect(apath, b, IntersectOptions {})?;
         }

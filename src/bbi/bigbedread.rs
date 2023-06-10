@@ -136,20 +136,6 @@ impl<R: SeekableRead> BBIRead for BigBedRead<R> {
     }
 }
 
-impl BigBedRead<ReopenableFile> {
-    pub fn from_file_and_attach(path: String) -> Result<Self, BigBedReadAttachError> {
-        let reopen = ReopenableFile {
-            path: path.clone(),
-            file: File::open(&path)?,
-        };
-        let b = BigBedRead::from(reopen);
-        if b.is_err() {
-            eprintln!("Error when opening: {}", path);
-        }
-        b
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum ZoomIntervalError {
     #[error("The passed reduction level was not found")]
@@ -170,11 +156,25 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
+impl BigBedRead<ReopenableFile> {
+    pub fn open_file(path: String) -> Result<Self, BigBedReadAttachError> {
+        let reopen = ReopenableFile {
+            path: path.clone(),
+            file: File::open(&path)?,
+        };
+        let b = BigBedRead::open(reopen);
+        if b.is_err() {
+            eprintln!("Error when opening: {}", path);
+        }
+        b
+    }
+}
+
 impl<R> BigBedRead<R>
 where
     R: SeekableRead,
 {
-    pub fn from(mut read: R) -> Result<Self, BigBedReadAttachError> {
+    pub fn open(mut read: R) -> Result<Self, BigBedReadAttachError> {
         let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigBed => {}

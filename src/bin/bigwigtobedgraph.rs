@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         parsed.unwrap()
     };
 
-    let bigwig = BigWigRead::from_file_and_attach(bigwigpath)?;
+    let bigwig = BigWigRead::open_file(bigwigpath)?;
     let bedgraph = File::create(bedgraphpath)?;
 
     write_bg(bigwig, bedgraph, nthreads)?;

@@ -250,7 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if let Some(bws) = matches.values_of("bigwig") {
         for name in bws {
-            match BigWigRead::from_file_and_attach(name) {
+            match BigWigRead::open_file(name) {
                 Ok(bw) => bigwigs.push(bw),
                 Err(e) => {
                     eprintln!("Error when opening bigwig ({}): {:?}", name, e);
@@ -271,7 +271,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let lines = BufReader::new(list_file).lines();
             for line in lines {
                 let name = line?;
-                match BigWigRead::from_file_and_attach(&name) {
+                match BigWigRead::open_file(&name) {
                     Ok(bw) => bigwigs.push(bw),
                     Err(e) => {
                         eprintln!("Error when opening bigwig ({}): {:?}", name, e);

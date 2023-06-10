@@ -44,7 +44,7 @@ fn test() -> Result<(), Box<dyn Error>> {
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool).unwrap();
 
-    let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 1);
@@ -98,7 +98,7 @@ fn test_multi() -> io::Result<()> {
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool.clone()).unwrap();
 
-    let mut bwread = BigWigRead::from_file_and_attach(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 6);

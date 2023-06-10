@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         parsed.unwrap()
     };
 
-    let bigbed = BigBedRead::from_file_and_attach(bigbedpath)?;
+    let bigbed = BigBedRead::open_file(bigbedpath)?;
     let bed = File::create(bedpath)?;
 
     write_bed(bigbed, bed, nthreads)?;

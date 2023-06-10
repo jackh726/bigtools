@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_remote() {
         let f = RemoteFile::new("https://encode-public.s3.amazonaws.com/2020/01/17/7d2573b1-86f4-4592-a68a-ac3d5d0372d6/ENCFF592UJG.bigBed");
-        let mut remote = BigBedRead::from(f).unwrap();
+        let mut remote = BigBedRead::open(f).unwrap();
 
         let remote_intervals: Vec<_> = remote
             .get_interval("chr10", 100000000, 100010000)
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_remote2() {
         let f = RemoteFile::new("http://hgdownload.soe.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign100mer.bigWig");
-        let mut remote = BigWigRead::from(f).unwrap();
+        let mut remote = BigWigRead::open(f).unwrap();
 
         let interval = remote.get_zoom_interval("chr17", 0, 36996442, 2048);
         let _: Vec<_> = interval.unwrap().collect();
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_remote3() {
         let f = RemoteFile::new("http://hgdownload.soe.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign100mer.bigWig");
-        let mut remote = BigWigRead::from(f).unwrap();
+        let mut remote = BigWigRead::open(f).unwrap();
 
         let interval = remote.get_zoom_interval("chr2", 46087592, 174087320, 32768);
         let _: Vec<_> = interval.unwrap().collect();
@@ -269,8 +269,7 @@ mod tests {
     #[test]
     fn test_remote4() {
         let f = RemoteFile::new("https://proteinpaint.stjude.org/ppdemo/hg19/bigwig/temp.bw");
-        let remote = BigWigRead::from(f).unwrap();
-        //let remote = BigWigRead::from_file_and_attach("/home/hueyj/git/bigtools/temp.bw").unwrap();
+        let remote = BigWigRead::open(f).unwrap();
 
         let _: Vec<_> = remote
             .get_interval_move("chr1", 169253475, 169257278)
