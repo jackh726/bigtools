@@ -6,7 +6,7 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use bigtools::bed::bedparser::{parse_bed, BedParser};
 use bigtools::bed::indexer::index_chroms;
 use bigtools::utils::chromvalues::ChromValues;
-use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::{App, Arg};
 

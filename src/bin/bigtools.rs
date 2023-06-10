@@ -6,7 +6,7 @@ use bigtools::{BigWigRead, BigWigReadAttachError};
 use clap::{App, Arg};
 
 use bigtools::bbi::{BigBedRead, BigBedReadAttachError};
-use bigtools::utils::seekableread::{Reopen, SeekableRead};
+use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 
 struct IntersectOptions {}

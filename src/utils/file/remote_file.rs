@@ -3,7 +3,7 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use tempfile;
 
-use crate::utils::file::seekableread::Reopen;
+use crate::utils::file::reopen::Reopen;
 
 const READ_SIZE: usize = 10 * 1024; // 10 KB chunks
 

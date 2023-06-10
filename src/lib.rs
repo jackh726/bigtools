@@ -5,6 +5,8 @@ The original file format specification for bigWig and bigBed files is defined in
 
 ## Reading
 
+The entrypoint to reading bigWigs and bigBeds is [`BigWigRead::from`] and [`BigBedRead::from`], respectively.
+
 ## Writing
 
 */

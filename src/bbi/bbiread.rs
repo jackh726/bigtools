@@ -11,7 +11,7 @@ use crate::bbi::{
     CIR_TREE_MAGIC,
 };
 use crate::bed::bedparser::BedValueError;
-use crate::utils::seekableread::SeekableRead;
+use crate::utils::reopen::SeekableRead;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Block {
