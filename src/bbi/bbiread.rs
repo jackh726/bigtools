@@ -1,5 +1,4 @@
-use std::io::{self, Cursor, Read, SeekFrom};
-use std::marker::PhantomData;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::Endianness;
@@ -117,7 +116,9 @@ pub enum BBIReadError {
     IoError(#[from] io::Error),
 }
 
-pub trait BBIRead<R: SeekableRead> {
+pub trait BBIRead {
+    type Read: SeekableRead;
+
     /// Get basic info about the bbi file
     fn get_info(&self) -> &BBIFileInfo;
 
@@ -125,7 +126,7 @@ pub trait BBIRead<R: SeekableRead> {
     fn autosql(&mut self) -> Result<String, BBIReadError>;
 
     /// Gets a reader to the underlying file
-    fn reader(&mut self) -> &mut R;
+    fn reader(&mut self) -> &mut Self::Read;
 
     fn get_chroms(&self) -> Vec<ChromAndSize>;
 
@@ -698,7 +699,7 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
 }
 
 /// Gets the data (uncompressed, if applicable) from a given block
-pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
+pub(crate) fn get_block_data<B: BBIRead>(
     bbifile: &mut B,
     block: &Block,
     known_offset: u64,
@@ -731,7 +732,7 @@ pub(crate) fn get_block_data<S: SeekableRead, B: BBIRead<S>>(
     Ok(Cursor::new(block_data))
 }
 
-pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
+pub(crate) fn get_zoom_block_values<B: BBIRead>(
     bbifile: &mut B,
     block: Block,
     known_offset: &mut u64,
@@ -811,11 +812,10 @@ pub(crate) fn get_zoom_block_values<S: SeekableRead, B: BBIRead<S>>(
     Ok(Box::new(records.into_iter()))
 }
 
-pub(crate) struct ZoomIntervalIter<'a, I, S, B>
+pub(crate) struct ZoomIntervalIter<'a, I, B>
 where
     I: Iterator<Item = Block> + Send,
-    S: SeekableRead,
-    B: BBIRead<S>,
+    B: BBIRead,
 {
     bbifile: &'a mut B,
     known_offset: u64,
@@ -824,14 +824,12 @@ where
     chrom: u32,
     start: u32,
     end: u32,
-    _phantom: PhantomData<S>,
 }
 
-impl<'a, I, S, B> ZoomIntervalIter<'a, I, S, B>
+impl<'a, I, B> ZoomIntervalIter<'a, I, B>
 where
     I: Iterator<Item = Block> + Send,
-    S: SeekableRead,
-    B: BBIRead<S>,
+    B: BBIRead,
 {
     pub fn new(bbifile: &'a mut B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
         ZoomIntervalIter {
@@ -842,16 +840,14 @@ where
             chrom,
             start,
             end,
-            _phantom: PhantomData,
         }
     }
 }
 
-impl<'a, I, S, B> Iterator for ZoomIntervalIter<'a, I, S, B>
+impl<'a, I, B> Iterator for ZoomIntervalIter<'a, I, B>
 where
     I: Iterator<Item = Block> + Send,
-    S: SeekableRead,
-    B: BBIRead<S>,
+    B: BBIRead,
 {
     type Item = Result<ZoomRecord, BBIReadError>;
 
