@@ -158,6 +158,7 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
 }
 
 impl BigWigRead<ReopenableFile> {
+    /// Opens a new `BigWigRead` from a given path as a file.
     pub fn open_file(path: &str) -> Result<Self, BigWigReadAttachError> {
         let reopen = ReopenableFile {
             path: path.to_string(),
@@ -175,6 +176,7 @@ impl<R> BigWigRead<R>
 where
     R: SeekableRead,
 {
+    /// Opens a new `BigWigRead` with for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, BigWigReadAttachError> {
         let info = read_info(&mut read)?;
         match info.filetype {
@@ -185,18 +187,17 @@ where
         Ok(BigWigRead { info, read })
     }
 
+    /// Does *not* check if the passed `R` matches the provided info (including if the `R` is a bigWig at all!)
+    pub fn with_info(info: BBIFileInfo, read: R) -> Self {
+        BigWigRead { info, read }
+    }
+
+    /// Gets a reference to the inner `R` type, in order to access any info
     pub fn inner_read(&self) -> &R {
         &self.read
     }
 
-    /// Does *not* check if the passed `R` matches the provided info (including if the `R` is a bigWig at all!)
-    pub fn with_info(info: BBIFileInfo, read: R) -> Self {
-        BigWigRead {
-            info: info,
-            read: read,
-        }
-    }
-
+    /// Returns the summary data from bigWig
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;
@@ -221,6 +222,9 @@ where
         })
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `Value`s. The resulting iterator takes a mutable reference
+    /// of this `BigWigRead`.
     pub fn get_interval<'a>(
         &'a mut self,
         chrom_name: &str,
@@ -241,6 +245,9 @@ where
         })
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `Value`s. The resulting iterator takes this `BigWigRead`
+    /// by value.
     pub fn get_interval_move(
         mut self,
         chrom_name: &str,
@@ -261,6 +268,8 @@ where
         })
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `ZoomRecord`s.
     pub fn get_zoom_interval<'a>(
         &'a mut self,
         chrom_name: &str,

@@ -157,6 +157,7 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
 }
 
 impl BigBedRead<ReopenableFile> {
+    /// Opens a new `BigBedRead` from a given path as a file.
     pub fn open_file(path: String) -> Result<Self, BigBedReadAttachError> {
         let reopen = ReopenableFile {
             path: path.clone(),
@@ -174,6 +175,7 @@ impl<R> BigBedRead<R>
 where
     R: SeekableRead,
 {
+    /// Opens a new `BigBedRead` with for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, BigBedReadAttachError> {
         let info = read_info(&mut read)?;
         match info.filetype {
@@ -184,6 +186,7 @@ where
         Ok(BigBedRead { info, read })
     }
 
+    /// Reads the autosql from this bigBed
     pub fn autosql(&mut self) -> Result<String, BBIReadError> {
         let auto_sql_offset = self.info.header.auto_sql_offset;
         let reader = self.reader();
@@ -197,6 +200,9 @@ where
         Ok(autosql)
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `BedEntry`s. The resulting iterator takes a mutable reference
+    /// of this `BigBedRead`.
     pub fn get_interval<'a>(
         &'a mut self,
         chrom_name: &str,
@@ -224,6 +230,9 @@ where
         })
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `BedEntry`s. The resulting iterator takes this `BigBedRead`
+    /// by value.
     pub fn get_interval_move(
         mut self,
         chrom_name: &str,
@@ -251,6 +260,8 @@ where
         })
     }
 
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `ZoomRecord`s.
     pub fn get_zoom_interval<'a>(
         &'a mut self,
         chrom_name: &str,
