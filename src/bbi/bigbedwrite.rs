@@ -13,7 +13,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{ChromData, ChromProcessingOutput, WriteSummaryFuture};
+use crate::ChromData;
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -82,7 +82,7 @@ impl BigBedWrite {
                 vals,
                 file,
                 self.options,
-                BigBedWrite::begin_processing_chrom,
+                BigBedWrite::process_chrom,
                 pool,
                 chrom_sizes.clone(),
             ))?;
@@ -157,7 +157,7 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_group<I>(
+    async fn process_chrom<I>(
         processing_input: ChromProcessingInput,
         chrom_id: u32,
         options: BBIWriteOptions,
@@ -519,49 +519,6 @@ impl BigBedWrite {
         };
         summary_complete.total_items = total_items;
         Ok(summary_complete)
-    }
-
-    /// This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
-    /// This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
-    /// This is heavily multi-threaded using Futures. A brief summary:
-    /// - All reading from the ChromValues is done in a single future (process_group). This futures in charge of keeping track of sections (and zoom data).
-    ///   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
-    ///   This is the most CPU-intensive part of the entire write.
-    /// - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
-    ///   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
-    ///   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
-    ///   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
-    ///   All of this is done for zoom sections too.
-    ///
-    /// The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-    pub fn begin_processing_chrom<I: ChromValues<Value = BedEntry> + Send + 'static>(
-        chrom: String,
-        data: I,
-        mut pool: ThreadPool,
-        options: BBIWriteOptions,
-        chrom_id: u32,
-        chrom_length: u32,
-    ) -> Result<
-        (
-            WriteSummaryFuture<I::Error>,
-            ChromProcessingOutput<I::Error>,
-        ),
-        WriteGroupsError<I::Error>,
-    > {
-        let (processing_input, processing_output) = bbiwrite::setup_channels(&mut pool, options)?;
-
-        let (f_remote, f_handle) = BigBedWrite::process_group(
-            processing_input,
-            chrom_id,
-            options,
-            pool.clone(),
-            data,
-            chrom,
-            chrom_length,
-        )
-        .remote_handle();
-        pool.spawn(f_remote).expect("Couldn't spawn future.");
-        Ok((f_handle.boxed(), processing_output))
     }
 }
 

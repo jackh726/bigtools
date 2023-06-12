@@ -193,6 +193,9 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
 
 #[cfg(test)]
 mod tests {
+    use futures::task::SpawnExt;
+    use futures::FutureExt;
+
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
     use crate::{BBIWriteOptions, Value, WriteGroupsError};
@@ -225,7 +228,7 @@ mod tests {
             parse_bedgraph,
         );
 
-        let pool = futures::executor::ThreadPoolBuilder::new()
+        let mut pool = futures::executor::ThreadPoolBuilder::new()
             .pool_size(1)
             .create()
             .expect("Unable to create thread pool.");
@@ -250,14 +253,21 @@ mod tests {
             // Make a new id for the chromosome
             let chrom_id = chrom_ids.get_id(&chrom);
 
-            crate::BigWigWrite::begin_processing_chrom(
-                chrom,
-                data,
-                pool.clone(),
-                options,
+            let (procesing_input, processing_output) =
+                crate::bbiwrite::setup_channels(&mut pool, options)?;
+
+            let (f_remote, f_handle) = crate::BigWigWrite::process_chrom(
+                procesing_input,
                 chrom_id,
+                options,
+                pool.clone(),
+                data,
+                chrom,
                 length,
             )
+            .remote_handle();
+            pool.spawn(f_remote).expect("Couldn't spawn future.");
+            Ok((f_handle.boxed(), processing_output))
         };
         assert!(matches!(
             chsi.advance(&mut do_read),
