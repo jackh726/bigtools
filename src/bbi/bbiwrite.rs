@@ -568,7 +568,7 @@ pub(crate) async fn write_vals<
             })
             .collect::<io::Result<_>>()?;
 
-    let mut section_iter: Vec<Box<dyn Iterator<Item = Section>>> = vec![];
+    let mut section_iter: Vec<filebufferedchannel::IntoIter<Section>> = vec![];
     let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
@@ -626,7 +626,7 @@ pub(crate) async fn write_vals<
                 };
                 let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-                section_iter.push(Box::new(sections.into_iter()));
+                section_iter.push(sections.into_iter());
                 raw_file = data.await_real_file();
 
                 for TempZoomInfo {
