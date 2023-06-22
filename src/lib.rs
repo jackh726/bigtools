@@ -25,6 +25,9 @@ Writing new bigWigs and bigBeds is a tad more difficult. To begin, a
 
 Generally, bigWig and bigBed writing is done per chromosome, with compression
 and io being done on an async ThreadPool.
+
+The source for data to be written to bigWigs and bigBeds come from the
+[`ChromData`] trait. The `advance` method
 */
 
 pub mod bbi;

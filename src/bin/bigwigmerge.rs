@@ -201,11 +201,14 @@ impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {
     type Output = MergingValues;
 
     fn advance<
-        F: FnMut(String, Self::Output) -> Result<ChromProcessingFnOutput<Self::Output>, E>,
+        F: FnMut(
+            String,
+            Self::Output,
+        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<Self::Output>, E> {
+    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
         let next = self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
