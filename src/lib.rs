@@ -34,11 +34,18 @@ chromosome. The [`ChromData::advance`] method takes a function that the current
 chromosome and returns a `Future` that will asynchronously process chromosomal
 data. This data can be returned immediately from the `advance` method, or can
 be stored (with the correct implementation) to queue multiple chromosomes
-simulatenously. The [`BedParserStreamingIterator`] and
-[`BedParserParallelStreamingIterator`] types provide serial processing of a 
-bed-like value stream (either from a file or an iterator) or concurrent
-processing from a file. Generally, these underlying details aren't necessary
-unless implementing a new data source.
+simulatenously. The
+[`BedParserStreamingIterator`][crate::bbi::bedchromdata::BedParserStreamingIterator]
+and
+[`BedParserParallelStreamingIterator`][crate::bbi::bedchromdata::BedParserParallelStreamingIterator]
+types provide serial processing of a bed-like value stream (either from a
+file or an iterator) or concurrent processing from a file. Generally, these
+underlying details aren't necessary unless implementing a new data source.
+
+Given some implementation of [`ChromData`] (like [`BedParserStreamingIterator`][crate::bbi::bedchromdata::BedParserStreamingIterator]),
+a bigWig can be created using [`BigWigWrite::write`] or a bigBed with
+[`BigBedWrite::write`]. Both take a map of chromosome sizes, the aforementioned
+data, and a `ThreadPool` to spawn processing on.
 */
 
 pub mod bbi;

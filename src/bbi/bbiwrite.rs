@@ -520,7 +520,10 @@ pub trait ChromData<E: From<io::Error>>: Sized {
     ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E>;
 }
 
-pub struct ChromProcessingFnOutput<Error>(pub(crate) WriteSummaryFuture<Error>, pub(crate) ChromProcessingOutput<Error>);
+pub struct ChromProcessingFnOutput<Error>(
+    pub(crate) WriteSummaryFuture<Error>,
+    pub(crate) ChromProcessingOutput<Error>,
+);
 
 pub(crate) async fn write_vals<
     Values: ChromValues,

@@ -229,7 +229,9 @@ impl BigWigWrite {
             summary.sum_squares += f64::from(len) * val * val;
 
             // Then, add the item to the zoom item queues. This is a bit complicated.
-            for (zoom_item, zoom_channel) in std::iter::zip(state_val.zoom_items.iter_mut(), zooms_channels.iter_mut()) {
+            for (zoom_item, zoom_channel) in
+                std::iter::zip(state_val.zoom_items.iter_mut(), zooms_channels.iter_mut())
+            {
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
 
                 // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
