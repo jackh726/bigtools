@@ -95,7 +95,7 @@ impl Default for BBIWriteOptions {
 }
 
 #[derive(Error, Debug)]
-pub enum WriteGroupsError<SourceError> {
+pub enum ProcessChromError<SourceError> {
     #[error("{}", .0)]
     InvalidInput(String),
     #[error("{}", .0)]
@@ -106,16 +106,16 @@ pub enum WriteGroupsError<SourceError> {
     SourceError(SourceError),
 }
 
-impl<W, S> From<io::IntoInnerError<W>> for WriteGroupsError<S> {
+impl<W, S> From<io::IntoInnerError<W>> for ProcessChromError<S> {
     fn from(error: io::IntoInnerError<W>) -> Self {
-        WriteGroupsError::IoError(error.into())
+        ProcessChromError::IoError(error.into())
     }
 }
 
 pub struct TempZoomInfo<SourceError> {
     pub resolution: u32,
     pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), WriteGroupsError<SourceError>>> + Send + Unpin,
+        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
     >,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: filebufferedchannel::Receiver<Section>,
@@ -133,13 +133,13 @@ pub struct ChromProcessingOutput<SourceError> {
     pub sections: filebufferedchannel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
     pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), WriteGroupsError<SourceError>>> + Send + Unpin,
+        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
     >,
     pub zooms: Vec<TempZoomInfo<SourceError>>,
 }
 
 pub type WriteSummaryFuture<SourceError> =
-    Pin<Box<dyn Future<Output = Result<Summary, WriteGroupsError<SourceError>>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<Summary, ProcessChromError<SourceError>>> + Send>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -520,18 +520,18 @@ pub trait ChromData<E: From<io::Error>>: Sized {
     ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E>;
 }
 
-pub type ChromProcessingFnOutput<Error> = (WriteSummaryFuture<Error>, ChromProcessingOutput<Error>);
+pub struct ChromProcessingFnOutput<Error>(pub(crate) WriteSummaryFuture<Error>, pub(crate) ChromProcessingOutput<Error>);
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
-    V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
-    Fut: Future<Output = Result<Summary, WriteGroupsError<Values::Error>>> + Send + 'static,
+    V: ChromData<ProcessChromError<Values::Error>, Output = Values>,
+    Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
     G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
     options: BBIWriteOptions,
-    process_group: G,
+    process_chrom: G,
     mut pool: ThreadPool,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
@@ -543,7 +543,7 @@ pub(crate) async fn write_vals<
         Vec<ZoomInfo>,
         usize,
     ),
-    WriteGroupsError<Values::Error>,
+    ProcessChromError<Values::Error>,
 > {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
@@ -576,12 +576,12 @@ pub(crate) async fn write_vals<
                        data: _|
      -> Result<
         ChromProcessingFnOutput<<Values as ChromValues>::Error>,
-        WriteGroupsError<_>,
+        ProcessChromError<_>,
     > {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
-                return Err(WriteGroupsError::InvalidChromosome(format!(
+                return Err(ProcessChromError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
                 )));
@@ -593,7 +593,7 @@ pub(crate) async fn write_vals<
         // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
         // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
         // This is heavily multi-threaded using Futures. A brief summary:
-        // - All reading from the ChromValues is done in a single future (process_group). This futures in charge of keeping track of sections (and zoom data).
+        // - All reading from the ChromValues is done in a single future (process_chrom). This futures in charge of keeping track of sections (and zoom data).
         //   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
         //   This is the most CPU-intensive part of the entire write.
         // - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
@@ -605,7 +605,7 @@ pub(crate) async fn write_vals<
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (procesing_input, processing_output) = setup_channels(&mut pool, options)?;
 
-        let (f_remote, f_handle) = process_group(
+        let (f_remote, f_handle) = process_chrom(
             procesing_input,
             chrom_id,
             options,
@@ -616,13 +616,13 @@ pub(crate) async fn write_vals<
         )
         .remote_handle();
         pool.spawn(f_remote).expect("Couldn't spawn future.");
-        Ok((f_handle.boxed(), processing_output))
+        Ok(ChromProcessingFnOutput(f_handle.boxed(), processing_output))
     };
 
     let chrom_ids = loop {
         match vals_iter.advance(&mut do_read)? {
             ChromDataState::NewChrom(read) => {
-                let (
+                let ChromProcessingFnOutput(
                     summary_future,
                     ChromProcessingOutput {
                         sections,
@@ -687,7 +687,7 @@ pub(crate) async fn write_vals<
                 }
             }
             ChromDataState::Finished => break chrom_ids,
-            ChromDataState::Error(err) => return Err(WriteGroupsError::SourceError(err)),
+            ChromDataState::Error(err) => return Err(ProcessChromError::SourceError(err)),
         }
     };
 
@@ -730,7 +730,7 @@ async fn write_data<W: Write, SourceError: Send>(
     mut data_file: W,
     mut section_sender: filebufferedchannel::Sender<Section>,
     mut frx: Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
-) -> Result<(usize, usize), WriteGroupsError<SourceError>> {
+) -> Result<(usize, usize), ProcessChromError<SourceError>> {
     let mut current_offset = 0;
     let mut total = 0;
     let mut max_uncompressed_buf_size = 0;

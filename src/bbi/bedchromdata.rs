@@ -204,7 +204,7 @@ mod tests {
 
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
-    use crate::{BBIWriteOptions, WriteGroupsError};
+    use crate::{BBIWriteOptions, ProcessChromError};
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
@@ -245,12 +245,12 @@ mod tests {
                            data|
          -> Result<
             ChromProcessingFnOutput<BedValueError>,
-            WriteGroupsError<BedValueError>,
+            ProcessChromError<BedValueError>,
         > {
             let length = match chrom_map.get(&chrom) {
                 Some(length) => *length,
                 None => {
-                    return Err(WriteGroupsError::InvalidChromosome(format!(
+                    return Err(ProcessChromError::InvalidChromosome(format!(
                         "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                         chrom
                     )));
@@ -273,7 +273,7 @@ mod tests {
             )
             .remote_handle();
             pool.spawn(f_remote).expect("Couldn't spawn future.");
-            Ok((f_handle.boxed(), processing_output))
+            Ok(ChromProcessingFnOutput(f_handle.boxed(), processing_output))
         };
         assert!(matches!(
             chsi.advance(&mut do_read),

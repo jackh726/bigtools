@@ -16,8 +16,8 @@ use crate::ChromData;
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
-    WriteGroupsError,
+    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, ProcessChromError,
+    SectionData,
 };
 
 pub struct BigWigWrite {
@@ -35,13 +35,13 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
+        V: ChromData<ProcessChromError<Values::Error>, Output = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         pool: ThreadPool,
-    ) -> Result<(), WriteGroupsError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -137,18 +137,21 @@ impl BigWigWrite {
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
-        mut group: I,
+        mut chrom_values: I,
         chrom: String,
         chrom_length: u32,
-    ) -> Result<Summary, WriteGroupsError<I::Error>> {
+    ) -> Result<Summary, ProcessChromError<I::Error>> {
         let ChromProcessingInput {
             mut zooms_channels,
             mut ftx,
         } = processing_input;
 
         struct ZoomItem {
+            // How many bases this zoom item covers
             size: u32,
+            // The current zoom entry
             live_info: Option<ZoomRecord>,
+            // All zoom entries in the current section
             records: Vec<ZoomRecord>,
         }
         struct BedGraphSection {
@@ -156,7 +159,14 @@ impl BigWigWrite {
             zoom_items: Vec<ZoomItem>,
         }
 
-        let mut summary: Option<Summary> = None;
+        let mut summary = Summary {
+            total_items: 0,
+            bases_covered: 0,
+            min_val: f64::MAX,
+            max_val: f64::MIN,
+            sum: 0.0,
+            sum_squares: 0.0,
+        };
 
         let mut state_val = BedGraphSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
@@ -169,31 +179,32 @@ impl BigWigWrite {
                 })
                 .collect(),
         };
-        let mut total_items = 0;
-        while let Some(current_val) = group.next() {
-            let current_val = match current_val {
-                Ok(val) => val,
-                Err(e) => return Err(WriteGroupsError::SourceError(e)),
-            };
-            total_items += 1;
+        while let Some(current_val) = chrom_values.next() {
+            // If there is a source error, propogate that up
+            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+
+            // Check a few preconditions:
+            // - The current end is greater than or equal to the start
+            // - The current end is at most the chromosome length
+            // - If there is a next value, then it does not overlap value
             // TODO: test these correctly fails
             if current_val.start > current_val.end {
-                return Err(WriteGroupsError::InvalidInput(format!(
+                return Err(ProcessChromError::InvalidInput(format!(
                     "Invalid bed graph: {} > {}",
                     current_val.start, current_val.end
                 )));
             }
-            if current_val.start >= chrom_length {
-                return Err(WriteGroupsError::InvalidInput(format!(
+            if current_val.end > chrom_length {
+                return Err(ProcessChromError::InvalidInput(format!(
                     "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
-                    current_val.start, chrom, chrom_length
+                    current_val.end, chrom, chrom_length
                 )));
             }
-            match group.peek() {
+            match chrom_values.peek() {
                 None | Some(Err(_)) => (),
                 Some(Ok(next_val)) => {
                     if current_val.end > next_val.start {
-                        return Err(WriteGroupsError::InvalidInput(format!(
+                        return Err(ProcessChromError::InvalidInput(format!(
                             "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
                             chrom,
                             current_val.start,
@@ -205,54 +216,47 @@ impl BigWigWrite {
                 }
             }
 
+            // Now, actually process the value.
+
+            // First, update the summary.
             let len = current_val.end - current_val.start;
             let val = f64::from(current_val.value);
-            match &mut summary {
-                None => {
-                    summary = Some(Summary {
-                        total_items: 0,
-                        bases_covered: u64::from(len),
-                        min_val: val,
-                        max_val: val,
-                        sum: f64::from(len) * val,
-                        sum_squares: f64::from(len) * val * val,
-                    })
-                }
-                Some(summary) => {
-                    summary.bases_covered += u64::from(len);
-                    summary.min_val = summary.min_val.min(val);
-                    summary.max_val = summary.max_val.max(val);
-                    summary.sum += f64::from(len) * val;
-                    summary.sum_squares += f64::from(len) * val * val;
-                }
-            }
+            summary.total_items += 1;
+            summary.bases_covered += u64::from(len);
+            summary.min_val = summary.min_val.min(val);
+            summary.max_val = summary.max_val.max(val);
+            summary.sum += f64::from(len) * val;
+            summary.sum_squares += f64::from(len) * val * val;
 
-            for (i, zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+            // Then, add the item to the zoom item queues. This is a bit complicated.
+            for (zoom_item, zoom_channel) in std::iter::zip(state_val.zoom_items.iter_mut(), zooms_channels.iter_mut()) {
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+
+                // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
+                // Zoom summaries are compressed similarly to main data, with a given items per slot.
+                // It may be the case that our value spans across multiple zoom summaries, so this inner loop handles that.
+
+                // `add_start` indicates where we are *currently* adding bases from (either the start of this item or in the middle, but beginning of another zoom section)
                 let mut add_start = current_val.start;
-                let mut loop_i = 0;
                 loop {
-                    loop_i += 1;
-                    // Write section if full or if no next section, some items, and no current zoom record
+                    // Write section if full; or if no next section, some items, and no current zoom record
                     if (add_start >= current_val.end
                         && zoom_item.live_info.is_none()
-                        && group.peek().is_none()
+                        && chrom_values.peek().is_none()
                         && !zoom_item.records.is_empty())
                         || zoom_item.records.len() == options.items_per_slot as usize
                     {
-                        // If this is the first iteration of the loop, then we haven't added the current value yet...
-                        debug_assert_ne!(loop_i, 1);
                         let items = std::mem::take(&mut zoom_item.records);
                         let handle = pool
                             .spawn_with_handle(encode_zoom_section(options.compress, items))
                             .expect("Couldn't spawn.");
-                        zooms_channels[i]
+                        zoom_channel
                             .send(handle.boxed())
                             .await
                             .expect("Couln't send");
                     }
                     if add_start >= current_val.end {
-                        if group.peek().is_none() {
+                        if chrom_values.peek().is_none() {
                             if let Some(zoom2) = zoom_item.live_info.take() {
                                 zoom_item.records.push(zoom2);
                                 continue;
@@ -294,12 +298,15 @@ impl BigWigWrite {
                         zoom_item.records.push(zoom_item.live_info.take().unwrap());
                     }
                     // Set where we would start for next time
-                    add_start = std::cmp::max(add_end, current_val.start);
+                    add_start = add_end;
                 }
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
             }
+            // Then, add the current item to the actual values, and encode if full, or last item
             state_val.items.push(current_val);
-            if group.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize {
+            if chrom_values.peek().is_none()
+                || state_val.items.len() >= options.items_per_slot as usize
+            {
                 let items = std::mem::take(&mut state_val.items);
                 let handle = pool
                     .spawn_with_handle(encode_section(options.compress, items, chrom_id))
@@ -314,19 +321,11 @@ impl BigWigWrite {
             debug_assert!(zoom_item.records.is_empty());
         }
 
-        let mut summary_complete = match summary {
-            None => Summary {
-                total_items: 0,
-                bases_covered: 0,
-                min_val: 0.0,
-                max_val: 0.0,
-                sum: 0.0,
-                sum_squares: 0.0,
-            },
-            Some(summary) => summary,
-        };
-        summary_complete.total_items = total_items;
-        Ok(summary_complete)
+        if summary.total_items == 0 {
+            summary.min_val = 0.0;
+            summary.max_val = 0.0;
+        }
+        Ok(summary)
     }
 }
 

@@ -27,7 +27,18 @@ Generally, bigWig and bigBed writing is done per chromosome, with compression
 and io being done on an async ThreadPool.
 
 The source for data to be written to bigWigs and bigBeds come from the
-[`ChromData`] trait. The `advance` method
+[`ChromData`] trait. It's effectively like a powerful `Iterator` of
+`ChromData::Output` values, which itself is like peekable `Iterator` of values
+(either [`Value`]s or [`BedEntry`]s for bigWigs or bigBeds respectively) over a
+chromosome. The [`ChromData::advance`] method takes a function that the current
+chromosome and returns a `Future` that will asynchronously process chromosomal
+data. This data can be returned immediately from the `advance` method, or can
+be stored (with the correct implementation) to queue multiple chromosomes
+simulatenously. The [`BedParserStreamingIterator`] and
+[`BedParserParallelStreamingIterator`] types provide serial processing of a 
+bed-like value stream (either from a file or an iterator) or concurrent
+processing from a file. Generally, these underlying details aren't necessary
+unless implementing a new data source.
 */
 
 pub mod bbi;

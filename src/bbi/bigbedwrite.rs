@@ -18,8 +18,8 @@ use crate::ChromData;
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, SectionData,
-    WriteGroupsError,
+    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, ProcessChromError,
+    SectionData,
 };
 
 pub struct BigBedWrite {
@@ -39,13 +39,13 @@ impl BigBedWrite {
 
     pub fn write<
         Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData<WriteGroupsError<Values::Error>, Output = Values>,
+        V: ChromData<ProcessChromError<Values::Error>, Output = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         pool: ThreadPool,
-    ) -> Result<(), WriteGroupsError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -57,7 +57,7 @@ impl BigBedWrite {
             .clone()
             .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
-            WriteGroupsError::InvalidInput("Invalid autosql: null byte in string".to_owned())
+            ProcessChromError::InvalidInput("Invalid autosql: null byte in string".to_owned())
         })?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
@@ -165,7 +165,7 @@ impl BigBedWrite {
         mut group: I,
         chrom: String,
         chrom_length: u32,
-    ) -> Result<Summary, WriteGroupsError<I::Error>>
+    ) -> Result<Summary, ProcessChromError<I::Error>>
     where
         I: ChromValues<Value = BedEntry> + Send,
     {
@@ -206,25 +206,25 @@ impl BigBedWrite {
         while let Some(current_val) = group.next() {
             let current_val = match current_val {
                 Ok(v) => v,
-                Err(e) => return Err(WriteGroupsError::SourceError(e)),
+                Err(e) => return Err(ProcessChromError::SourceError(e)),
             };
             total_items += 1;
             // TODO: test these correctly fails
             if current_val.start > current_val.end {
-                return Err(WriteGroupsError::InvalidInput(format!(
+                return Err(ProcessChromError::InvalidInput(format!(
                     "Invalid bed: {} > {}",
                     current_val.start, current_val.end
                 )));
             }
             if current_val.start >= chrom_length {
-                return Err(WriteGroupsError::InvalidInput(format!(
+                return Err(ProcessChromError::InvalidInput(format!(
                     "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
                     current_val.start, chrom, chrom_length
                 )));
             }
             if let Some(Ok(next_val)) = group.peek() {
                 if current_val.start > next_val.start {
-                    return Err(WriteGroupsError::InvalidInput(format!(
+                    return Err(ProcessChromError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
                         chrom,
                         current_val.start,
