@@ -202,10 +202,7 @@ impl<E: From<io::Error> + 'static> ChromData<E> for ChromGroupReadImpl {
     type Output<'a> = MergingValues;
 
     fn advance<
-        F: for<'a> FnMut(
-            String,
-            Self::Output<'a>,
-        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
+        F: for<'a> FnMut(String, Self::Output<'a>) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,

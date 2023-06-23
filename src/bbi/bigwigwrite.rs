@@ -35,7 +35,11 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: for<'a> ChromData<WriteGroupsError<Values::Error>, Error = Values::Error, Output<'a> = Values> + 'static,
+        V: for<'a> ChromData<
+                WriteGroupsError<Values::Error>,
+                Error = Values::Error,
+                Output<'a> = Values,
+            > + 'static,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,

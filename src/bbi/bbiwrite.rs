@@ -509,12 +509,11 @@ pub enum ChromDataState<Error> {
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData<E: From<io::Error> + 'static>: Sized {
     type Error;
-    type Output<'a>: ChromValues<Error = Self::Error> where Self: 'a;
+    type Output<'a>: ChromValues<Error = Self::Error>
+    where
+        Self: 'a;
     fn advance<
-        F: for<'a> FnMut(
-            String,
-            Self::Output<'a>,
-        ) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
+        F: for<'a> FnMut(String, Self::Output<'a>) -> Result<ChromProcessingFnOutput<Self::Error>, E>,
     >(
         &mut self,
         do_read: &mut F,
@@ -525,7 +524,11 @@ pub type ChromProcessingFnOutput<Error> = (WriteSummaryFuture<Error>, ChromProce
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
-    V: for<'a> ChromData<WriteGroupsError<Values::Error>, Error = Values::Error, Output<'a> = Values> + 'static,
+    V: for<'a> ChromData<
+            WriteGroupsError<Values::Error>,
+            Error = Values::Error,
+            Output<'a> = Values,
+        > + 'static,
     Fut: Future<Output = Result<Summary, WriteGroupsError<Values::Error>>> + Send + 'static,
     G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
@@ -545,7 +548,10 @@ pub(crate) async fn write_vals<
         usize,
     ),
     WriteGroupsError<Values::Error>,
-> where <Values as ChromValues>::Error: Send {
+>
+where
+    <Values as ChromValues>::Error: Send,
+{
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
         Vec<Box<dyn Iterator<Item = Section>>>,

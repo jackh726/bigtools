@@ -9,9 +9,7 @@
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
-use std::sync::Arc;
 
-use crossbeam_utils::atomic::AtomicCell;
 use thiserror::Error;
 
 use crate::bbi::{BedEntry, Value};
@@ -142,7 +140,7 @@ impl<V: Clone, E: Into<BedValueError>, I: Iterator<Item = Result<(String, V), E>
 
 /// A wrapper for "bed-like" data
 pub struct BedParser<S: StreamingBedValues> {
-    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
+    state: BedParserState<S>,
 }
 
 /// Defines the internal states of bed parsing
@@ -193,7 +191,7 @@ impl<V> StateValue<V> {
             StateValue::Value(c, _) => Some(c),
             StateValue::EmptyValue(c) => Some(c),
             StateValue::DiffChrom(c, _) => Some(c),
-            StateValue::Error(e) => None,
+            StateValue::Error(_) => None,
             StateValue::Done => None,
         }
     }
@@ -211,9 +209,7 @@ impl<S: StreamingBedValues> BedParser<S> {
             stream,
             state_value: StateValue::Empty,
         };
-        BedParser {
-            state: Arc::new(AtomicCell::new(Some(state))),
-        }
+        BedParser { state }
     }
 }
 
@@ -247,12 +243,9 @@ impl<S: StreamingBedValues> BedParser<S> {
     // This is *valid* to call multiple times for the same chromosome (assuming the
     // `BedChromData` has been dropped), since calling this function doesn't
     // actually advance the state (it will only set `next_val` if it currently is none).
-    pub fn next_chrom(&mut self) -> Option<Result<(String, BedChromData<S>), BedValueError>> {
-        let mut state = self.state.swap(None).expect("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-        state.load_state(true);
-        let error = state.state_value.take_error();
-        let chrom = state.state_value.active_chrom().cloned();
-        self.state.swap(Some(state));
+    pub fn next_chrom(&mut self) -> Option<Result<(String, BedChromData<'_, S>), BedValueError>> {
+        let error = self.state.state_value.take_error();
+        let chrom = self.state.state_value.active_chrom().cloned();
 
         if let Some(e) = error {
             return Some(Err(e));
@@ -261,8 +254,7 @@ impl<S: StreamingBedValues> BedParser<S> {
         match chrom {
             Some(chrom) => {
                 let group = BedChromData {
-                    state: self.state.clone(),
-                    curr_state: None,
+                    state: &mut self.state,
                     done: false,
                 };
                 Some(Ok((chrom.to_owned(), group)))
@@ -341,34 +333,9 @@ impl<S: StreamingBedValues> BedParserState<S> {
 // to the next until we've exhausted the current. In this *particular*
 // implementation, we don't allow parallel iteration of chromsomes. So, the
 // state is either needed *here* or in the main struct.
-pub struct BedChromData<S: StreamingBedValues> {
-    state: Arc<AtomicCell<Option<BedParserState<S>>>>,
-    curr_state: Option<BedParserState<S>>,
+pub struct BedChromData<'a, S: StreamingBedValues> {
+    pub(crate) state: &'a mut BedParserState<S>,
     pub(crate) done: bool,
-}
-
-impl<S: StreamingBedValues> BedChromData<S> {
-    pub(crate) fn load_state(&mut self) -> Option<&mut BedParserState<S>> {
-        if self.done {
-            return None;
-        }
-        if self.curr_state.is_none() {
-            let opt_state = self.state.swap(None);
-            if opt_state.is_none() {
-                panic!("Invalid usage. This iterator does not buffer and all values should be exhausted for a chrom before next() is called.");
-            }
-            self.curr_state = opt_state;
-        }
-        Some(self.curr_state.as_mut().unwrap())
-    }
-}
-
-impl<S: StreamingBedValues> Drop for BedChromData<S> {
-    fn drop(&mut self) {
-        if let Some(state) = self.curr_state.take() {
-            self.state.swap(Some(state));
-        }
-    }
 }
 
 #[cfg(test)]
