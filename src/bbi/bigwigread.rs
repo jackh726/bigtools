@@ -1,3 +1,44 @@
+/*!
+Provides the interface for reading bigWig files.
+
+## Example
+```rust, no_run
+# use std::error::Error;
+# use std::path::PathBuf;
+# use bigtools::BigWigRead;
+# use bigtools::BBIRead;
+# fn main() -> Result<(), Box<dyn Error>> {
+# let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+# dir.push("resources/test");
+# let mut bigwig = dir.clone();
+# bigwig.push("valid.bigWig");
+# let bigwig = bigwig.to_string_lossy();
+// First, we open a bigWig using a file name (as a `&str`).
+let mut bwread = BigWigRead::open_file(&bigwig)?;
+
+// Then, we could get the chromosomes and lengths
+let chroms = bwread.get_chroms();
+assert_eq!(chroms.len(), 1);
+assert_eq!(chroms[0].length, 83257441);
+
+// We can get summary data
+let summary = bwread.get_summary()?;
+assert_eq!(summary.bases_covered, 137894);
+assert_eq!(summary.max_val, 14254.0);
+
+// Or we can read data from an interval
+let first_interval = bwread
+    .get_interval("chr17", 0, 59899)?
+    .next()
+    .unwrap()
+    .unwrap();
+assert_eq!(first_interval.start, 59898);
+assert_eq!(first_interval.end, 59899);
+assert_eq!(first_interval.value, 0.06792);
+# Ok(())
+# }
+```
+*/
 use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};

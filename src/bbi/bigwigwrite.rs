@@ -1,3 +1,45 @@
+/*!
+Provides the interface for writing bigWig files.
+
+## Example
+```rust,no_run
+# use std::collections::HashMap;
+# use std::error::Error;
+# use std::path::PathBuf;
+# use std::fs::File;
+# use bigtools::BigWigWrite;
+# use bigtools::bedchromdata::BedParserStreamingIterator;
+# use bigtools::bed::bedparser::BedParser;
+# fn main() -> Result<(), Box<dyn Error>> {
+# let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+# dir.push("resources/test");
+# let mut bedgraph_in = dir.clone();
+# bedgraph_in.push("single_chrom.bedGraph");
+// First, set up our input data. Here, we're using the `BedParserStreamingIterator` with a `BedParser`.
+let bedgraph_file: File = File::open(bedgraph_in)?;
+let vals_iter = BedParser::from_bedgraph_file(bedgraph_file);
+let vals = BedParserStreamingIterator::new(vals_iter, false);
+
+// Then, we need to know what the chromosome sizes are. This can be read in from a file, but here we
+// just construct a map for ease.
+let mut chrom_map = HashMap::new();
+chrom_map.insert("chr17".to_string(), 83257441);
+
+// We also need a `ThreadPool` to spawn processing on.
+let pool = futures::executor::ThreadPoolBuilder::new()
+    .pool_size(6)
+    .create()
+    .expect("Unable to create thread pool.");
+
+// Finally, we can create a `BigWigWrite` with a file to write to. We'll use a temporary file.
+let tempfile = tempfile::NamedTempFile::new()?;
+let out = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
+// Then write.
+out.write(chrom_map, vals, pool)?;
+# Ok(())
+# }
+```
+*/
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
