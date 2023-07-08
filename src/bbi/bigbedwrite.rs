@@ -119,8 +119,8 @@ impl BigBedWrite {
         let num_zooms = zoom_entries.len() as u16;
 
         file.seek(SeekFrom::Start(0))?;
-        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?; // TODO: should really encode this with NativeEndian, since that is really what we do elsewhere
-        file.write_u16::<NativeEndian>(4)?; // Actually 3, unsure what version 4 actually adds
+        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?;
+        file.write_u16::<NativeEndian>(4)?;
         file.write_u16::<NativeEndian>(num_zooms)?;
         file.write_u64::<NativeEndian>(chrom_index_start)?;
         file.write_u64::<NativeEndian>(full_data_offset)?;
@@ -152,7 +152,7 @@ impl BigBedWrite {
         file.seek(SeekFrom::Start(full_data_offset))?;
         file.write_u64::<NativeEndian>(summary.total_items)?;
         file.seek(SeekFrom::End(0))?;
-        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?; // TODO: see above, should encode with NativeEndian
+        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?;
 
         Ok(())
     }

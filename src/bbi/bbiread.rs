@@ -22,7 +22,7 @@ pub struct Block {
 pub struct BBIHeader {
     pub endianness: Endianness,
 
-    pub(crate) _version: u16,
+    pub version: u16,
     pub(crate) zoom_levels: u16,
     pub(crate) chromosome_tree_offset: u64,
     pub(crate) full_data_offset: u64,
@@ -225,7 +225,7 @@ pub(crate) fn read_info<R: SeekableRead>(
     };
 
     let (
-        _version,
+        version,
         zoom_levels,
         chromosome_tree_offset,
         full_data_offset,
@@ -237,14 +237,7 @@ pub(crate) fn read_info<R: SeekableRead>(
         uncompress_buf_size,
     ) = match endianness {
         Endianness::Big => {
-            let _version = header_data.get_u16();
-
-            // TODO: should probably handle versions < 3
-            assert!(
-                _version >= 3,
-                "Unable to read bigWigs or bigBeds with a version < 3"
-            );
-
+            let version = header_data.get_u16();
             let zoom_levels = header_data.get_u16();
             let chromosome_tree_offset = header_data.get_u64();
             let full_data_offset = header_data.get_u64();
@@ -257,7 +250,7 @@ pub(crate) fn read_info<R: SeekableRead>(
             let _reserved = header_data.get_u64();
 
             (
-                _version,
+                version,
                 zoom_levels,
                 chromosome_tree_offset,
                 full_data_offset,
@@ -270,14 +263,7 @@ pub(crate) fn read_info<R: SeekableRead>(
             )
         }
         Endianness::Little => {
-            let _version = header_data.get_u16_le();
-
-            // TODO: should probably handle versions < 3
-            assert!(
-                _version >= 3,
-                "Unable to read bigWigs or bigBeds with a version < 3"
-            );
-
+            let version = header_data.get_u16_le();
             let zoom_levels = header_data.get_u16_le();
             let chromosome_tree_offset = header_data.get_u64_le();
             let full_data_offset = header_data.get_u64_le();
@@ -290,7 +276,7 @@ pub(crate) fn read_info<R: SeekableRead>(
             let _reserved = header_data.get_u64_le();
 
             (
-                _version,
+                version,
                 zoom_levels,
                 chromosome_tree_offset,
                 full_data_offset,
@@ -306,7 +292,7 @@ pub(crate) fn read_info<R: SeekableRead>(
 
     let header = BBIHeader {
         endianness,
-        _version,
+        version,
         zoom_levels,
         chromosome_tree_offset,
         full_data_offset,

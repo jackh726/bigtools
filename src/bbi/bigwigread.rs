@@ -239,18 +239,29 @@ where
     }
 
     /// Returns the summary data from bigWig
+    ///
+    /// Note: For version 1 of bigWigs, there is no total summary. In that
+    /// case, 0 is returned for all of the summary except total items. If this
+    /// matters to you, you can check the version using
+    /// `get_info().header.version > 1`.
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;
         let data_offset = self.info.header.full_data_offset;
         let reader = self.reader();
         let mut reader = ByteOrdered::runtime(reader, endianness);
-        reader.seek(SeekFrom::Start(summary_offset))?;
-        let bases_covered = reader.read_u64()?;
-        let min_val = reader.read_f64()?;
-        let max_val = reader.read_f64()?;
-        let sum = reader.read_f64()?;
-        let sum_squares = reader.read_f64()?;
+        let (bases_covered, min_val, max_val, sum, sum_squares) = if summary_offset != 0 {
+            reader.seek(SeekFrom::Start(summary_offset))?;
+            (
+                reader.read_u64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+            )
+        } else {
+            (0, 0.0, 0.0, 0.0, 0.0)
+        };
         reader.seek(SeekFrom::Start(data_offset))?;
         let total_items = reader.read_u64()?;
         Ok(Summary {
