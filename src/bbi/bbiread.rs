@@ -204,7 +204,6 @@ pub trait BBIRead {
         end: u32,
     ) -> Result<Vec<Block>, CirTreeSearchError> {
         let full_index_offset = self.get_info().header.full_index_offset;
-
         self.search_cir_tree(full_index_offset, chrom_name, start, end)
     }
 }
@@ -731,9 +730,8 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
 
     let endianness = bbifile.get_info().header.endianness;
 
-    let mut bytes = BytesMut::zeroed(itemcount * 64);
+    let mut bytes = BytesMut::zeroed(itemcount * (4 * 8));
     data_mut.read_exact(&mut bytes)?;
-
     match endianness {
         Endianness::Big => {
             for _ in 0..itemcount {

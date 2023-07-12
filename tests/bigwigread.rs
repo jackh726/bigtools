@@ -57,3 +57,23 @@ fn test_values() -> Result<(), Box<dyn Error>> {
     assert_eq!(vals[59898], 0.06792);
     Ok(())
 }
+
+#[test]
+fn test_reduction_values() -> Result<(), Box<dyn Error>> {
+    use std::path::PathBuf;
+
+    use bigtools::bbi::BigWigRead;
+
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.push("resources/test");
+
+    let mut valid_bigwig = dir.clone();
+    valid_bigwig.push("valid.bigWig");
+
+    let mut bwread = BigWigRead::open_file(&valid_bigwig.to_string_lossy()).unwrap();
+    let interval = bwread.get_zoom_interval("chr17", 0, 36996442, 10240);
+    let x: Vec<_> = interval.unwrap().collect();
+
+    assert_eq!(x.len(), 16);
+    Ok(())
+}
