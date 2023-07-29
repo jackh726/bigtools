@@ -1,9 +1,7 @@
 use std::fs::File;
 use std::io::{self, Seek, Write};
 use std::marker::Send;
-use std::sync::Arc;
-
-use parking_lot::{Condvar, Mutex};
+use std::sync::{Arc, Mutex, Condvar};
 
 use crossbeam_utils::atomic::AtomicCell;
 
@@ -107,10 +105,10 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
 
     pub fn await_file(self) -> ClosedFile<R> {
         let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock();
+        let mut closed = lock.lock().unwrap();
 
         while !*closed {
-            cvar.wait(&mut closed);
+            closed = cvar.wait(closed).unwrap();
         }
 
         let real_file = self.real_file.swap(None);
@@ -140,10 +138,10 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
 
     pub fn await_real_file(self) -> R {
         let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock();
+        let mut closed = lock.lock().unwrap();
 
         while !*closed {
-            cvar.wait(&mut closed);
+            closed = cvar.wait(closed).unwrap();
         }
 
         if !self.has_switched {
@@ -175,10 +173,10 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
 
     pub fn await_temp_file(self) -> File {
         let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock();
+        let mut closed = lock.lock().unwrap();
 
         while !*closed {
-            cvar.wait(&mut closed);
+            closed = cvar.wait(closed).unwrap();
         }
 
         if self.has_switched {
@@ -201,10 +199,10 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         O: Write,
     {
         let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock();
+        let mut closed = lock.lock().unwrap();
 
         while !*closed {
-            cvar.wait(&mut closed);
+            closed = cvar.wait(closed).unwrap();
         }
 
         if self.has_switched {
@@ -252,7 +250,7 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
 impl<R: Write + Send + 'static> Drop for TempFileBufferWriter<R> {
     fn drop(&mut self) {
         let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock();
+        let mut closed = lock.lock().unwrap();
         match &mut self.buffer_state {
             BufferState::NotStarted => {}
             BufferState::Temp(f) => {

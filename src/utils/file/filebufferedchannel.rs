@@ -1,10 +1,8 @@
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{bounded, Receiver as ChannelReceiver, Sender as ChannelSender};
-
-use parking_lot::Mutex;
 
 use bincode;
 
@@ -380,7 +378,7 @@ where
             use crossbeam_channel::TrySendError::*;
             match e {
                 Full(t) => {
-                    let mut state = self.state.lock();
+                    let mut state = self.state.lock().unwrap();
                     state.clearqueue(&mut self.sender)?;
                     drop(state);
                     self.sender.try_send(t).unwrap();
@@ -397,7 +395,7 @@ where
     /// a lock). If the channel was created a lazy channel and no read has yet
     /// occured, then all data sent over the channel will be on disk.
     pub fn flush(&mut self) -> Result<(), SendError> {
-        let mut state = self.state.lock();
+        let mut state = self.state.lock().unwrap();
         Ok(state.clearqueue(&mut self.sender)?)
     }
 }
@@ -429,7 +427,7 @@ where
                     Disconnected => Err(RecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
-                        let mut state = self.state.lock();
+                        let mut state = self.state.lock().unwrap();
                         // If we were lazy, need to mark can_send as true
                         state.mark_read();
                         let read_wait = state.read_wait();
@@ -462,7 +460,7 @@ where
                     Disconnected => Err(TryRecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
                     Empty => {
-                        let mut state = self.state.lock();
+                        let mut state = self.state.lock().unwrap();
                         state.mark_read();
                         let read = state.read();
                         drop(state);
