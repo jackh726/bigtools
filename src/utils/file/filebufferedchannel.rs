@@ -1,8 +1,7 @@
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::sync::mpsc;
 use std::sync::Arc;
-
-use crossbeam_channel::{bounded, Receiver as ChannelReceiver, Sender as ChannelSender};
 
 use parking_lot::Mutex;
 
@@ -49,7 +48,8 @@ where
     T: Serialize + DeserializeOwned,
 {
     let state = Arc::new(Mutex::new(ChannelState::new(size)));
-    let (channelsender, channelreceiver) = bounded(size);
+
+    let (channelsender, channelreceiver) = mpsc::sync_channel(size);
     let sender = Sender {
         state: state.clone(),
         sender: channelsender,
@@ -69,8 +69,8 @@ pub fn lazy_channel<T>(size: usize) -> io::Result<(Sender<T>, Receiver<T>)>
 where
     T: Serialize + DeserializeOwned,
 {
-    let (channelsender, channelreceiver) = bounded(size);
-    let (buffersender, bufferreceiver) = bounded(size);
+    let (channelsender, channelreceiver) = mpsc::sync_channel(size);
+    let (buffersender, bufferreceiver) = mpsc::sync_channel(size);
     let state = Arc::new(Mutex::new(ChannelState::new_lazy(
         size,
         channelsender,
@@ -105,8 +105,8 @@ enum ChannelStateStatus<T> {
     OnDisk {
         can_send: bool,
         serialize_size: Option<u64>,
-        sender: ChannelSender<T>,
-        buffer: ChannelReceiver<T>,
+        sender: mpsc::SyncSender<T>,
+        buffer: mpsc::Receiver<T>,
         file: File,
         readindex: u64,
         writeindex: u64,
@@ -136,8 +136,8 @@ where
 
     fn new_lazy(
         maxsize: usize,
-        sender: ChannelSender<T>,
-        buffer: ChannelReceiver<T>,
+        sender: mpsc::SyncSender<T>,
+        buffer: mpsc::Receiver<T>,
     ) -> io::Result<ChannelState<T>> {
         let status = ChannelStateStatus::OnDisk {
             can_send: false,
@@ -167,7 +167,7 @@ where
     /// or by converting the `filebufferedchannel` from `InMemory` to `OnDisk` and, in the process, allocating a new buffer channel
     ///
     /// It's not guaranteed that `Sender`'s `ChannelSender` will be empty when this function returns (since new elements may be added)
-    fn clearqueue(&mut self, sender: &mut ChannelSender<T>) -> ChannelResult<()> {
+    fn clearqueue(&mut self, sender: &mut mpsc::SyncSender<T>) -> ChannelResult<()> {
         // Since we already have the lock, let's push until the `Receiver`'s buffer is full
         match self.read() {
             Ok(_) => {}
@@ -179,7 +179,7 @@ where
 
         match &mut self.status {
             ChannelStateStatus::InMemory => {
-                let (channelsender, channelreceiver) = bounded(self.maxsize);
+                let (channelsender, channelreceiver) = mpsc::sync_channel(self.maxsize);
                 let sender = std::mem::replace(sender, channelsender);
                 self.status = ChannelStateStatus::OnDisk {
                     can_send: true,
@@ -201,7 +201,7 @@ where
             } => {
                 // Decide up front the number of items to serialize and write to disk
                 // This allows us to preallocate a vector to store the bytes, since we don't/can't write buffer the file
-                let n = buffer.len();
+                let n: usize = buffer.len();
                 if n == 0 {
                     return Ok(());
                 }
@@ -257,7 +257,7 @@ where
 
                     let size = serialize_size.unwrap() as usize;
                     let diskn = (*writeindex - *readindex) as usize / size;
-                    let n = std::cmp::min(diskn, sender.capacity().unwrap() - sender.len());
+                    let n = std::cmp::min(diskn, self.maxsize - sender.len());
                     let mut buf = vec![0u8; n * size];
                     file.read_exact(&mut buf)?;
                     *readindex = file.tell()?;
@@ -266,10 +266,9 @@ where
                         let elem = bincode::deserialize_from(&mut buf)
                             .expect("Error while deserializing.");
                         if let Err(e) = sender.try_send(elem) {
-                            use crossbeam_channel::TrySendError::*;
                             match e {
-                                Disconnected(_) => return Err(ChannelError::Disconnected),
-                                Full(_) => {
+                                mpsc::TrySendError::Disconnected(_) => return Err(ChannelError::Disconnected),
+                                mpsc::TrySendError::Full(_) => {
                                     // We pre-checked for the capacity-len
                                     panic!("Buffer should not be full.");
                                 }
@@ -278,13 +277,11 @@ where
                         sent = true;
                     }
                 }
-                let n = sender.capacity().unwrap() - sender.len();
-                for elem in buffer.try_iter().take(n) {
+                for elem in buffer.try_iter() {
                     if let Err(e) = sender.try_send(elem) {
-                        use crossbeam_channel::TrySendError::*;
                         match e {
-                            Disconnected(_) => return Err(ChannelError::Disconnected),
-                            Full(_) => {
+                            mpsc::TrySendError::Disconnected(_) => return Err(ChannelError::Disconnected),
+                            mpsc::TrySendError::Full(_) => {
                                 // We only take max number of remaining elements
                                 panic!("Buffer should not be full.");
                             }
@@ -310,21 +307,19 @@ where
             Err(ChannelError::Empty) => match &mut self.status {
                 ChannelStateStatus::InMemory => unreachable!(),
                 ChannelStateStatus::OnDisk { buffer, sender, .. } => {
-                    use crossbeam_channel::RecvError;
                     match buffer.recv() {
                         Ok(elem) => {
                             if let Err(e) = sender.try_send(elem) {
-                                use crossbeam_channel::TrySendError::*;
                                 match e {
-                                    Disconnected(_) => return Err(ChannelError::Disconnected),
-                                    Full(_) => {
+                                    mpsc::TrySendError::Disconnected(_) => return Err(ChannelError::Disconnected),
+                                    mpsc::TrySendError::Full(_) => {
                                         panic!("Buffer should not be full.");
                                     }
                                 }
                             }
                             Ok(())
                         }
-                        Err(RecvError) => Err(ChannelError::Disconnected),
+                        Err(mpsc::RecvError) => Err(ChannelError::Disconnected),
                     }
                 }
             },
@@ -337,7 +332,7 @@ where
     T: Serialize + DeserializeOwned,
 {
     state: Arc<Mutex<ChannelState<T>>>,
-    sender: ChannelSender<T>,
+    sender: mpsc::SyncSender<T>,
 }
 
 pub struct Receiver<T>
@@ -345,7 +340,7 @@ where
     T: Serialize + DeserializeOwned,
 {
     state: Arc<Mutex<ChannelState<T>>>,
-    receiver: ChannelReceiver<T>,
+    receiver: mpsc::Receiver<T>,
 }
 
 #[derive(Debug)]
@@ -377,15 +372,14 @@ where
     /// flushed.
     pub fn send(&mut self, t: T) -> Result<(), SendError> {
         if let Err(e) = self.sender.try_send(t) {
-            use crossbeam_channel::TrySendError::*;
             match e {
-                Full(t) => {
+                mpsc::TrySendError::Full(t) => {
                     let mut state = self.state.lock();
                     state.clearqueue(&mut self.sender)?;
                     drop(state);
                     self.sender.try_send(t).unwrap();
                 }
-                Disconnected(_) => return Err(SendError::Disconnected),
+                mpsc::TrySendError::Disconnected(_) => return Err(SendError::Disconnected),
             }
         }
         Ok(())
@@ -423,12 +417,11 @@ where
         match self.receiver.try_recv() {
             Ok(t) => Ok(t),
             Err(e) => {
-                use crossbeam_channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
-                    Disconnected => Err(RecvError::Disconnected),
+                    mpsc::TryRecvError::Disconnected => Err(RecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
-                    Empty => {
+                    mpsc::TryRecvError::Empty => {
                         let mut state = self.state.lock();
                         // If we were lazy, need to mark can_send as true
                         state.mark_read();
@@ -439,7 +432,7 @@ where
                             Err(ChannelError::InMemory) => {
                                 match self.receiver.recv() {
                                     Ok(elem) => Ok(elem),
-                                    Err(crossbeam_channel::RecvError) => Err(RecvError::Disconnected),
+                                    Err(mpsc::RecvError) => Err(RecvError::Disconnected),
                                 }
                             },
                             Err(ChannelError::Disconnected) => Err(RecvError::Disconnected),
@@ -456,12 +449,11 @@ where
         match self.receiver.try_recv() {
             Ok(t) => Ok(t),
             Err(e) => {
-                use crossbeam_channel::TryRecvError::*;
                 match e {
                     // This will happen if we have stayed in memory and Sender is dropped
-                    Disconnected => Err(TryRecvError::Disconnected),
+                    mpsc::TryRecvError::Disconnected => Err(TryRecvError::Disconnected),
                     // We don't know if this is because we have taken all elements, or because some elements are on disk
-                    Empty => {
+                    mpsc::TryRecvError::Empty => {
                         let mut state = self.state.lock();
                         state.mark_read();
                         let read = state.read();
