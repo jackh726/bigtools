@@ -197,7 +197,7 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "write"))]
 mod tests {
     use futures::task::SpawnExt;
     use futures::FutureExt;

@@ -812,7 +812,7 @@ pub(crate) fn setup_channels<SourceError: Send + 'static>(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "read"))]
 mod tests {
     use byteordered::{ByteOrdered, Endianness};
 

@@ -371,7 +371,7 @@ impl<S: StreamingBedValues> Drop for BedChromData<S> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, features = "write"))]
 mod tests {
     use super::*;
     use std::fs::File;

@@ -2,6 +2,7 @@
 pub mod bbiread;
 #[cfg(feature = "write")]
 pub mod bbiwrite;
+#[cfg(feature = "write")]
 pub mod bedchromdata;
 #[cfg(feature = "read")]
 pub mod bigbedread;
@@ -12,6 +13,7 @@ pub mod bigwigread;
 #[cfg(feature = "write")]
 pub mod bigwigwrite;
 
+#[cfg(feature = "write")]
 use serde::{Deserialize, Serialize};
 
 pub(crate) const BIGWIG_MAGIC: u32 = 0x888F_FC26;
@@ -66,9 +68,15 @@ pub enum BBIFile {
     BigBed,
 }
 
+#[cfg(feature = "read")]
 pub use bbiread::*;
+#[cfg(feature = "write")]
 pub use bbiwrite::*;
+#[cfg(feature = "read")]
 pub use bigbedread::*;
+#[cfg(feature = "write")]
 pub use bigbedwrite::*;
+#[cfg(feature = "read")]
 pub use bigwigread::*;
+#[cfg(feature = "write")]
 pub use bigwigwrite::*;
