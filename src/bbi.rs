@@ -1,9 +1,15 @@
+#[cfg(feature = "read")]
 pub mod bbiread;
+#[cfg(feature = "write")]
 pub mod bbiwrite;
 pub mod bedchromdata;
+#[cfg(feature = "read")]
 pub mod bigbedread;
+#[cfg(feature = "write")]
 pub mod bigbedwrite;
+#[cfg(feature = "read")]
 pub mod bigwigread;
+#[cfg(feature = "write")]
 pub mod bigwigwrite;
 
 use serde::{Deserialize, Serialize};
@@ -39,7 +45,8 @@ pub struct Summary {
     pub sum_squares: f64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "write", derive(Serialize, Deserialize))]
 pub struct Value {
     pub start: u32,
     pub end: u32,
