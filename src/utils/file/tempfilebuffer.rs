@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Seek, Write};
 use std::marker::Send;
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crossbeam_utils::atomic::AtomicCell;
 
