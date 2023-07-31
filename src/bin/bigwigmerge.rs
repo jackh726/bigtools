@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use thiserror::Error;
 
 use bigtools::bbi::Value;
@@ -223,7 +223,7 @@ impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BigWigMerge")
+    let matches = Command::new("BigWigMerge")
         .arg(Arg::new("output")
                 .help("the path of the merged output bigwig (if .bw or .bigWig) or bedGraph (if .bedGraph)")
                 .index(1)
@@ -232,26 +232,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("bigwig")
                 .short('b')
                 .help("the path of an input bigwig to merge")
-                .multiple_occurrences(true)
-                .takes_value(true)
+                .action(clap::ArgAction::Append)
+                .num_args(1)
             )
         .arg(Arg::new("list")
                 .short('l')
                 .help("a line-delimited list of bigwigs")
-                .multiple_occurrences(true)
-                .takes_value(true)
+                .action(clap::ArgAction::Append)
+                .num_args(1)
             )
         .arg(Arg::new("nthreads")
                 .short('t')
                 .help("Set the number of threads to use")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("6"))
         .get_matches();
 
-    let output = matches.value_of("output").unwrap().to_owned();
+    let output = matches.get_one::<String>("output").unwrap().to_owned();
     let mut bigwigs: Vec<BigWigRead<ReopenableFile>> = vec![];
 
-    if let Some(bws) = matches.values_of("bigwig") {
+    if let Some(bws) = matches.get_many::<String>("bigwig") {
         for name in bws {
             match BigWigRead::open_file(name) {
                 Ok(bw) => bigwigs.push(bw),
@@ -262,7 +262,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-    if let Some(lists) = matches.values_of("list") {
+    if let Some(lists) = matches.get_many::<String>("list") {
         for list in lists {
             let list_file = match File::open(list) {
                 Ok(f) => f,
@@ -285,15 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let nthreads = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        let parsed = nthreads.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nthreads`: must be a positive number");
-            return Ok(());
-        }
-        parsed.unwrap()
-    };
+    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
 
     let (iter, chrom_map) = get_merged_vals(bigwigs, 10)?;
 

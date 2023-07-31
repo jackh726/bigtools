@@ -1,11 +1,11 @@
 use std::error::Error;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::BigBedRead;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("Testing")
+    let matches = Command::new("Testing")
         .arg(
             Arg::new("bigbed")
                 .help("the bigbed to get info for")
@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigbed").unwrap().to_owned();
+    let bigwigpath = matches.get_one::<String>("bigbed").unwrap().to_owned();
 
     let mut bigwig = BigBedRead::open_file(bigwigpath)?;
     println!("info: {:?}", bigwig.info);

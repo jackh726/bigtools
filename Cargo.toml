@@ -87,7 +87,7 @@ name = "verify"
 required-features = ["cli"]
 
 [features]
-default = ["remote", "read", "write"]
+default = ["remote", "read", "write", "cli"]
 remote = ["attohttpc", "tempfile"]
 cli = ["clap", "ryu", "ufmt"]
 read = ["bytes"]

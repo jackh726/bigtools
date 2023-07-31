@@ -1,9 +1,9 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::{BigWigRead, BigWigReadAttachError};
 
 fn main() -> Result<(), BigWigReadAttachError> {
-    let matches = App::new("BigWigInfo")
+    let matches = Command::new("BigWigInfo")
         .arg(
             Arg::new("bigwig")
                 .help("the bigwig to get info for")
@@ -12,7 +12,7 @@ fn main() -> Result<(), BigWigReadAttachError> {
         )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap();
+    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
 
     #[cfg(feature = "remote")]
     {

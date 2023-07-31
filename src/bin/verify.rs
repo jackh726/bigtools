@@ -1,9 +1,9 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::{BigWigRead, BigWigReadAttachError};
 
 fn main() -> Result<(), BigWigReadAttachError> {
-    let matches = App::new("Verify")
+    let matches = Command::new("Verify")
         .about("Verifies different parts of a bigwig or bigbed file. By default, it only verifies the header is correct and that file offsets are valid.")
         .arg(Arg::new("input")
             .help("the bigwig or bigbed to verify")
@@ -20,9 +20,9 @@ fn main() -> Result<(), BigWigReadAttachError> {
         )
         .get_matches();
 
-    let bigwigpath = matches.value_of("input").unwrap();
-    let _index = matches.is_present("index");
-    let _data = matches.is_present("data");
+    let bigwigpath = matches.get_one::<String>("input").unwrap();
+    let _index = matches.get_count("index") > 0;
+    let _data = matches.get_count("data") > 0;
 
     let _bigwig = BigWigRead::open_file(bigwigpath)?;
 

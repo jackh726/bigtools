@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::BigWigRead;
 use bigtools::bbiread::BBIReadError;
@@ -92,7 +92,7 @@ fn write<R: SeekableRead + 'static>(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BigWigInfo")
+    let matches = Command::new("BigWigInfo")
         .arg(Arg::new("bigwig")
                 .help("The input bigwig file")
                 .index(1)
@@ -114,17 +114,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
         .arg(Arg::new("delimiter")
                 .short('d')
-                .takes_value(true)
+                .num_args(1)
                 .help("Sets the delimiter to use for the output file. (Defaults to tab).")
             )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap();
-    let bedinpath = matches.value_of("bedin").unwrap();
-    let outputpath = matches.value_of("output").unwrap();
+    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
+    let bedinpath = matches.get_one::<String>("bedin").unwrap();
+    let outputpath = matches.get_one::<String>("output").unwrap();
 
-    let withnames = matches.is_present("names");
-    let mut delimiter = matches.value_of("delimiter").unwrap_or("\t").to_owned();
+    let withnames = matches.get_count("names") > 0;
+    let mut delimiter = matches
+        .get_one::<String>("delimiter")
+        .unwrap_or(&"\t".to_string())
+        .clone();
     if delimiter == "\\t" {
         delimiter = String::from("\t");
     }

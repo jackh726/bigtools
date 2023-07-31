@@ -4,14 +4,14 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use bigtools::bedchromdata::BedParserStreamingIterator;
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::BigBedWrite;
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::BedParser;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BedToBigBed")
+    let matches = Command::new("BedToBigBed")
         .arg(Arg::new("bed")
                 .help("the n to convert to a bigbed")
                 .index(1)
@@ -30,12 +30,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("nthreads")
                 .short('t')
                 .help("Set the number of threads to use")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("6"))
         .arg(Arg::new("nzooms")
                 .short('z')
                 .help("Set the maximum of zooms to create.")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("10"))
         .arg(Arg::new("uncompressed")
                 .short('u')
@@ -43,37 +43,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("sorted")
                 .short('s')
                 .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("all"))
         .arg(Arg::new("autosql")
                 .short('a')
                 .help("The path to an .as file containing the autosql that defines the fields in this bigBed")
-                .takes_value(true))
+                .num_args(1))
         .get_matches();
 
-    let bedpath = matches.value_of("bed").unwrap().to_owned();
-    let chrom_map = matches.value_of("chromsizes").unwrap().to_owned();
-    let bigwigpath = matches.value_of("output").unwrap().to_owned();
-    let nthreads = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        let parsed = nthreads.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nthreads`: must be a positive number");
-            return Ok(());
-        }
-        parsed.unwrap()
-    };
-    let nzooms = {
-        let nzooms = matches.value_of("nzooms").unwrap();
-        let parsed = nzooms.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nzooms`: must be a positive number");
-            return Ok(());
-        }
-        parsed.unwrap()
-    };
-    let uncompressed = { matches.is_present("uncompressed") };
-    let input_sort_type = match matches.value_of("sorted") {
+    let bedpath = matches.get_one::<String>("bed").unwrap().to_owned();
+    let chrom_map = matches.get_one::<String>("chromsizes").unwrap().to_owned();
+    let bigwigpath = matches.get_one::<String>("output").unwrap().to_owned();
+    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
+    let nzooms = *matches.get_one::<u32>("nzooms").unwrap();
+    let uncompressed = { matches.get_count("uncompressed") > 0 };
+    let input_sort_type = match matches.get_one::<String>("sorted").map(String::as_ref) {
         None => InputSortType::ALL,
         Some("all") => InputSortType::ALL,
         Some("start") => InputSortType::START,
@@ -118,7 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let infile = File::open(bedpath)?;
     let mut vals_iter = BedParser::from_bed_file(infile);
 
-    let autosql = match matches.value_of("autosql") {
+    let autosql = match matches.get_one::<String>("autosql") {
         None => {
             use bigtools::utils::chromvalues::ChromValues;
             let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();

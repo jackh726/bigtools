@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use futures::task::SpawnExt;
 
@@ -85,7 +85,7 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BigWigToBedGraph")
+    let matches = Command::new("BigWigToBedGraph")
         .about("Converts an input bigWig to a bedGraph. Can be multi-threaded for substantial speedups. Note for roughly each core, one temporary file will be opened.")
         .arg(Arg::new("bigwig")
             .help("the bigwig to get convert to bedgraph")
@@ -100,22 +100,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("nthreads")
             .short('t')
             .help("Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1")
-            .takes_value(true)
+            .num_args(1)
             .default_value("6"))
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap();
-    let bedgraphpath = matches.value_of("bedgraph").unwrap();
+    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
+    let bedgraphpath = matches.get_one::<String>("bedgraph").unwrap();
 
-    let nthreads = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        let parsed = nthreads.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nthreads`: must be a positive number");
-            return Ok(());
-        }
-        parsed.unwrap()
-    };
+    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
 
     let bigwig = BigWigRead::open_file(bigwigpath)?;
     let bedgraph = File::create(bedgraphpath)?;

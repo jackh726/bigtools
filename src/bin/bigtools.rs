@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
 use bigtools::{BigWigRead, BigWigReadAttachError};
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::{BigBedRead, BigBedReadAttachError};
 use bigtools::utils::reopen::SeekableRead;
@@ -148,47 +148,47 @@ fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<(
 }
 
 fn main() -> Result<(), BigBedReadAttachError> {
-    let matches = App::new("BigTools")
+    let matches = Command::new("BigTools")
         .subcommand(
-            App::new("intersect")
+            Command::new("intersect")
                 .about("Intersect all entries of a bed with a bigBed")
                 .arg(
                     Arg::new("a")
                         .short('a')
                         .help("Each entry in this bed is compared against b for overlaps.")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
                 .arg(
                     Arg::new("b")
                         .short('b')
                         .help("Each entry in a will be compared against this bigBed for overlaps.")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 ),
         )
         .subcommand(
-            App::new("chromintersect")
+            Command::new("chromintersect")
                 .about("Create a new file of the same type, containing only data from `a` with chromosomes from `b`")
                 .arg(
                     Arg::new("a")
                         .short('a')
                         .help("The file to take data from (currently supports: bed)")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
                 .arg(
                     Arg::new("b")
                         .short('b')
                         .help("The file to take reference chromosomes from (currently supports: bigWig or bigBed)")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
                 .arg(
                     Arg::new("out")
                         .short('o')
                         .help("The name of the output file (or - for stdout). Outputted in same format as `a`")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 ),
         )
@@ -198,8 +198,8 @@ fn main() -> Result<(), BigBedReadAttachError> {
         Some(("intersect", matches)) => {
             eprintln!("---BigTools intersect---");
 
-            let apath = matches.value_of("a").unwrap().to_owned();
-            let bpath = matches.value_of("b").unwrap().to_owned();
+            let apath = matches.get_one::<String>("a").unwrap().to_owned();
+            let bpath = matches.get_one::<String>("b").unwrap().to_owned();
 
             let b = BigBedRead::open_file(bpath)?;
 
@@ -208,9 +208,9 @@ fn main() -> Result<(), BigBedReadAttachError> {
         Some(("chromintersect", matches)) => {
             eprintln!("---BigTools chromintersect---");
 
-            let apath = matches.value_of("a").unwrap().to_owned();
-            let bpath = matches.value_of("b").unwrap().to_owned();
-            let outpath = matches.value_of("out").unwrap().to_owned();
+            let apath = matches.get_one::<String>("a").unwrap().to_owned();
+            let bpath = matches.get_one::<String>("b").unwrap().to_owned();
+            let outpath = matches.get_one::<String>("out").unwrap().to_owned();
 
             chromintersect(apath, bpath, outpath)?;
         }

@@ -6,14 +6,14 @@ use std::path::PathBuf;
 
 use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::BigWigWrite;
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BedGraphToBigWig")
+    let matches = Command::new("BedGraphToBigWig")
         .about("Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.")
         .arg(Arg::new("bedgraph")
                 .help("The bedgraph to convert to a bigwig. Can use `-` or `stdin` to read from stdin.")
@@ -33,12 +33,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("nthreads")
                 .short('t')
                 .help("Set the number of threads to use. This tool will typically use ~225% CPU on a HDD. SDDs may be higher. (IO bound)")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("6"))
         .arg(Arg::new("nzooms")
                 .short('z')
                 .help("Set the maximum of zooms to create.")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("10"))
         .arg(Arg::new("uncompressed")
                 .short('u')
@@ -46,40 +46,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("sorted")
                 .short('s')
                 .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("all"))
         .arg(Arg::new("parallel")
                 .short('p')
                 .help("Set whether to read and convert the bedGraph in parallel. Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("auto"))
         .get_matches();
 
-    let bedgraphpath = matches.value_of("bedgraph").unwrap().to_owned();
-    let chrom_map = matches.value_of("chromsizes").unwrap().to_owned();
-    let bigwigpath = matches.value_of("output").unwrap().to_owned();
-    let nthreads = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        match nthreads.parse() {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                eprintln!("Invalid argument for `nthreads`: must be a positive number");
-                return Ok(());
-            }
-        }
-    };
-    let nzooms = {
-        let nzooms = matches.value_of("nzooms").unwrap();
-        match nzooms.parse() {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                eprintln!("Invalid argument for `nzooms`: must be a positive number");
-                return Ok(());
-            }
-        }
-    };
-    let uncompressed = matches.is_present("uncompressed");
-    let input_sort_type = match matches.value_of("sorted") {
+    let bedgraphpath = matches.get_one::<String>("bedgraph").unwrap().to_owned();
+    let chrom_map = matches.get_one::<String>("chromsizes").unwrap().to_owned();
+    let bigwigpath = matches.get_one::<String>("output").unwrap().to_owned();
+    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
+    let nzooms = *matches.get_one::<u32>("nzooms").unwrap();
+    let uncompressed = matches.get_count("uncompressed") > 0;
+    let input_sort_type = match matches.get_one::<String>("sorted").map(String::as_ref) {
         None => InputSortType::ALL,
         Some("all") => InputSortType::ALL,
         Some("start") => InputSortType::START,
@@ -132,8 +114,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         let infile = File::open(&bedgraphpath)?;
         let large_file = infile.metadata()?.len() >= 200_000_000;
-        let parallel = matches.value_of("auto");
-        let parallel = match (nthreads, parallel) {
+        let parallel = matches.get_one::<String>("auto");
+        let parallel = match (nthreads, parallel.map(String::as_ref)) {
             (1, _) | (_, None) | (_, Some("auto")) => large_file,
             (_, Some("yes")) => true,
             (_, Some("no")) => false,

@@ -8,14 +8,14 @@ use bigtools::bed::indexer::index_chroms;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use bigtools::bbi::BigWigRead;
 use bigtools::utils::misc::{stats_for_bed_item, Name};
 use crossbeam_channel::TryRecvError;
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let matches = App::new("BigWigAverageOverBed")
+    let matches = Command::new("BigWigAverageOverBed")
         .arg(Arg::new("bigwig")
                 .help("The input bigwig file")
                 .index(1)
@@ -43,9 +43,9 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             )
         .get_matches();
 
-    let bigwigpath = matches.value_of("bigwig").unwrap();
-    let bedinpath = matches.value_of("bedin").unwrap();
-    let bedoutpath = matches.value_of("output").unwrap();
+    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
+    let bedinpath = matches.get_one::<String>("bedin").unwrap();
+    let bedoutpath = matches.get_one::<String>("output").unwrap();
 
     let mut inbigwig = BigWigRead::open_file(bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let bedin = BufReader::new(File::open(bedinpath)?);
     let mut bedstream = StreamingLineReader::new(bedin);
 
-    let name = match matches.value_of("namecol") {
+    let name = match matches.get_one::<String>("namecol").map(String::as_ref) {
         Some("interval") => Name::Interval,
         Some("none") => Name::None,
         Some(col) => {
@@ -74,16 +74,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         None => Name::Column(3),
     };
 
-    let nthreads: usize = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        match nthreads.parse() {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                eprintln!("Invalid argument for `nthreads`: must be a positive number");
-                return Ok(());
-            }
-        }
-    };
+    let nthreads: usize = *matches.get_one::<usize>("nthreads").unwrap();
     let parallel = nthreads > 1;
 
     if parallel {

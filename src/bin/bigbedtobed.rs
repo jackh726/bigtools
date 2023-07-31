@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use futures::task::SpawnExt;
 
@@ -66,7 +66,7 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("BigBedToBedGraph")
+    let matches = Command::new("BigBedToBedGraph")
         .about("Converts an input bigBed to a bed. Can be multi-threaded for substantial speedups. Note for roughly each core, one temporary file will be opened.")
         .arg(Arg::new("bigbed")
             .help("the bigbed to get convert to bed")
@@ -81,22 +81,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("nthreads")
             .short('t')
             .help("Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1")
-            .takes_value(true)
+            .num_args(1)
             .default_value("6"))
         .get_matches();
 
-    let bigbedpath = matches.value_of("bigbed").unwrap().to_owned();
-    let bedpath = matches.value_of("bed").unwrap().to_owned();
+    let bigbedpath = matches.get_one::<String>("bigbed").unwrap().to_owned();
+    let bedpath = matches.get_one::<String>("bed").unwrap().to_owned();
 
-    let nthreads = {
-        let nthreads = matches.value_of("nthreads").unwrap();
-        let parsed = nthreads.parse();
-        if parsed.is_err() {
-            eprintln!("Invalid argument for `nthreads`: must be a positive number");
-            return Ok(());
-        }
-        parsed.unwrap()
-    };
+    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
 
     let bigbed = BigBedRead::open_file(bigbedpath)?;
     let bed = File::create(bedpath)?;
