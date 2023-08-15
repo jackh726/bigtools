@@ -116,6 +116,26 @@ pub enum BBIReadError {
     IoError(#[from] io::Error),
 }
 
+#[derive(Error, Debug)]
+pub enum ZoomIntervalError {
+    #[error("The passed reduction level was not found")]
+    ReductionLevelNotFound,
+    #[error("{}", .0)]
+    BBIReadError(BBIReadError),
+}
+
+impl From<ChromIdNotFound> for ZoomIntervalError {
+    fn from(e: ChromIdNotFound) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::InvalidChromosome(e.0))
+    }
+}
+
+impl From<CirTreeSearchError> for ZoomIntervalError {
+    fn from(e: CirTreeSearchError) -> Self {
+        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
+    }
+}
+
 pub trait BBIRead {
     type Read: SeekableRead;
 

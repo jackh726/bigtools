@@ -16,7 +16,7 @@ fn intersect<R: SeekableRead + 'static>(
     mut b: BigBedRead<R>,
     _options: IntersectOptions,
 ) -> io::Result<()> {
-    let bedin = File::open(apath)?;
+    let bedin = File::open(&apath)?;
     let mut bedstream = StreamingLineReader::new(BufReader::with_capacity(64 * 1024, bedin));
 
     let stdout = io::stdout();
@@ -95,7 +95,7 @@ fn intersect<R: SeekableRead + 'static>(
 fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<()> {
     let chroms = match BigWigRead::open_file(&bpath) {
         Ok(bigwig) => bigwig.info.chrom_info,
-        Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::open_file(bpath) {
+        Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::open_file(&bpath) {
             Ok(bigbed) => bigbed.info.chrom_info,
             Err(BigBedReadAttachError::NotABigBed) => {
                 return Err(io::Error::new(
@@ -201,7 +201,7 @@ fn main() -> Result<(), BigBedReadAttachError> {
             let apath = matches.get_one::<String>("a").unwrap().to_owned();
             let bpath = matches.get_one::<String>("b").unwrap().to_owned();
 
-            let b = BigBedRead::open_file(bpath)?;
+            let b = BigBedRead::open_file(&bpath)?;
 
             intersect(apath, b, IntersectOptions {})?;
         }

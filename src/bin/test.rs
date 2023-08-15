@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let bigwigpath = matches.get_one::<String>("bigbed").unwrap().to_owned();
 
-    let mut bigwig = BigBedRead::open_file(bigwigpath)?;
+    let mut bigwig = BigBedRead::open_file(&bigwigpath)?;
     println!("info: {:?}", bigwig.info);
     println!("Header: {:?}", bigwig.info.header);
 

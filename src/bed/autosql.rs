@@ -51,7 +51,7 @@ table bed
 }
 
 // Defined by https://github.com/ucscGenomeBrowser/kent/blob/c26640b68ba8ad219e7d79c3f8251ea20f9f57e0/src/hg/autoSql/autoSql.doc
-mod parse {
+pub mod parse {
     mod parser {
         pub(super) struct Parser<'a> {
             pub(super) data: &'a str,
@@ -321,7 +321,7 @@ mod parse {
     }
 
     #[derive(Debug)]
-    enum ParseError {
+    pub enum ParseError {
         InvalidDeclareType(String),
         InvalidDeclareName(String),
         InvalidDeclareBrackets(String),
@@ -332,27 +332,36 @@ mod parse {
     }
 
     #[derive(Copy, Clone, Debug)]
-    enum DeclarationType {
+    pub enum DeclarationType {
         Simple,
         Object,
         Table,
     }
 
     #[derive(Clone, Debug)]
-    enum IndexType {
+    pub enum IndexType {
         Primary,
         Index(Option<String>),
         Unique,
     }
 
     #[derive(Clone, Debug)]
-    struct DeclareName(String, Option<IndexType>, bool);
+    pub struct DeclareName {
+        pub name: String,
+        pub index_type: Option<IndexType>,
+        pub auto: bool,
+    }
 
     #[derive(Clone, Debug)]
-    struct Declaration(DeclarationType, DeclareName, String, Vec<Field>);
+    pub struct Declaration {
+        pub declaration_type: DeclarationType,
+        pub name: DeclareName,
+        pub comment: String,
+        pub fields: Vec<Field>,
+    }
 
     #[derive(Clone, Debug)]
-    enum FieldType {
+    pub enum FieldType {
         Int,
         Uint,
         Short,
@@ -462,18 +471,24 @@ mod parse {
     }
 
     #[derive(Clone, Debug)]
-    struct Field(
-        FieldType,
-        Option<String>,
-        String,
-        Option<IndexType>,
-        bool,
-        String,
-    );
+    pub struct Field {
+        pub field_type: FieldType,
+        pub field_size: Option<String>,
+        pub name: String,
+        pub index_type: Option<IndexType>,
+        pub auto: bool,
+        pub comment: String,
+    }
 
-    fn parse_declaration_list(data: &str) -> Result<Vec<Declaration>, ParseError> {
+    pub fn parse_autosql(data: &str) -> Result<Vec<Declaration>, ParseError> {
         let mut parser = parser::Parser::of(data);
 
+        parse_declaration_list(&mut parser)
+    }
+
+    fn parse_declaration_list(
+        parser: &mut parser::Parser<'_>,
+    ) -> Result<Vec<Declaration>, ParseError> {
         let mut declarations = vec![];
 
         let mut i = 0;
@@ -482,7 +497,7 @@ mod parse {
                 break;
             }
             i += 1;
-            let dec = parse_declaration(&mut parser)?;
+            let dec = parse_declaration(parser)?;
             match dec {
                 Some(d) => declarations.push(d),
                 None => break,
@@ -526,12 +541,12 @@ mod parse {
             ));
         }
 
-        Ok(Some(Declaration(
+        Ok(Some(Declaration {
             declaration_type,
-            declare_name,
+            name: declare_name,
             comment,
             fields,
-        )))
+        }))
     }
 
     fn parse_declare_name(parser: &mut parser::Parser<'_>) -> Result<DeclareName, ParseError> {
@@ -581,7 +596,11 @@ mod parse {
         } else {
             false
         };
-        Ok(DeclareName(declare_name, index_type, auto))
+        Ok(DeclareName {
+            name: declare_name,
+            index_type,
+            auto,
+        })
     }
 
     fn parse_field_list(parser: &mut parser::Parser<'_>) -> Result<Vec<Field>, ParseError> {
@@ -656,9 +675,14 @@ mod parse {
 
             let comment = parser.eat_quoted_string().to_string();
 
-            fields.push(Field(
-                field_type, field_size, field_name, index_type, auto, comment,
-            ));
+            fields.push(Field {
+                field_type,
+                field_size,
+                name: field_name,
+                index_type,
+                auto,
+                comment,
+            });
 
             if parser.peek_one() == ")" {
                 break;
@@ -668,11 +692,9 @@ mod parse {
     }
 
     mod test {
-        use crate::bed::autosql::BED3;
-
         #[test]
         fn test_bed3() {
-            super::parse_declaration_list(BED3).unwrap();
+            super::parse_autosql(super::super::BED3).unwrap();
         }
 
         #[test]
@@ -731,7 +753,7 @@ mod parse {
                 )
             "#;
 
-            super::parse_declaration_list(main_test).unwrap();
+            super::parse_autosql(main_test).unwrap();
         }
         #[test]
         fn test_hardtest() {
@@ -766,7 +788,7 @@ mod parse {
                 )
             "#;
 
-            super::parse_declaration_list(hard_test).unwrap();
+            super::parse_autosql(hard_test).unwrap();
         }
 
         #[test]
@@ -792,7 +814,7 @@ mod parse {
                 )
             "#;
 
-            super::parse_declaration_list(index_test).unwrap();
+            super::parse_autosql(index_test).unwrap();
         }
     }
 }

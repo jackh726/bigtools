@@ -12,7 +12,7 @@ use crate::bbiread::{
     ChromAndSize, ZoomIntervalIter,
 };
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{ChromIdNotFound, CirTreeSearchError};
+use crate::ZoomIntervalError;
 
 struct IntervalIter<I, R, B>
 where
@@ -136,32 +136,12 @@ impl<R: SeekableRead> BBIRead for BigBedRead<R> {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum ZoomIntervalError {
-    #[error("The passed reduction level was not found")]
-    ReductionLevelNotFound,
-    #[error("{}", .0)]
-    BBIReadError(BBIReadError),
-}
-
-impl From<ChromIdNotFound> for ZoomIntervalError {
-    fn from(e: ChromIdNotFound) -> Self {
-        ZoomIntervalError::BBIReadError(BBIReadError::InvalidChromosome(e.0))
-    }
-}
-
-impl From<CirTreeSearchError> for ZoomIntervalError {
-    fn from(e: CirTreeSearchError) -> Self {
-        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
-    }
-}
-
 impl BigBedRead<ReopenableFile> {
     /// Opens a new `BigBedRead` from a given path as a file.
-    pub fn open_file(path: String) -> Result<Self, BigBedReadAttachError> {
+    pub fn open_file(path: &str) -> Result<Self, BigBedReadAttachError> {
         let reopen = ReopenableFile {
-            path: path.clone(),
-            file: File::open(&path)?,
+            path: path.to_string(),
+            file: File::open(path)?,
         };
         let b = BigBedRead::open(reopen);
         if b.is_err() {

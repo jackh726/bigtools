@@ -53,7 +53,7 @@ use crate::bbiread::{
     ChromAndSize, ZoomIntervalIter,
 };
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{ChromIdNotFound, CirTreeSearchError};
+use crate::ZoomIntervalError;
 
 struct IntervalIter<I, R, B>
 where
@@ -175,26 +175,6 @@ impl<R: SeekableRead> BBIRead for BigWigRead<R> {
                 length: c.length,
             })
             .collect::<Vec<_>>()
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum ZoomIntervalError {
-    #[error("The passed reduction level was not found")]
-    ReductionLevelNotFound,
-    #[error("{}", .0)]
-    BBIReadError(BBIReadError),
-}
-
-impl From<ChromIdNotFound> for ZoomIntervalError {
-    fn from(e: ChromIdNotFound) -> Self {
-        ZoomIntervalError::BBIReadError(BBIReadError::InvalidChromosome(e.0))
-    }
-}
-
-impl From<CirTreeSearchError> for ZoomIntervalError {
-    fn from(e: CirTreeSearchError) -> Self {
-        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
     }
 }
 
