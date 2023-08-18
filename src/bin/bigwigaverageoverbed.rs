@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .short('t')
             .help("Number of threads to use. Defaults to 1.")
             .default_value("1")
-            )
+            .value_parser(clap::value_parser!(usize)))
         .get_matches();
 
     let bigwigpath = matches.get_one::<String>("bigwig").unwrap();

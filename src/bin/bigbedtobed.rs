@@ -82,7 +82,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .short('t')
             .help("Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1")
             .num_args(1)
-            .default_value("6"))
+            .default_value("6")
+            .value_parser(clap::value_parser!(usize)))
         .get_matches();
 
     let bigbedpath = matches.get_one::<String>("bigbed").unwrap().to_owned();

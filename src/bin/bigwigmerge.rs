@@ -245,7 +245,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .short('t')
                 .help("Set the number of threads to use")
                 .num_args(1)
-                .default_value("6"))
+                .default_value("6")
+                .value_parser(clap::value_parser!(usize)))
         .get_matches();
 
     let output = matches.get_one::<String>("output").unwrap().to_owned();

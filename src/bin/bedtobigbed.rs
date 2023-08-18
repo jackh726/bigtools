@@ -31,15 +31,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .short('t')
                 .help("Set the number of threads to use")
                 .num_args(1)
-                .default_value("6"))
+                .default_value("6")
+                .value_parser(clap::value_parser!(usize)))
         .arg(Arg::new("nzooms")
                 .short('z')
                 .help("Set the maximum of zooms to create.")
                 .num_args(1)
-                .default_value("10"))
+                .default_value("10")
+                .value_parser(clap::value_parser!(u32)))
         .arg(Arg::new("uncompressed")
                 .short('u')
-                .help("Don't use compression."))
+                .help("Don't use compression.")
+                .action(clap::ArgAction::SetTrue))
         .arg(Arg::new("sorted")
                 .short('s')
                 .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
@@ -56,7 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bigwigpath = matches.get_one::<String>("output").unwrap().to_owned();
     let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
     let nzooms = *matches.get_one::<u32>("nzooms").unwrap();
-    let uncompressed = { matches.get_count("uncompressed") > 0 };
+    let uncompressed = matches.get_flag("uncompressed");
     let input_sort_type = match matches.get_one::<String>("sorted").map(String::as_ref) {
         None => InputSortType::ALL,
         Some("all") => InputSortType::ALL,
