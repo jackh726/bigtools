@@ -51,7 +51,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, pool).unwrap();
 
-    let mut bwread = BigBedRead::open_file(tempfile.path().to_string_lossy().to_string()).unwrap();
+    let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
     let chroms = bwread.get_chroms();
     assert_eq!(chroms.len(), 3);

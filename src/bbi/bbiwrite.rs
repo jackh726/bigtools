@@ -69,6 +69,9 @@ pub enum InputSortType {
     //NONE,
 }
 
+pub const DEFAULT_BLOCK_SIZE: u32 = 256;
+pub const DEFAULT_ITEMS_PER_SLOT: u32 = 1024;
+
 #[derive(Copy, Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
@@ -84,8 +87,8 @@ impl Default for BBIWriteOptions {
     fn default() -> Self {
         BBIWriteOptions {
             compress: true,
-            items_per_slot: 1024,
-            block_size: 256,
+            items_per_slot: DEFAULT_ITEMS_PER_SLOT,
+            block_size: DEFAULT_BLOCK_SIZE,
             initial_zoom_size: 160,
             max_zooms: 10,
             input_sort_type: InputSortType::ALL,
