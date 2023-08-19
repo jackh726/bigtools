@@ -283,3 +283,10 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     Ok(())
 }
+
+
+#[test]
+fn verify_cli_bigwigaverageoverbed() {
+    use clap::CommandFactory;
+    Cli::command().debug_assert()
+}
