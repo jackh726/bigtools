@@ -9,14 +9,14 @@ use std::str::FromStr;
 
 use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
+use bigtools::utils::cli::BBIWriteArgs;
 use clap::Parser;
 
 use bigtools::bbi::BigWigWrite;
 use bigtools::bbiwrite::InputSortType;
-use bigtools::bbiwrite::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(about = "Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.", long_about = None)]
 struct Cli {
     /// The bedgraph to convert to a bigwig. Can use `-` or `stdin` to read from stdin.
@@ -28,46 +28,14 @@ struct Cli {
     /// The output bigwig path
     output: String,
 
-    /// Set the number of threads to use. This tool will typically use ~225% CPU on a HDD. SDDs may be higher. (IO bound)
-    #[arg(short = 't', long)]
-    #[arg(default_value_t = 6)]
-    nthreads: usize,
-
-    /// Set the maximum of zooms to create.
-    #[arg(short = 'z', long)]
-    #[arg(default_value_t = 10)]
-    nzooms: u32,
-
-    /// Don't use compression.
-    #[arg(short = 'u', long)]
-    #[arg(default_value_t = false)]
-    uncompressed: bool,
-
-    /// Sets whether the input is sorted. Can take `all`, `start`, or `none`.
-    /// `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`).
-    /// `start` means that the the chroms are out of order but the starts within a chrom is sorted.
-    /// `none` means that the file is not sorted at all.
-    /// `all` is default. `none` currently errors but may be supported in the future.
-    /// Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.
-    #[arg(short = 's', long)]
-    #[arg(default_value = "all")]
-    sorted: String,
-
     /// Set whether to read and convert the bedGraph in parallel.
     /// Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.
     #[arg(short = 'p', long)]
     #[arg(default_value = "auto")]
-    parallel: String,
+    pub parallel: String,
 
-    /// Number of items to bundle in r-tree.
-    #[arg(long)]
-    #[arg(default_value_t = DEFAULT_BLOCK_SIZE)]
-    block_size: u32,
-
-    /// Number of data points bundled at lowest level.
-    #[arg(long)]
-    #[arg(default_value_t = DEFAULT_ITEMS_PER_SLOT)]
-    items_per_slot: u32,
+    #[command(flatten)]
+    write_args: BBIWriteArgs,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -97,8 +65,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bedgraphpath = matches.bedgraph;
     let chrom_map = matches.chromsizes;
     let bigwigpath = matches.output;
-    let nthreads = matches.nthreads;
-    let input_sort_type = match matches.sorted.as_ref() {
+    let nthreads = matches.write_args.nthreads;
+    let input_sort_type = match matches.write_args.sorted.as_ref() {
         "all" => InputSortType::ALL,
         "start" => InputSortType::START,
         "none" => {
@@ -115,10 +83,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let mut outb = BigWigWrite::create_file(bigwigpath);
-    outb.options.max_zooms = matches.nzooms;
-    outb.options.compress = !matches.uncompressed;
+    outb.options.max_zooms = matches.write_args.nzooms;
+    outb.options.compress = !matches.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
-    outb.options.block_size = matches.block_size;
+    outb.options.block_size = matches.write_args.block_size;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {

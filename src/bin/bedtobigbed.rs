@@ -1,74 +1,95 @@
 use std::collections::HashMap;
+use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::str::FromStr;
 
 use bigtools::bedchromdata::BedParserStreamingIterator;
-use clap::{Arg, Command};
+use bigtools::utils::cli::BBIWriteArgs;
+use clap::Parser;
 
 use bigtools::bbi::BigBedWrite;
 use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::BedParser;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let matches = Command::new("BedToBigBed")
-        .arg(Arg::new("bed")
-                .help("the n to convert to a bigbed")
-                .index(1)
-                .required(true)
-            )
-        .arg(Arg::new("chromsizes")
-                .help("A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.")
-                .index(2)
-                .required(true)
-            )
-        .arg(Arg::new("output")
-                .help("The output bigbed path")
-                .index(3)
-                .required(true)
-            )
-        .arg(Arg::new("nthreads")
-                .short('t')
-                .help("Set the number of threads to use")
-                .num_args(1)
-                .default_value("6")
-                .value_parser(clap::value_parser!(usize)))
-        .arg(Arg::new("nzooms")
-                .short('z')
-                .help("Set the maximum of zooms to create.")
-                .num_args(1)
-                .default_value("10")
-                .value_parser(clap::value_parser!(u32)))
-        .arg(Arg::new("uncompressed")
-                .short('u')
-                .help("Don't use compression.")
-                .action(clap::ArgAction::SetTrue))
-        .arg(Arg::new("sorted")
-                .short('s')
-                .help("Sets whether the input is sorted. Can take `all`, `start`, or `none`. `all` means that the input bedGraph is sorted by chroms and start (`sort -k1,1 -k2,2n`). `start` means that the the chroms are out of order but the starts within a chrom is sorted. `none` means that the file is not sorted at all. `all` is default. `none` currently errors but may be supported in the future. Note that using a value other than `all` will not guarantee (though likely) support for third-party tools.")
-                .num_args(1)
-                .default_value("all"))
-        .arg(Arg::new("autosql")
-                .short('a')
-                .help("The path to an .as file containing the autosql that defines the fields in this bigBed")
-                .num_args(1))
-        .get_matches();
+#[derive(Parser)]
+#[command(about = "Converts a bed to a bigBed.", long_about = None)]
+struct Cli {
+    /// The n to convert to a bigbed.
+    bed: String,
 
-    let bedpath = matches.get_one::<String>("bed").unwrap().to_owned();
-    let chrom_map = matches.get_one::<String>("chromsizes").unwrap().to_owned();
-    let bigwigpath = matches.get_one::<String>("output").unwrap().to_owned();
-    let nthreads = *matches.get_one::<usize>("nthreads").unwrap();
-    let nzooms = *matches.get_one::<u32>("nzooms").unwrap();
-    let uncompressed = matches.get_flag("uncompressed");
-    let input_sort_type = match matches.get_one::<String>("sorted").map(String::as_ref) {
-        None => InputSortType::ALL,
-        Some("all") => InputSortType::ALL,
-        Some("start") => InputSortType::START,
-        Some("none") => {
+    /// A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.
+    chromsizes: String,
+
+    /// The output bigwig path
+    output: String,
+
+    #[arg(short = 'a', long)]
+    autosql: Option<String>,
+
+    #[command(flatten)]
+    write_args: BBIWriteArgs,
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = env::args_os().map(|a| {
+        match a.to_str() {
+            Some("-unc") => return OsString::from_str("--uncompressed").unwrap(),
+            Some("-tab") => return OsString::from_str("").unwrap(),
+            Some(b) if b.starts_with("-blockSize=") => {
+                return OsString::from_str(&format!(
+                    "--block-size={}",
+                    b.replace("-blockSize=", "")
+                ))
+                .unwrap()
+            }
+            Some(b) if b.starts_with("-itemsPerSlot=") => {
+                return OsString::from_str(&format!(
+                    "--items-per-slot={}",
+                    b.replace("-itemsPerSlot=", "")
+                ))
+                .unwrap()
+            }
+            Some(b) if b.starts_with("-as=") => {
+                return OsString::from_str(&format!("--autosql={}", b.replace("-as=", ""))).unwrap()
+            }
+            Some(b) if b.starts_with("-type=") => return OsString::from_str("").unwrap(),
+            Some("-extraIndex")
+            | Some("-sizesIs2Bit")
+            | Some("-sizesIsChromAliasBb")
+            | Some("-sizesIsBb")
+            | Some("-allow1bpOverlap") => {
+                panic!(
+                    "Unimplemented compatibility option {}.",
+                    a.to_string_lossy()
+                );
+            }
+            Some(b) if b.starts_with("-extraIndex=") || b.starts_with("-udcDir") => {
+                panic!(
+                    "Unimplemented compatibility option {}.",
+                    a.to_string_lossy()
+                );
+            }
+            _ => {}
+        }
+        a
+    });
+    let matches = Cli::parse_from(args);
+
+    let bedpath = matches.bed;
+    let chrom_map = matches.chromsizes;
+    let bigwigpath = matches.output;
+    let nthreads = matches.write_args.nthreads;
+    let input_sort_type = match matches.write_args.sorted.as_ref() {
+        "all" => InputSortType::ALL,
+        "start" => InputSortType::START,
+        "none" => {
             eprintln!("Using completely unsorted input is not implemented yet.");
             return Ok(());
         }
-        Some(sorted) => {
+        sorted => {
             eprintln!(
                 "Invalid option for `sorted`: `{}`. Options are `all`, `start`, or `none`.",
                 sorted
@@ -78,8 +99,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let mut outb = BigBedWrite::create_file(bigwigpath);
-    outb.options.max_zooms = nzooms;
-    outb.options.compress = !uncompressed;
+    outb.options.max_zooms = matches.write_args.nzooms;
+    outb.options.compress = !matches.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
@@ -105,7 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let infile = File::open(bedpath)?;
     let mut vals_iter = BedParser::from_bed_file(infile);
 
-    let autosql = match matches.get_one::<String>("autosql") {
+    let autosql = match matches.autosql.as_ref() {
         None => {
             use bigtools::utils::chromvalues::ChromValues;
             let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
@@ -121,4 +142,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     outb.write(chrom_map, chsi, pool)?;
 
     Ok(())
+}
+
+#[test]
+fn verify_cli_bedtobigbed() {
+    use clap::CommandFactory;
+    Cli::command().debug_assert()
 }
