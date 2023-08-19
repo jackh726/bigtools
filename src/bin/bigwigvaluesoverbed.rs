@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use clap::{Arg, Command};
+use clap::Parser;
 
 use bigtools::bbi::BigWigRead;
 use bigtools::bbiread::BBIReadError;
@@ -91,43 +91,37 @@ fn write<R: SeekableRead + 'static>(
     Ok(())
 }
 
+#[derive(Parser)]
+#[command(about = "Gets statistics of a bigWig over a bed.", long_about = None)]
+struct Cli {
+    /// The input bigwig file
+    bigwig: String,
+
+    /// The input bed file
+    bedin: String,
+
+    /// The output bed file
+    output: String,
+
+    /// If set, the output file will print the name of each bed entry (or `chrom:start-end` if names are not unique) in the first column of each output line.
+    #[arg(short = 'n', long)]
+    names: bool,
+
+    /// Sets the delimiter to use for the output file. (Defaults to tab).
+    #[arg(short = 'd', long)]
+    #[arg(default_value = "\t")]
+    delimiter: String,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = Command::new("BigWigInfo")
-        .arg(Arg::new("bigwig")
-                .help("The input bigwig file")
-                .index(1)
-                .required(true)
-            )
-        .arg(Arg::new("bedin")
-                .help("The input bed file")
-                .index(2)
-                .required(true)
-            )
-        .arg(Arg::new("output")
-                .help("The output file")
-                .index(3)
-                .required(true)
-            )
-        .arg(Arg::new("names")
-                .short('n')
-                .help("If set, the output file will print the name of each bed entry (or `chrom:start-end` if names are not unique) in the first column of each output line.")
-            )
-        .arg(Arg::new("delimiter")
-                .short('d')
-                .num_args(1)
-                .help("Sets the delimiter to use for the output file. (Defaults to tab).")
-            )
-        .get_matches();
+    let matches = Cli::parse();
 
-    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
-    let bedinpath = matches.get_one::<String>("bedin").unwrap();
-    let outputpath = matches.get_one::<String>("output").unwrap();
+    let bigwigpath = matches.bigwig;
+    let bedinpath = matches.bedin;
+    let outputpath = matches.output;
 
-    let withnames = matches.get_count("names") > 0;
-    let mut delimiter = matches
-        .get_one::<String>("delimiter")
-        .unwrap_or(&"\t".to_string())
-        .clone();
+    let withnames = matches.names;
+    let mut delimiter = matches.delimiter;
     if delimiter == "\\t" {
         delimiter = String::from("\t");
     }
@@ -148,11 +142,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         if bigwigpath.starts_with("http") {
             use bigtools::utils::remote_file::RemoteFile;
-            let f = RemoteFile::new(bigwigpath);
+            let f = RemoteFile::new(&bigwigpath);
             let inbigwig = BigWigRead::open(f)?;
             write(bedin, inbigwig, out, options)?;
         } else {
-            let inbigwig = BigWigRead::open_file(bigwigpath)?;
+            let inbigwig = BigWigRead::open_file(&bigwigpath)?;
             write(bedin, inbigwig, out, options)?;
         }
     }
