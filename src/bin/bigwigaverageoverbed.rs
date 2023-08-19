@@ -1,60 +1,98 @@
 use std::collections::VecDeque;
+use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::str::FromStr;
 
 use bigtools::bed::bedparser::{parse_bed, BedParser};
 use bigtools::bed::indexer::index_chroms;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
-use clap::{Arg, Command};
+use clap::Parser;
 
 use bigtools::bbi::BigWigRead;
 use bigtools::utils::misc::{stats_for_bed_item, Name};
 use crossbeam_channel::TryRecvError;
 
+#[derive(Parser)]
+#[command(about = "Gets statistics of a bigWig over a bed.", long_about = None)]
+struct Cli {
+    /// The input bigwig file
+    bigwig: String,
+
+    /// The input bed file
+    bedin: String,
+
+    /// The output bed file
+    output: String,
+
+    /// Supports three types of options: `interval`, `none`, or a column number (one indexed).
+    /// If `interval`, the name column in the output will be the interval in the form of `chrom:start-end`.
+    /// If `none`, then all columns will be included in the output file.
+    /// Otherwise, the one-indexed column will be used as the name. By default, column 4 is used as a name column.
+    #[arg(short = 'n', long)]
+    namecol: Option<String>,
+
+    /// If set, restrict output to given chromosome
+    #[arg(long)]
+    chrom: Option<String>,
+
+    /// If set, restrict output to regions greater than or equal to it
+    #[arg(long)]
+    start: Option<u32>,
+
+    /// If set, restrict output to regions less than it
+    #[arg(long)]
+    end: Option<u32>,
+
+    /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms).
+    /// Note: for parts of the runtime, the actual usage may be nthreads+1
+    #[arg(short = 't', long)]
+    #[arg(default_value_t = 6)]
+    nthreads: usize,
+}
+
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let matches = Command::new("BigWigAverageOverBed")
-        .arg(Arg::new("bigwig")
-                .help("The input bigwig file")
-                .index(1)
-                .required(true)
-            )
-        .arg(Arg::new("bedin")
-                .help("The input bed file")
-                .index(2)
-                .required(true)
-            )
-        .arg(Arg::new("output")
-                .help("The output bed file")
-                .index(3)
-                .required(true)
-            )
-        .arg(Arg::new("namecol")
-                .short('n')
-                .help("Supports three types of options: `interval`, `none`, or a column number (one indexed). If `interval`, the name column in the output will be the interval in the form of `chrom:start-end`. If `none`, then all columns will be included in the output file. Otherwise, the one-indexed column will be used as the name. By default, column 4 is used as a name column.")
-                .default_value("4")
-            )
-        .arg(Arg::new("nthreads")
-            .short('t')
-            .help("Number of threads to use. Defaults to 1.")
-            .default_value("1")
-            .value_parser(clap::value_parser!(usize)))
-        .get_matches();
+    let args = env::args_os().map(|a| {
+        match a.to_str() {
+            Some(b) if b.starts_with("-chrom=") => {
+                return OsString::from_str(&format!("--chrom={}", b.replace("-chrom=", "")))
+                    .unwrap()
+            }
+            Some(b) if b.starts_with("-start=") => {
+                return OsString::from_str(&format!("--start={}", b.replace("-start=", "")))
+                    .unwrap()
+            }
+            Some(b) if b.starts_with("-end=") => {
+                return OsString::from_str(&format!("--end={}", b.replace("-end=", ""))).unwrap()
+            }
+            Some(b) if b.starts_with("-udcDir") => {
+                panic!(
+                    "Unimplemented compatibility option {}.",
+                    a.to_string_lossy()
+                );
+            }
+            _ => {}
+        }
+        a
+    });
+    let matches = Cli::parse_from(args);
 
-    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
-    let bedinpath = matches.get_one::<String>("bedin").unwrap();
-    let bedoutpath = matches.get_one::<String>("output").unwrap();
+    let bigwigpath = matches.bigwig;
+    let bedinpath = matches.bedin;
+    let bedoutpath = matches.output;
 
-    let mut inbigwig = BigWigRead::open_file(bigwigpath)?;
+    let mut inbigwig = BigWigRead::open_file(&bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
     let mut bedoutwriter = BufWriter::new(outbed);
 
-    let bedin = BufReader::new(File::open(bedinpath)?);
+    let bedin = BufReader::new(File::open(&bedinpath)?);
     let mut bedstream = StreamingLineReader::new(bedin);
 
-    let name = match matches.get_one::<String>("namecol").map(String::as_ref) {
+    let name = match matches.namecol.as_deref() {
         Some("interval") => Name::Interval,
         Some("none") => Name::None,
         Some(col) => {
@@ -74,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         None => Name::Column(3),
     };
 
-    let nthreads: usize = *matches.get_one::<usize>("nthreads").unwrap();
+    let nthreads: usize = matches.nthreads;
     let parallel = nthreads > 1;
 
     if parallel {
@@ -137,7 +175,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(tmp)
         }
 
-        let bed = File::open(bedinpath)?;
+        let bed = File::open(&bedinpath)?;
         let chrom_indices: Vec<(u64, String)> = index_chroms(bed)?;
 
         let mut chrom_data = VecDeque::with_capacity(chrom_indices.len());

@@ -141,7 +141,7 @@ struct Cli {
     /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
-    pub nthreads: usize,
+    nthreads: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
