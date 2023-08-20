@@ -1,10 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::path::Path;
-use std::str::FromStr;
 
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
@@ -146,37 +144,17 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args_os().map(|a| {
-        match a.to_str() {
-            Some(b) if b.starts_with("-chrom=") => {
-                return OsString::from_str(&format!("--chrom={}", b.replace("-chrom=", "")))
-                    .unwrap()
-            }
-            Some(b) if b.starts_with("-start=") => {
-                return OsString::from_str(&format!("--start={}", b.replace("-start=", "")))
-                    .unwrap()
-            }
-            Some(b) if b.starts_with("-end=") => {
-                return OsString::from_str(&format!("--end={}", b.replace("-end=", ""))).unwrap()
-            }
-            Some(b) if b.starts_with("-bed=") => {
-                return OsString::from_str(&format!("--overlap-bed={}", b.replace("-bed=", "")))
-                    .unwrap()
-            }
-            Some("-header") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            Some(b) if b.starts_with("-udcDir") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            _ => {}
-        }
-        a
+        bigtools::compat_replace!(a;
+            replace:
+                "-chrom", "--chrom";
+                "-start", "--start";
+                "-end", "--end";
+                "-bed", "-overlap-bed"
+            ignore:
+            unimplemented:
+                "-header";
+                "-udcDir"
+        )
     });
     let matches = Cli::parse_from(args);
 

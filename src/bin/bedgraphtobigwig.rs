@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
@@ -40,25 +38,14 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args_os().map(|a| {
-        match a.to_str() {
-            Some("-unc") => return OsString::from_str("--uncompressed").unwrap(),
-            Some(b) if b.starts_with("-blockSize=") => {
-                return OsString::from_str(&format!(
-                    "--block-size={}",
-                    b.replace("-blockSize=", "")
-                ))
-                .unwrap()
-            }
-            Some(b) if b.starts_with("-itemsPerSlot=") => {
-                return OsString::from_str(&format!(
-                    "--items-per-slot={}",
-                    b.replace("-itemsPerSlot=", "")
-                ))
-                .unwrap()
-            }
-            _ => {}
-        }
-        a
+        bigtools::compat_replace!(a;
+            replace:
+                "-unc", "--uncompressed";
+                "-blockSize", "--block-size";
+                "-itemsPerSlot", "--items-per-slot"
+            ignore:
+            unimplemented:
+        )
     });
     let matches = Cli::parse_from(args);
 

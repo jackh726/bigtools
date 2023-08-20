@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::str::FromStr;
 
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::cli::BBIWriteArgs;
@@ -35,46 +33,24 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args_os().map(|a| {
-        match a.to_str() {
-            Some("-unc") => return OsString::from_str("--uncompressed").unwrap(),
-            Some("-tab") => return OsString::from_str("").unwrap(),
-            Some(b) if b.starts_with("-blockSize=") => {
-                return OsString::from_str(&format!(
-                    "--block-size={}",
-                    b.replace("-blockSize=", "")
-                ))
-                .unwrap()
-            }
-            Some(b) if b.starts_with("-itemsPerSlot=") => {
-                return OsString::from_str(&format!(
-                    "--items-per-slot={}",
-                    b.replace("-itemsPerSlot=", "")
-                ))
-                .unwrap()
-            }
-            Some(b) if b.starts_with("-as=") => {
-                return OsString::from_str(&format!("--autosql={}", b.replace("-as=", ""))).unwrap()
-            }
-            Some(b) if b.starts_with("-type=") => return OsString::from_str("").unwrap(),
-            Some("-extraIndex")
-            | Some("-sizesIs2Bit")
-            | Some("-sizesIsChromAliasBb")
-            | Some("-sizesIsBb")
-            | Some("-allow1bpOverlap") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            Some(b) if b.starts_with("-extraIndex=") || b.starts_with("-udcDir") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            _ => {}
-        }
-        a
+        bigtools::compat_replace!(a;
+            replace:
+                "-unc", "--uncompressed";
+                "-blockSize", "--block-size";
+                "-itemsPerSlot", "--items-per-slot";
+                "-as", "-autosql"
+            ignore:
+                "-tab";
+                "-type"
+            unimplemented:
+                "-extraIndex";
+                "-sizesIs2Bit";
+                "-sizesIsChromAliasBb";
+                "-sizesIsBb";
+                "-allow1bOverlap";
+                "-extraIndex";
+                "-udcDir"
+        )
     });
     let matches = Cli::parse_from(args);
 

@@ -333,36 +333,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let args = args.into_iter().map(|a| {
-        match a.to_str() {
-            Some(b) if b.starts_with("-threshold=") => {
-                return OsString::from_str(&format!("--threshold={}", b.replace("-threshold=", "")))
-                    .unwrap()
-            }
-            Some(b) if b.starts_with("-adjust=") => {
-                return OsString::from_str(&format!("--adjust={}", b.replace("-adjust=", "")))
-                    .unwrap()
-            }
-            Some(b) if b.starts_with("-clip=") => {
-                return OsString::from_str(&format!("--clip={}", b.replace("-clip=", ""))).unwrap()
-            }
-            Some("-inList") => {
-                panic!("Invalid compatibility option use.",);
-            }
-            Some("-max") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            Some(b) if b.starts_with("-udcDir") => {
-                panic!(
-                    "Unimplemented compatibility option {}.",
-                    a.to_string_lossy()
-                );
-            }
-            _ => {}
-        }
-        a
+        bigtools::compat_replace!(a;
+            replace:
+                "-threshold", "--threshold";
+                "-adjust", "--adjust";
+                "-clip", "--clip"
+            ignore:
+                "-inList"
+            unimplemented:
+                "-max";
+                "-udcDir"
+        )
     });
     let matches = Cli::parse_from(args);
 

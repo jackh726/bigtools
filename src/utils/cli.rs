@@ -39,3 +39,39 @@ pub struct BBIWriteArgs {
     #[arg(default_value_t = DEFAULT_ITEMS_PER_SLOT)]
     pub items_per_slot: u32,
 }
+
+#[macro_export]
+macro_rules! compat_replace {
+    (
+        $a:expr;
+        replace:
+            $($find:literal,$replace:literal);*
+        ignore:
+            $($ignore:literal);*
+        unimplemented:
+            $($unimplemented:literal);*
+    ) => {{
+        use std::ffi::OsString;
+        use std::str::FromStr;
+        match $a.to_str() {
+            $(
+                Some(b) if b.starts_with($find) => {
+                    return OsString::from_str(&b.replace($find, $replace)).unwrap();
+                }
+            )*
+            $(
+                Some(b) if b.starts_with($ignore) => return OsString::from_str("").unwrap(),
+            )*
+            $(
+                Some(b) if b.starts_with($unimplemented) => {
+                    panic!(
+                        "Unimplemented compatibility option {}.",
+                        $a.to_string_lossy()
+                    );
+                }
+            )*
+            _ => {}
+        }
+        $a
+    }}
+}
