@@ -4,9 +4,11 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::pin::Pin;
 
 use byteorder::{NativeEndian, WriteBytesExt};
+use crossbeam_channel::unbounded;
 use thiserror::Error;
 
-use futures::channel::mpsc::{channel, Receiver};
+use futures::channel::mpsc as futures_mpsc;
+use futures::channel::mpsc::channel;
 use futures::executor::ThreadPool;
 use futures::future::{Future, FutureExt};
 use futures::stream::StreamExt;
@@ -16,7 +18,6 @@ use futures::try_join;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::chromvalues::ChromValues;
-use crate::utils::filebufferedchannel;
 use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
@@ -121,7 +122,7 @@ pub struct TempZoomInfo<SourceError> {
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
     >,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
-    pub sections: filebufferedchannel::Receiver<Section>,
+    pub sections: crossbeam_channel::Receiver<Section>,
 }
 
 pub(crate) type ChromProcessingInputSectionChannel = futures::channel::mpsc::Sender<
@@ -133,7 +134,7 @@ pub(crate) struct ChromProcessingInput {
 }
 
 pub struct ChromProcessingOutput<SourceError> {
-    pub sections: filebufferedchannel::Receiver<Section>,
+    pub sections: crossbeam_channel::Receiver<Section>,
     pub data: TempFileBuffer<File>,
     pub data_write_future: Box<
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
@@ -570,7 +571,7 @@ pub(crate) async fn write_vals<
             })
             .collect::<io::Result<_>>()?;
 
-    let mut section_iter: Vec<filebufferedchannel::IntoIter<Section>> = vec![];
+    let mut section_iter = vec![];
     let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
@@ -734,8 +735,8 @@ pub(crate) async fn write_vals<
 
 async fn write_data<W: Write, SourceError: Send>(
     mut data_file: W,
-    mut section_sender: filebufferedchannel::Sender<Section>,
-    mut frx: Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
+    section_sender: crossbeam_channel::Sender<Section>,
+    mut frx: futures_mpsc::Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
 ) -> Result<(usize, usize), ProcessChromError<SourceError>> {
     let mut current_offset = 0;
     let mut total = 0;
@@ -771,7 +772,7 @@ pub(crate) fn setup_channels<SourceError: Send + 'static>(
         let (buf, write) = TempFileBuffer::new()?;
         let file = BufWriter::new(write);
 
-        let (section_sender, section_receiver) = filebufferedchannel::channel(options.channel_size);
+        let (section_sender, section_receiver) = unbounded();
         let (sections_remote, sections_handle) =
             write_data(file, section_sender, frx).remote_handle();
         pool.spawn(sections_remote).expect("Couldn't spawn future.");
@@ -786,8 +787,7 @@ pub(crate) fn setup_channels<SourceError: Send + 'static>(
                 let (buf, write) = TempFileBuffer::new()?;
                 let file = BufWriter::new(write);
 
-                let (section_sender, section_receiver) =
-                    filebufferedchannel::channel(options.channel_size);
+                let (section_sender, section_receiver) = unbounded();
                 let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
                 pool.spawn(remote).expect("Couldn't spawn future.");
                 let zoom_info = TempZoomInfo {

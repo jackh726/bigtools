@@ -7,13 +7,13 @@ use std::io::{self, BufRead, BufReader};
 use std::str::FromStr;
 
 use clap::Parser;
+use crossbeam_channel::unbounded;
 use thiserror::Error;
 
 use bigtools::bbi::Value;
 use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::bbiread::BBIReadError;
 use bigtools::utils::chromvalues::ChromValues;
-use bigtools::utils::filebufferedchannel;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::reopen::ReopenableFile;
 use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput};
@@ -182,7 +182,7 @@ pub fn get_merged_vals(
                     while vals.peek().is_some() {
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
                         let mut mergingvalues = MergingValues::new(chunk, threshold, adjust, clip);
-                        let (mut sender, receiver) = filebufferedchannel::lazy_channel::<Value>(3200)?;
+                        let (sender, receiver) = unbounded::<Value>();
                         while let Some(val) = mergingvalues.next() {
                             let val = val?;
                             sender.send(val).unwrap();
