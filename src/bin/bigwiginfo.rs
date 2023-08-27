@@ -20,19 +20,22 @@ fn main() -> Result<(), BigWigReadAttachError> {
             use bigtools::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
             let mut bigwig = BigWigRead::open(f)?;
-            println!("Header: {:?}", bigwig.info.header);
-            println!("Summary: {:?}", bigwig.get_summary());
+            println!("Header: {:#?}", bigwig.info.header);
+            println!("Summary: {:#?}", bigwig.get_summary());
+            println!("Zooms: {:#?}", bigwig.info.zoom_headers);
         } else {
             let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-            println!("Header: {:?}", bigwig.info.header);
-            println!("Summary: {:?}", bigwig.get_summary());
+            println!("Header: {:#?}", bigwig.info.header);
+            println!("Summary: {:#?}", bigwig.get_summary());
+            println!("Zooms: {:#?}", bigwig.info.zoom_headers);
         }
     }
     #[cfg(not(feature = "remote"))]
     {
         let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-        println!("Header: {:?}", bigwig.info.header);
-        println!("Summary: {:?}", bigwig.get_summary());
+        println!("Header: {:#?}", bigwig.info.header);
+        println!("Summary: {:#?}", bigwig.get_summary());
+        println!("Zooms: {:#?}", bigwig.info.zoom_headers);
     }
 
     Ok(())
