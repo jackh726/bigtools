@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, BufWriter, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Write};
 
 use futures::executor::{block_on, ThreadPool};
 use futures::future::FutureExt;
@@ -13,7 +13,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::ChromData;
+use crate::{write_info, ChromData};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -118,41 +118,23 @@ impl BigBedWrite {
         let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
-        file.seek(SeekFrom::Start(0))?;
-        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?;
-        file.write_u16::<NativeEndian>(4)?;
-        file.write_u16::<NativeEndian>(num_zooms)?;
-        file.write_u64::<NativeEndian>(chrom_index_start)?;
-        file.write_u64::<NativeEndian>(full_data_offset)?;
-        file.write_u64::<NativeEndian>(index_start)?;
-        // TODO: actually write the correct value
-        file.write_u16::<NativeEndian>(3)?; // fieldCount
-        file.write_u16::<NativeEndian>(0)?; // definedFieldCount
-        file.write_u64::<NativeEndian>(autosql_offset)?; // autoSQLOffset
-        file.write_u64::<NativeEndian>(total_summary_offset)?;
-        file.write_u32::<NativeEndian>(uncompress_buf_size as u32)?;
-        file.write_u64::<NativeEndian>(0)?; // reserved
-
-        debug_assert!(file.seek(SeekFrom::Current(0))? == 64);
-
-        for zoom_entry in zoom_entries {
-            file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
-            file.write_u32::<NativeEndian>(0)?;
-            file.write_u64::<NativeEndian>(zoom_entry.data_offset)?;
-            file.write_u64::<NativeEndian>(zoom_entry.index_offset)?;
-        }
-
-        file.seek(SeekFrom::Start(total_summary_offset))?;
-        file.write_u64::<NativeEndian>(summary.bases_covered)?;
-        file.write_f64::<NativeEndian>(summary.min_val)?;
-        file.write_f64::<NativeEndian>(summary.max_val)?;
-        file.write_f64::<NativeEndian>(summary.sum)?;
-        file.write_f64::<NativeEndian>(summary.sum_squares)?;
-
-        file.seek(SeekFrom::Start(full_data_offset))?;
-        file.write_u64::<NativeEndian>(summary.total_items)?;
-        file.seek(SeekFrom::End(0))?;
-        file.write_u32::<NativeEndian>(BIGBED_MAGIC)?;
+        write_info(
+            &mut file,
+            BIGBED_MAGIC,
+            num_zooms,
+            chrom_index_start,
+            full_data_offset,
+            index_start,
+            // TODO: actually write the correct values for the following
+            3,
+            3,
+            autosql_offset,
+            total_summary_offset,
+            uncompress_buf_size,
+            zoom_entries,
+            summary,
+            summary.total_items,
+        )?;
 
         Ok(())
     }

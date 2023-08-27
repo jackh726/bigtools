@@ -157,6 +157,61 @@ pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> 
     Ok(())
 }
 
+pub(crate) fn write_info<T>(
+    file: &mut BufWriter<File>,
+    magic: u32,
+    num_zooms: u16,
+    chrom_index_start: u64,
+    full_data_offset: u64,
+    index_start: u64,
+    field_count: u16,
+    defined_field_count: u16,
+    auto_sql_offset: u64,
+    total_summary_offset: u64,
+    uncompress_buf_size: usize,
+    zoom_entries: Vec<ZoomHeader>,
+    summary: Summary,
+    data_count: u64,
+) -> Result<(), ProcessChromError<T>> {
+    file.seek(SeekFrom::Start(0))?;
+    file.write_u32::<NativeEndian>(magic)?;
+    file.write_u16::<NativeEndian>(4)?;
+    file.write_u16::<NativeEndian>(num_zooms)?;
+    file.write_u64::<NativeEndian>(chrom_index_start)?;
+    file.write_u64::<NativeEndian>(full_data_offset)?;
+    file.write_u64::<NativeEndian>(index_start)?;
+    file.write_u16::<NativeEndian>(field_count)?; // fieldCount
+    file.write_u16::<NativeEndian>(defined_field_count)?; // definedFieldCount
+    file.write_u64::<NativeEndian>(auto_sql_offset)?; // autoSQLOffset
+    file.write_u64::<NativeEndian>(total_summary_offset)?;
+    file.write_u32::<NativeEndian>(uncompress_buf_size as u32)?;
+    file.write_u64::<NativeEndian>(0)?; // reserved
+
+    debug_assert!(file.seek(SeekFrom::Current(0))? == 64);
+
+    for zoom_entry in zoom_entries {
+        file.write_u32::<NativeEndian>(zoom_entry.reduction_level)?;
+        file.write_u32::<NativeEndian>(0)?;
+        file.write_u64::<NativeEndian>(zoom_entry.data_offset)?;
+        file.write_u64::<NativeEndian>(zoom_entry.index_offset)?;
+    }
+
+    file.seek(SeekFrom::Start(total_summary_offset))?;
+    file.write_u64::<NativeEndian>(summary.bases_covered)?;
+    file.write_f64::<NativeEndian>(summary.min_val)?;
+    file.write_f64::<NativeEndian>(summary.max_val)?;
+    file.write_f64::<NativeEndian>(summary.sum)?;
+    file.write_f64::<NativeEndian>(summary.sum_squares)?;
+
+    file.seek(SeekFrom::Start(full_data_offset))?;
+    file.write_u64::<NativeEndian>(data_count)?;
+
+    file.seek(SeekFrom::End(0))?;
+    file.write_u32::<NativeEndian>(magic)?;
+
+    Ok(())
+}
+
 pub(crate) fn write_chrom_tree(
     file: &mut BufWriter<File>,
     chrom_sizes: std::collections::HashMap<String, u32>,
