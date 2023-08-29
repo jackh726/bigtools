@@ -7,13 +7,13 @@ use crossbeam_utils::atomic::AtomicCell;
 
 // TODO: Change TempFileBuffer to memory buffer if under a certain threshold
 
-enum BufferState<R: Write + Send + 'static> {
+enum BufferState<R> {
     NotStarted,
     Temp(Option<File>),
     Real(Option<R>),
 }
 
-pub enum ClosedFile<R: Write + Send + 'static> {
+pub enum ClosedFile<R> {
     Temp(File),
     Real(R),
 }
@@ -22,21 +22,21 @@ pub enum ClosedFile<R: Write + Send + 'static> {
 /// until the "real" file is ready to be written.
 /// This is useful if you have parallel generation of data that needs
 /// to be written to a file, but you don't know the size of each part.
-pub struct TempFileBuffer<R: Write + Send + 'static> {
+pub struct TempFileBuffer<R> {
     closed: Arc<(Mutex<bool>, Condvar)>,
     closed_file: Arc<AtomicCell<Option<ClosedFile<R>>>>,
     real_file: Arc<AtomicCell<Option<R>>>,
     has_switched: bool,
 }
 
-pub struct TempFileBufferWriter<R: Write + Send + 'static> {
+pub struct TempFileBufferWriter<R> {
     closed: Arc<(Mutex<bool>, Condvar)>,
     buffer_state: BufferState<R>,
     closed_file: Arc<AtomicCell<Option<ClosedFile<R>>>>,
     real_file: Arc<AtomicCell<Option<R>>>,
 }
 
-impl<R: Write + Send + 'static> TempFileBuffer<R> {
+impl<R> TempFileBuffer<R> {
     /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to a temporary file
     pub fn new() -> (TempFileBuffer<R>, TempFileBufferWriter<R>) {
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
@@ -58,7 +58,9 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
             },
         )
     }
+}
 
+impl<R: Write + Send + 'static> TempFileBuffer<R> {
     /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to the "real" file.
     /// This is more or less equivalent to
     /// ```no_run
@@ -247,7 +249,7 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
     }
 }
 
-impl<R: Write + Send + 'static> Drop for TempFileBufferWriter<R> {
+impl<R> Drop for TempFileBufferWriter<R> {
     fn drop(&mut self) {
         let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock().unwrap();
@@ -295,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_works() -> io::Result<()> {
-        let (mut buf, mut writer) = TempFileBuffer::new()?;
+        let (mut buf, mut writer) = TempFileBuffer::new();
 
         const NUM_BYTES: usize = 50;
         let _writethread = std::thread::spawn(move || {

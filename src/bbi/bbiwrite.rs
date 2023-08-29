@@ -670,7 +670,41 @@ pub(crate) async fn write_vals<
         //   All of this is done for zoom sections too.
         //
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-        let (procesing_input, processing_output) = setup_channels(&mut pool, options);
+        let (procesing_input, processing_output) = {
+            let (ftx, sections_handle, buf, section_receiver) =
+                future_channel::<Values, _>(options.channel_size, &mut pool);
+
+            let processed_zooms: Vec<_> =
+                std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
+                    .take(options.max_zooms as usize)
+                    .map(|size| {
+                        let (ftx, handle, buf, section_receiver) =
+                            future_channel::<Values, _>(options.channel_size, &mut pool);
+                        let zoom_info = TempZoomInfo {
+                            resolution: size,
+                            data_write_future: Box::new(handle),
+                            data: buf,
+                            sections: section_receiver,
+                        };
+                        (zoom_info, ftx)
+                    })
+                    .collect();
+            let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) =
+                processed_zooms.into_iter().unzip();
+
+            (
+                ChromProcessingInput {
+                    zooms_channels,
+                    ftx,
+                },
+                ChromProcessingOutput {
+                    sections: section_receiver,
+                    data: buf,
+                    data_write_future: Box::new(sections_handle),
+                    zooms: zoom_infos,
+                },
+            )
+        };
 
         let (f_remote, f_handle) = process_chrom(
             procesing_input,
@@ -713,10 +747,7 @@ pub(crate) async fn write_vals<
                 }
 
                 // All the futures are actually just handles, so these are purely for the result
-                let joined_future = match try_join!(summary_future, data_write_future) {
-                    Ok(f) => f,
-                    Err(e) => return Err(e),
-                };
+                let joined_future = try_join!(summary_future, data_write_future)?;
                 let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(sections.into_iter());
@@ -852,18 +883,8 @@ pub(crate) async fn write_vals_no_zoom<
         //
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (procesing_input, processing_output) = {
-            let (ftx, frx) = channel(options.channel_size);
-
-            let (sections_handle, buf, section_receiver) = {
-                let (buf, write) = TempFileBuffer::new();
-                let file = BufWriter::new(write);
-
-                let (section_sender, section_receiver) = unbounded();
-                let (sections_remote, sections_handle) =
-                    write_data(file, section_sender, frx).remote_handle();
-                pool.spawn_ok(sections_remote);
-                (sections_handle, buf, section_receiver)
-            };
+            let (ftx, sections_handle, buf, section_receiver) =
+                future_channel::<Values, _>(options.channel_size, &mut pool);
 
             (
                 ChromProcessingInputNoZooms { ftx },
@@ -908,10 +929,7 @@ pub(crate) async fn write_vals_no_zoom<
                 data.switch(file);
 
                 // All the futures are actually just handles, so these are purely for the result
-                let joined_future = match try_join!(summary_future, data_write_future) {
-                    Ok(f) => f,
-                    Err(e) => return Err(e),
-                };
+                let joined_future = try_join!(summary_future, data_write_future)?;
                 let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(sections.into_iter());
@@ -981,58 +999,27 @@ async fn write_data<W: Write, SourceError: Send>(
     Ok((total, max_uncompressed_buf_size))
 }
 
-/// Sets up the channels and write "threads" for the data and zoom sections
-pub(crate) fn setup_channels<SourceError: Send + 'static>(
+fn future_channel<Values: ChromValues, R: Write + Send + 'static>(
+    channel_size: usize,
     pool: &mut ThreadPool,
-    options: BBIWriteOptions,
-) -> (ChromProcessingInput, ChromProcessingOutput<SourceError>) {
-    let (ftx, frx) = channel(options.channel_size);
+) -> (
+    futures_mpsc::Sender<
+        Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
+    >,
+    futures::future::RemoteHandle<
+        Result<(usize, usize), ProcessChromError<<Values as ChromValues>::Error>>,
+    >,
+    TempFileBuffer<R>,
+    crossbeam_channel::Receiver<Section>,
+) {
+    let (ftx, frx) = channel(channel_size);
+    let (buf, write) = TempFileBuffer::new();
+    let file = BufWriter::new(write);
 
-    let (sections_handle, buf, section_receiver) = {
-        let (buf, write) = TempFileBuffer::new();
-        let file = BufWriter::new(write);
-
-        let (section_sender, section_receiver) = unbounded();
-        let (sections_remote, sections_handle) =
-            write_data(file, section_sender, frx).remote_handle();
-        pool.spawn_ok(sections_remote);
-        (sections_handle, buf, section_receiver)
-    };
-
-    let processed_zooms: Vec<_> =
-        std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-            .take(options.max_zooms as usize)
-            .map(|size| {
-                let (ftx, frx) = channel(options.channel_size);
-                let (buf, write) = TempFileBuffer::new();
-                let file = BufWriter::new(write);
-
-                let (section_sender, section_receiver) = unbounded();
-                let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
-                pool.spawn_ok(remote);
-                let zoom_info = TempZoomInfo {
-                    resolution: size,
-                    data_write_future: Box::new(handle),
-                    data: buf,
-                    sections: section_receiver,
-                };
-                (zoom_info, ftx)
-            })
-            .collect();
-    let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms.into_iter().unzip();
-
-    (
-        ChromProcessingInput {
-            zooms_channels,
-            ftx,
-        },
-        ChromProcessingOutput {
-            sections: section_receiver,
-            data: buf,
-            data_write_future: Box::new(sections_handle),
-            zooms: zoom_infos,
-        },
-    )
+    let (section_sender, section_receiver) = unbounded();
+    let (sections_remote, sections_handle) = write_data(file, section_sender, frx).remote_handle();
+    pool.spawn_ok(sections_remote);
+    (ftx, sections_handle, buf, section_receiver)
 }
 
 #[cfg(all(test, feature = "read"))]
