@@ -574,10 +574,17 @@ pub enum ChromDataState<ChromOutput, Error> {
 
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData<Values: ChromValues, ChromOutput>: Sized {
-    fn advance<F: FnMut(String, Values) -> Result<ChromOutput, ProcessChromError<Values::Error>>>(
+    fn advance<
+        F: FnMut(
+            String,
+            Values,
+            &mut BTreeMap<u32, ChromOutput>,
+        ) -> Result<u32, ProcessChromError<Values::Error>>,
+    >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<ChromOutput, Values::Error>, ProcessChromError<Values::Error>>;
+        map: &mut BTreeMap<u32, ChromOutput>,
+    ) -> Result<ChromDataState<u32, Values::Error>, ProcessChromError<Values::Error>>;
 }
 
 pub struct ChromProcessingFnOutput<Error>(
@@ -639,12 +646,13 @@ pub(crate) async fn write_vals<
 
     let mut chrom_ids = IdMap::default();
 
+    let mut key = 0;
+    let mut output: BTreeMap<u32, ChromProcessingFnOutput<Values::Error>> = BTreeMap::new();
+
     let mut do_read = |chrom: String,
-                       data: _|
-     -> Result<
-        ChromProcessingFnOutput<<Values as ChromValues>::Error>,
-        ProcessChromError<_>,
-    > {
+                       data: _,
+                       output: &mut BTreeMap<u32, ChromProcessingFnOutput<Values::Error>>|
+     -> Result<u32, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
@@ -672,14 +680,14 @@ pub(crate) async fn write_vals<
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (procesing_input, processing_output) = {
             let (ftx, sections_handle, buf, section_receiver) =
-                future_channel::<Values, _>(options.channel_size, &mut pool);
+                future_channel(options.channel_size, &mut pool);
 
             let processed_zooms: Vec<_> =
                 std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
                     .take(options.max_zooms as usize)
                     .map(|size| {
                         let (ftx, handle, buf, section_receiver) =
-                            future_channel::<Values, _>(options.channel_size, &mut pool);
+                            future_channel(options.channel_size, &mut pool);
                         let zoom_info = TempZoomInfo {
                             resolution: size,
                             data_write_future: Box::new(handle),
@@ -717,12 +725,22 @@ pub(crate) async fn write_vals<
         )
         .remote_handle();
         pool.spawn_ok(f_remote);
-        Ok(ChromProcessingFnOutput(f_handle.boxed(), processing_output))
+
+        let curr_key = key;
+        key += 1;
+
+        output.insert(
+            curr_key,
+            ChromProcessingFnOutput(f_handle.boxed(), processing_output),
+        );
+
+        Ok(curr_key)
     };
 
     let chrom_ids = loop {
-        match vals_iter.advance(&mut do_read)? {
+        match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
+                let read = output.remove(&read).unwrap();
                 let ChromProcessingFnOutput(
                     summary_future,
                     ChromProcessingOutput {
@@ -832,7 +850,7 @@ pub(crate) async fn write_vals_no_zoom<
     mut file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
-    pool: ThreadPool,
+    mut pool: ThreadPool,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
     (
@@ -851,12 +869,13 @@ pub(crate) async fn write_vals_no_zoom<
 
     let mut chrom_ids = IdMap::default();
 
+    let mut key = 0;
+    let mut output: BTreeMap<u32, ChromProcessingFnOutputNoZooms<Values::Error>> = BTreeMap::new();
+
     let mut do_read = |chrom: String,
-                       data: _|
-     -> Result<
-        ChromProcessingFnOutputNoZooms<<Values as ChromValues>::Error>,
-        ProcessChromError<_>,
-    > {
+                       data: _,
+                       output: &mut BTreeMap<u32, _>|
+     -> Result<u32, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
@@ -884,7 +903,7 @@ pub(crate) async fn write_vals_no_zoom<
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (procesing_input, processing_output) = {
             let (ftx, sections_handle, buf, section_receiver) =
-                future_channel::<Values, _>(options.channel_size, &mut pool);
+                future_channel(options.channel_size, &mut pool);
 
             (
                 ChromProcessingInputNoZooms { ftx },
@@ -907,15 +926,22 @@ pub(crate) async fn write_vals_no_zoom<
         )
         .remote_handle();
         pool.spawn_ok(f_remote);
-        Ok(ChromProcessingFnOutputNoZooms(
-            f_handle.boxed(),
-            processing_output,
-        ))
+
+        let curr_key = key;
+        key += 1;
+
+        output.insert(
+            curr_key,
+            ChromProcessingFnOutputNoZooms(f_handle.boxed(), processing_output),
+        );
+
+        Ok(curr_key)
     };
 
     let chrom_ids = loop {
-        match vals_iter.advance(&mut do_read)? {
+        match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
+                let read = output.remove(&read).unwrap();
                 let ChromProcessingFnOutputNoZooms(
                     summary_future,
                     ChromProcessingOutputNoZooms {
@@ -999,16 +1025,14 @@ async fn write_data<W: Write, SourceError: Send>(
     Ok((total, max_uncompressed_buf_size))
 }
 
-fn future_channel<Values: ChromValues, R: Write + Send + 'static>(
+pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
     channel_size: usize,
     pool: &mut ThreadPool,
 ) -> (
     futures_mpsc::Sender<
         Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
     >,
-    futures::future::RemoteHandle<
-        Result<(usize, usize), ProcessChromError<<Values as ChromValues>::Error>>,
-    >,
+    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,
 ) {

@@ -220,17 +220,23 @@ struct ChromGroupReadImpl {
 
 impl<CO> ChromData<MergingValues, CO> for ChromGroupReadImpl {
     fn advance<
-        F: FnMut(String, MergingValues) -> Result<CO, ProcessChromError<MergingValuesError>>,
+        F: FnMut(
+            String,
+            MergingValues,
+            &mut BTreeMap<u32, CO>,
+        ) -> Result<u32, ProcessChromError<MergingValuesError>>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<CO, MergingValuesError>, ProcessChromError<MergingValuesError>> {
+        map: &mut BTreeMap<u32, CO>,
+    ) -> Result<ChromDataState<u32, MergingValuesError>, ProcessChromError<MergingValuesError>>
+    {
         let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
             self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, _, mergingvalues))) => {
-                let read = do_read(chrom, mergingvalues)?;
+                let read = do_read(chrom, mergingvalues, map)?;
 
                 ChromDataState::NewChrom(read)
             }
