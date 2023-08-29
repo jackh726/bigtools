@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::iter::Flatten;
 use std::pin::Pin;
+use std::vec;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 use crossbeam_channel::unbounded;
@@ -12,7 +14,6 @@ use futures::channel::mpsc::channel;
 use futures::executor::ThreadPool;
 use futures::future::{Future, FutureExt};
 use futures::stream::StreamExt;
-use futures::task::SpawnExt;
 use futures::try_join;
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,7 @@ use crate::bbi::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAG
 pub(crate) struct ZoomInfo {
     resolution: u32,
     data: File,
-    sections: Box<dyn Iterator<Item = Section>>,
+    sections: Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
 }
 
 #[derive(Debug)]
@@ -612,7 +613,7 @@ pub(crate) async fn write_vals<
         IdMap,
         Summary,
         BufWriter<File>,
-        Box<dyn Iterator<Item = Section> + 'static>,
+        Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         Vec<ZoomInfo>,
         usize,
     ),
@@ -620,7 +621,7 @@ pub(crate) async fn write_vals<
 > {
     // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
     type ZoomValue = (
-        Vec<Box<dyn Iterator<Item = Section>>>,
+        Vec<crossbeam_channel::IntoIter<Section>>,
         TempFileBuffer<File>,
         Option<TempFileBufferWriter<File>>,
     );
@@ -629,7 +630,7 @@ pub(crate) async fn write_vals<
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
             .map(|size| {
-                let section_iter: Vec<Box<dyn Iterator<Item = Section>>> = vec![];
+                let section_iter = vec![];
                 let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
                     TempFileBuffer::new();
                 let value = (section_iter, buf, Some(write));
@@ -743,7 +744,7 @@ pub(crate) async fn write_vals<
                     };
                     max_uncompressed_buf_size =
                         max_uncompressed_buf_size.max(uncompressed_buf_size);
-                    zoom.0.push(Box::new(sections.into_iter()));
+                    zoom.0.push(sections.into_iter());
                     zoom.2.replace(data.await_real_file());
                 }
 
@@ -777,18 +778,16 @@ pub(crate) async fn write_vals<
         .into_iter()
         .map(|(size, zoom)| {
             drop(zoom.2);
-            let zoom_iter: Box<dyn Iterator<Item = Section> + 'static> =
-                Box::new(zoom.0.into_iter().flatten());
+            let sections = zoom.0.into_iter().flatten();
             let closed_file = zoom.1.await_temp_file();
             ZoomInfo {
                 resolution: size,
                 data: closed_file,
-                sections: zoom_iter,
+                sections,
             }
         })
         .collect();
-    let section_iter: Box<dyn Iterator<Item = Section> + 'static> =
-        Box::new(section_iter.into_iter().flatten());
+    let section_iter = section_iter.into_iter().flatten();
     Ok((
         chrom_ids,
         summary_complete,
@@ -816,7 +815,7 @@ pub(crate) async fn write_vals_no_zoom<
         IdMap,
         Summary,
         BufWriter<File>,
-        Box<dyn Iterator<Item = Section> + 'static>,
+        Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         usize,
     ),
     ProcessChromError<Values::Error>,
@@ -952,8 +951,7 @@ pub(crate) async fn write_vals_no_zoom<
         sum_squares: 0.0,
     });
 
-    let section_iter: Box<dyn Iterator<Item = Section> + 'static> =
-        Box::new(section_iter.into_iter().flatten());
+    let section_iter = section_iter.into_iter().flatten();
     Ok((
         chrom_ids,
         summary_complete,
