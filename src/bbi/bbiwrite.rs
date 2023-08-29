@@ -111,12 +111,6 @@ pub enum ProcessChromError<SourceError> {
     SourceError(SourceError),
 }
 
-impl<W, S> From<io::IntoInnerError<W>> for ProcessChromError<S> {
-    fn from(error: io::IntoInnerError<W>) -> Self {
-        ProcessChromError::IoError(error.into())
-    }
-}
-
 pub struct TempZoomInfo<SourceError> {
     pub resolution: u32,
     pub data_write_future: Box<
@@ -140,7 +134,7 @@ pub(crate) struct ChromProcessingInputNoZooms {
 
 pub struct ChromProcessingOutput<SourceError> {
     pub sections: crossbeam_channel::Receiver<Section>,
-    pub data: TempFileBuffer<File>,
+    pub data: TempFileBuffer<BufWriter<File>>,
     pub data_write_future: Box<
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
     >,
@@ -149,7 +143,7 @@ pub struct ChromProcessingOutput<SourceError> {
 
 pub struct ChromProcessingOutputNoZooms<SourceError> {
     pub sections: crossbeam_channel::Receiver<Section>,
-    pub data: TempFileBuffer<File>,
+    pub data: TempFileBuffer<BufWriter<File>>,
     pub data_write_future: Box<
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
     >,
@@ -603,7 +597,7 @@ pub(crate) async fn write_vals<
     G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
     mut vals_iter: V,
-    file: BufWriter<File>,
+    mut file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
     mut pool: ThreadPool,
@@ -639,7 +633,6 @@ pub(crate) async fn write_vals<
             .collect();
 
     let mut section_iter = vec![];
-    let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
     let mut max_uncompressed_buf_size = 0;
@@ -707,7 +700,7 @@ pub(crate) async fn write_vals<
                 ) = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
-                data.switch(raw_file);
+                data.switch(file);
                 for TempZoomInfo {
                     resolution: size,
                     data: buf,
@@ -727,7 +720,7 @@ pub(crate) async fn write_vals<
                 let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(sections.into_iter());
-                raw_file = data.await_real_file();
+                file = data.await_real_file();
 
                 for TempZoomInfo {
                     resolution,
@@ -791,7 +784,7 @@ pub(crate) async fn write_vals<
     Ok((
         chrom_ids,
         summary_complete,
-        BufWriter::new(raw_file),
+        file,
         section_iter,
         zoom_infos,
         max_uncompressed_buf_size,
@@ -805,7 +798,7 @@ pub(crate) async fn write_vals_no_zoom<
     G: Fn(ChromProcessingInputNoZooms, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
     mut vals_iter: V,
-    file: BufWriter<File>,
+    mut file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
     pool: ThreadPool,
@@ -821,7 +814,6 @@ pub(crate) async fn write_vals_no_zoom<
     ProcessChromError<Values::Error>,
 > {
     let mut section_iter = vec![];
-    let mut raw_file = file.into_inner()?;
 
     let mut summary: Option<Summary> = None;
     let mut max_uncompressed_buf_size = 0;
@@ -913,7 +905,7 @@ pub(crate) async fn write_vals_no_zoom<
                 ) = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
-                data.switch(raw_file);
+                data.switch(file);
 
                 // All the futures are actually just handles, so these are purely for the result
                 let joined_future = match try_join!(summary_future, data_write_future) {
@@ -923,7 +915,7 @@ pub(crate) async fn write_vals_no_zoom<
                 let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(sections.into_iter());
-                raw_file = data.await_real_file();
+                file = data.await_real_file();
 
                 match &mut summary {
                     None => summary = Some(chrom_summary),
@@ -955,7 +947,7 @@ pub(crate) async fn write_vals_no_zoom<
     Ok((
         chrom_ids,
         summary_complete,
-        BufWriter::new(raw_file),
+        file,
         section_iter,
         max_uncompressed_buf_size,
     ))

@@ -254,7 +254,7 @@ impl<R: Write + Send + 'static> Drop for TempFileBufferWriter<R> {
         match &mut self.buffer_state {
             BufferState::NotStarted => {}
             BufferState::Temp(f) => {
-                let temp = f.take();
+                let temp: Option<File> = f.take();
                 self.closed_file.swap(Some(ClosedFile::Temp(temp.unwrap())));
             }
             BufferState::Real(f) => {
