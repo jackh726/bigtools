@@ -13,7 +13,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingFnOutput};
+use crate::{write_info, ChromData};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -39,7 +39,7 @@ impl BigBedWrite {
 
     pub fn write<
         Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData<Values, ChromProcessingFnOutput<Values::Error>>,
+        V: ChromData<Values = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,

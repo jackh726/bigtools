@@ -54,10 +54,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::reopen::{Reopen, SeekableRead};
 use crate::utils::tell::Tell;
-use crate::{
-    write_info, ChromData, ChromProcessingFnOutput, ChromProcessingFnOutputNoZooms,
-    ChromProcessingInputNoZooms,
-};
+use crate::{write_info, ChromData, ChromProcessingInputNoZooms};
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
@@ -81,7 +78,7 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Values, ChromProcessingFnOutput<Values::Error>>,
+        V: ChromData<Values = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
@@ -163,7 +160,7 @@ impl BigWigWrite {
     pub fn write_multipass<
         F: Reopen + SeekableRead,
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Values, ChromProcessingFnOutputNoZooms<Values::Error>>,
+        V: ChromData<Values = Values>,
     >(
         self,
         in_file: F,

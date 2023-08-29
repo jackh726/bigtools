@@ -132,7 +132,7 @@ pub(crate) struct ChromProcessingInputNoZooms {
     pub(crate) ftx: ChromProcessingInputSectionChannel,
 }
 
-pub struct ChromProcessingOutput<SourceError> {
+pub(crate) struct ChromProcessingOutput<SourceError> {
     pub sections: crossbeam_channel::Receiver<Section>,
     pub data: TempFileBuffer<BufWriter<File>>,
     pub data_write_future: Box<
@@ -141,7 +141,7 @@ pub struct ChromProcessingOutput<SourceError> {
     pub zooms: Vec<TempZoomInfo<SourceError>>,
 }
 
-pub struct ChromProcessingOutputNoZooms<SourceError> {
+pub(crate) struct ChromProcessingOutputNoZooms<SourceError> {
     pub sections: crossbeam_channel::Receiver<Section>,
     pub data: TempFileBuffer<BufWriter<File>>,
     pub data_write_future: Box<
@@ -572,34 +572,45 @@ pub enum ChromDataState<ChromOutput, Error> {
     Error(Error),
 }
 
+pub struct ChromProcessingKey(pub(crate) u32);
+
 /// Effectively like an Iterator of chromosome data
-pub trait ChromData<Values: ChromValues, ChromOutput>: Sized {
+pub trait ChromData: Sized {
+    type Values: ChromValues;
+
     fn advance<
+        State,
         F: FnMut(
             String,
-            Values,
-            &mut BTreeMap<u32, ChromOutput>,
-        ) -> Result<u32, ProcessChromError<Values::Error>>,
+            Self::Values,
+            &mut State,
+        ) -> Result<
+            ChromProcessingKey,
+            ProcessChromError<<Self::Values as ChromValues>::Error>,
+        >,
     >(
         &mut self,
         do_read: &mut F,
-        map: &mut BTreeMap<u32, ChromOutput>,
-    ) -> Result<ChromDataState<u32, Values::Error>, ProcessChromError<Values::Error>>;
+        state: &mut State,
+    ) -> Result<
+        ChromDataState<ChromProcessingKey, <Self::Values as ChromValues>::Error>,
+        ProcessChromError<<Self::Values as ChromValues>::Error>,
+    >;
 }
 
-pub struct ChromProcessingFnOutput<Error>(
+pub(crate) struct ChromProcessingFnOutput<Error>(
     pub(crate) WriteSummaryFuture<Error>,
     pub(crate) ChromProcessingOutput<Error>,
 );
 
-pub struct ChromProcessingFnOutputNoZooms<Error>(
+pub(crate) struct ChromProcessingFnOutputNoZooms<Error>(
     pub(crate) WriteSummaryFuture<Error>,
     pub(crate) ChromProcessingOutputNoZooms<Error>,
 );
 
 pub(crate) async fn write_vals<
     Values: ChromValues,
-    V: ChromData<Values, ChromProcessingFnOutput<Values::Error>>,
+    V: ChromData<Values = Values>,
     Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
     G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
@@ -652,7 +663,7 @@ pub(crate) async fn write_vals<
     let mut do_read = |chrom: String,
                        data: _,
                        output: &mut BTreeMap<u32, ChromProcessingFnOutput<Values::Error>>|
-     -> Result<u32, ProcessChromError<_>> {
+     -> Result<ChromProcessingKey, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
@@ -734,13 +745,13 @@ pub(crate) async fn write_vals<
             ChromProcessingFnOutput(f_handle.boxed(), processing_output),
         );
 
-        Ok(curr_key)
+        Ok(ChromProcessingKey(curr_key))
     };
 
     let chrom_ids = loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
-                let read = output.remove(&read).unwrap();
+                let read = output.remove(&read.0).unwrap();
                 let ChromProcessingFnOutput(
                     summary_future,
                     ChromProcessingOutput {
@@ -842,7 +853,7 @@ pub(crate) async fn write_vals<
 
 pub(crate) async fn write_vals_no_zoom<
     Values: ChromValues,
-    V: ChromData<Values, ChromProcessingFnOutputNoZooms<Values::Error>>,
+    V: ChromData<Values = Values>,
     Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
     G: Fn(ChromProcessingInputNoZooms, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
 >(
@@ -875,7 +886,7 @@ pub(crate) async fn write_vals_no_zoom<
     let mut do_read = |chrom: String,
                        data: _,
                        output: &mut BTreeMap<u32, _>|
-     -> Result<u32, ProcessChromError<_>> {
+     -> Result<ChromProcessingKey, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
@@ -935,13 +946,13 @@ pub(crate) async fn write_vals_no_zoom<
             ChromProcessingFnOutputNoZooms(f_handle.boxed(), processing_output),
         );
 
-        Ok(curr_key)
+        Ok(ChromProcessingKey(curr_key))
     };
 
     let chrom_ids = loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
-                let read = output.remove(&read).unwrap();
+                let read = output.remove(&read.0).unwrap();
                 let ChromProcessingFnOutputNoZooms(
                     summary_future,
                     ChromProcessingOutputNoZooms {

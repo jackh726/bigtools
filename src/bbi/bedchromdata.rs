@@ -7,7 +7,7 @@
 //! `BedParserParallelStreamingIterator` is a more complicated wrapper that will queue up
 //! to 4 extra chromosomes to be processed concurrently.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use crate::bed::bedparser::{
 };
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ProcessChromError};
+use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: BedParser<S>,
@@ -35,21 +35,23 @@ impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
     }
 }
 
-impl<S: StreamingBedValues, ChromOutput> ChromData<BedChromData<S>, ChromOutput>
-    for BedParserStreamingIterator<S>
-{
+impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
+    type Values = BedChromData<S>;
+
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
     fn advance<
+        State,
         F: FnMut(
             String,
             BedChromData<S>,
-            &mut BTreeMap<u32, ChromOutput>,
-        ) -> Result<u32, ProcessChromError<BedValueError>>,
+            &mut State,
+        ) -> Result<ChromProcessingKey, ProcessChromError<BedValueError>>,
     >(
         &mut self,
         do_read: &mut F,
-        map: &mut BTreeMap<u32, ChromOutput>,
-    ) -> Result<ChromDataState<u32, BedValueError>, ProcessChromError<BedValueError>> {
+        state: &mut State,
+    ) -> Result<ChromDataState<ChromProcessingKey, BedValueError>, ProcessChromError<BedValueError>>
+    {
         Ok(match self.bed_data.next_chrom() {
             Some(Ok((chrom, group))) => {
                 // First, if we don't want to allow out of order chroms, error here
@@ -61,7 +63,7 @@ impl<S: StreamingBedValues, ChromOutput> ChromData<BedChromData<S>, ChromOutput>
                     }
                 }
 
-                let read = do_read(chrom, group, map)?;
+                let read = do_read(chrom, group, state)?;
                 ChromDataState::NewChrom(read)
             }
             Some(Err(e)) => ChromDataState::Error(e),
@@ -78,7 +80,7 @@ pub struct BedParserParallelStreamingIterator<V, E, ChromError> {
     parse_fn: Parser<V>,
     path: PathBuf,
 
-    queued_reads: VecDeque<Result<ChromDataState<u32, ChromError>, E>>,
+    queued_reads: VecDeque<Result<ChromDataState<ChromProcessingKey, ChromError>, E>>,
 }
 
 impl<V, E, ChromError> BedParserParallelStreamingIterator<V, E, ChromError> {
@@ -105,20 +107,24 @@ impl<V, E, ChromError> BedParserParallelStreamingIterator<V, E, ChromError> {
     }
 }
 
-impl<V, ChromOutput> ChromData<BedChromData<BedFileStream<V, BufReader<File>>>, ChromOutput>
+impl<V> ChromData
     for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError>
 {
+    type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
+
     fn advance<
+        State,
         F: FnMut(
             String,
             BedChromData<BedFileStream<V, BufReader<File>>>,
-            &mut BTreeMap<u32, ChromOutput>,
-        ) -> Result<u32, ProcessChromError<BedValueError>>,
+            &mut State,
+        ) -> Result<ChromProcessingKey, ProcessChromError<BedValueError>>,
     >(
         &mut self,
         do_read: &mut F,
-        map: &mut BTreeMap<u32, ChromOutput>,
-    ) -> Result<ChromDataState<u32, BedValueError>, ProcessChromError<BedValueError>> {
+        state: &mut State,
+    ) -> Result<ChromDataState<ChromProcessingKey, BedValueError>, ProcessChromError<BedValueError>>
+    {
         let mut begin_next = |_self: &mut Self| -> Result<_, ProcessChromError<BedValueError>> {
             let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
@@ -147,7 +153,7 @@ impl<V, ChromOutput> ChromData<BedChromData<BedFileStream<V, BufReader<File>>>, 
                         }
                     }
 
-                    let read = do_read(chrom, group, map)?;
+                    let read = do_read(chrom, group, state)?;
 
                     ChromDataState::NewChrom(read)
                 }
@@ -209,6 +215,7 @@ mod tests {
         future_channel, BBIWriteOptions, ChromProcessingFnOutput, ChromProcessingInput,
         ChromProcessingOutput, ProcessChromError, TempZoomInfo,
     };
+    use std::collections::BTreeMap;
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
@@ -248,9 +255,9 @@ mod tests {
         let mut key = 0;
         let mut output: BTreeMap<u32, ChromProcessingFnOutput<_>> = BTreeMap::new();
         let mut do_read = |chrom: String,
-                           data,
-                           output: &mut BTreeMap<u32, _>|
-         -> Result<u32, ProcessChromError<BedValueError>> {
+                           data: _,
+                           output: &mut BTreeMap<u32, ChromProcessingFnOutput<BedValueError>>|
+         -> Result<ChromProcessingKey, ProcessChromError<BedValueError>> {
             let length = match chrom_map.get(&chrom) {
                 Some(length) => *length,
                 None => {
@@ -319,7 +326,7 @@ mod tests {
                 ChromProcessingFnOutput(f_handle.boxed(), processing_output),
             );
 
-            Ok(curr_key)
+            Ok(ChromProcessingKey(curr_key))
         };
         assert!(matches!(
             chsi.advance(&mut do_read, &mut output),
