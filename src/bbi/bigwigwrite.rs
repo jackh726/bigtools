@@ -52,8 +52,12 @@ use futures::task::SpawnExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::utils::chromvalues::ChromValues;
+use crate::utils::reopen::{Reopen, SeekableRead};
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData};
+use crate::{
+    write_info, ChromData, ChromProcessingFnOutput, ChromProcessingFnOutputNoZooms,
+    ChromProcessingInputNoZooms,
+};
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
@@ -77,7 +81,7 @@ impl BigWigWrite {
 
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<ProcessChromError<Values::Error>, Output = Values>,
+        V: ChromData<Values, ChromProcessingFnOutput<Values::Error>>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
@@ -135,6 +139,93 @@ impl BigWigWrite {
 
         let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
         let num_zooms = zoom_entries.len() as u16;
+
+        write_info(
+            &mut file,
+            BIGWIG_MAGIC,
+            num_zooms,
+            chrom_index_start,
+            full_data_offset,
+            index_start,
+            0,
+            0,
+            0,
+            total_summary_offset,
+            uncompress_buf_size,
+            zoom_entries,
+            summary,
+            total_sections,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn write_multipass<
+        F: Reopen + SeekableRead,
+        Values: ChromValues<Value = Value> + Send + 'static,
+        V: ChromData<Values, ChromProcessingFnOutputNoZooms<Values::Error>>,
+    >(
+        self,
+        in_file: F,
+        make_vals: impl Fn(F) -> V,
+        chrom_sizes: HashMap<String, u32>,
+        pool: ThreadPool,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
+        let fp = File::create(self.path.clone())?;
+        let mut file = BufWriter::new(fp);
+
+        write_blank_headers(&mut file)?;
+
+        let total_summary_offset = file.tell()?;
+        file.write_all(&[0; 40])?;
+
+        let full_data_offset = file.tell()?;
+
+        // Total items
+        // Unless we know the vals ahead of time, we can't estimate total sections ahead of time.
+        // Even then simply doing "(vals.len() as u32 + ITEMS_PER_SLOT - 1) / ITEMS_PER_SLOT"
+        // underestimates because sections are split by chrom too, not just size.
+        // Skip for now, and come back when we write real header + summary.
+        file.write_u64::<NativeEndian>(0)?;
+
+        let vals = make_vals(in_file);
+
+        let pre_data = file.tell()?;
+        // Write data to file and return
+        let (chrom_ids, summary, mut file, raw_sections_iter, uncompress_buf_size) =
+            block_on(bbiwrite::write_vals_no_zoom(
+                vals,
+                file,
+                self.options,
+                BigWigWrite::process_chrom_no_zooms,
+                pool,
+                chrom_sizes.clone(),
+            ))?;
+        let data_size = file.tell()? - pre_data;
+        let mut current_offset = pre_data;
+        let sections_iter = raw_sections_iter.map(|mut section| {
+            // TODO: this assumes that all the data is contiguous
+            // This will fail if we ever space the sections in any way
+            section.offset = current_offset;
+            current_offset += section.size;
+            section
+        });
+
+        // Since the chrom tree is read before the index, we put this before the full data index
+        // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
+        // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
+        // but requires us to know all the data ahead of time (when writing)
+        let chrom_index_start = file.tell()?;
+        write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
+
+        let index_start = file.tell()?;
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, self.options);
+        write_rtreeindex(&mut file, nodes, levels, total_sections, self.options)?;
+
+        //let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        //let num_zooms = zoom_entries.len() as u16;
+        let zoom_entries = vec![];
+        let num_zooms = 0;
 
         write_info(
             &mut file,
@@ -328,6 +419,125 @@ impl BigWigWrite {
                 }
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
             }
+            // Then, add the current item to the actual values, and encode if full, or last item
+            state_val.items.push(current_val);
+            if chrom_values.peek().is_none()
+                || state_val.items.len() >= options.items_per_slot as usize
+            {
+                let items = std::mem::take(&mut state_val.items);
+                let handle = pool
+                    .spawn_with_handle(encode_section(options.compress, items, chrom_id))
+                    .expect("Couldn't spawn.");
+                ftx.send(handle.boxed()).await.expect("Couldn't send");
+            }
+        }
+
+        debug_assert!(state_val.items.is_empty());
+        for zoom_item in state_val.zoom_items.iter_mut() {
+            debug_assert!(zoom_item.live_info.is_none());
+            debug_assert!(zoom_item.records.is_empty());
+        }
+
+        if summary.total_items == 0 {
+            summary.min_val = 0.0;
+            summary.max_val = 0.0;
+        }
+        Ok(summary)
+    }
+
+    pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = Value>>(
+        processing_input: ChromProcessingInputNoZooms,
+        chrom_id: u32,
+        options: BBIWriteOptions,
+        pool: ThreadPool,
+        mut chrom_values: I,
+        chrom: String,
+        chrom_length: u32,
+    ) -> Result<Summary, ProcessChromError<I::Error>> {
+        let ChromProcessingInputNoZooms { mut ftx } = processing_input;
+
+        struct ZoomItem {
+            // How many bases this zoom item covers
+            size: u32,
+            // The current zoom entry
+            live_info: Option<ZoomRecord>,
+            // All zoom entries in the current section
+            records: Vec<ZoomRecord>,
+        }
+        struct BedGraphSection {
+            items: Vec<Value>,
+            zoom_items: Vec<ZoomItem>,
+        }
+
+        let mut summary = Summary {
+            total_items: 0,
+            bases_covered: 0,
+            min_val: f64::MAX,
+            max_val: f64::MIN,
+            sum: 0.0,
+            sum_squares: 0.0,
+        };
+
+        let mut state_val = BedGraphSection {
+            items: Vec::with_capacity(options.items_per_slot as usize),
+            zoom_items: std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
+                .take(options.max_zooms as usize)
+                .map(|size| ZoomItem {
+                    size,
+                    live_info: None,
+                    records: Vec::with_capacity(options.items_per_slot as usize),
+                })
+                .collect(),
+        };
+        while let Some(current_val) = chrom_values.next() {
+            // If there is a source error, propogate that up
+            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+
+            // Check a few preconditions:
+            // - The current end is greater than or equal to the start
+            // - The current end is at most the chromosome length
+            // - If there is a next value, then it does not overlap value
+            // TODO: test these correctly fails
+            if current_val.start > current_val.end {
+                return Err(ProcessChromError::InvalidInput(format!(
+                    "Invalid bed graph: {} > {}",
+                    current_val.start, current_val.end
+                )));
+            }
+            if current_val.end > chrom_length {
+                return Err(ProcessChromError::InvalidInput(format!(
+                    "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
+                    current_val.end, chrom, chrom_length
+                )));
+            }
+            match chrom_values.peek() {
+                None | Some(Err(_)) => (),
+                Some(Ok(next_val)) => {
+                    if current_val.end > next_val.start {
+                        return Err(ProcessChromError::InvalidInput(format!(
+                            "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
+                            chrom,
+                            current_val.start,
+                            current_val.end,
+                            next_val.start,
+                            next_val.end,
+                        )));
+                    }
+                }
+            }
+
+            // Now, actually process the value.
+
+            // First, update the summary.
+            let len = current_val.end - current_val.start;
+            let val = f64::from(current_val.value);
+            summary.total_items += 1;
+            summary.bases_covered += u64::from(len);
+            summary.min_val = summary.min_val.min(val);
+            summary.max_val = summary.max_val.max(val);
+            summary.sum += f64::from(len) * val;
+            summary.sum_squares += f64::from(len) * val * val;
+
             // Then, add the current item to the actual values, and encode if full, or last item
             state_val.items.push(current_val);
             if chrom_values.peek().is_none()

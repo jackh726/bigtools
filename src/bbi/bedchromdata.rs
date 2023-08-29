@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::bed::bedparser::{
@@ -17,7 +17,7 @@ use crate::bed::bedparser::{
 };
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ChromProcessingFnOutput};
+use crate::{ChromData, ChromDataState, ProcessChromError};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: BedParser<S>,
@@ -35,19 +35,16 @@ impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
     }
 }
 
-impl<S: StreamingBedValues, E: From<io::Error>> ChromData<E> for BedParserStreamingIterator<S> {
-    type Output = BedChromData<S>;
-
+impl<S: StreamingBedValues, ChromOutput> ChromData<BedChromData<S>, ChromOutput>
+    for BedParserStreamingIterator<S>
+{
     /// Advancing after `ChromDataState::Finished` has been called will result in a panic.
     fn advance<
-        F: FnMut(
-            String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+        F: FnMut(String, BedChromData<S>) -> Result<ChromOutput, ProcessChromError<BedValueError>>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
+    ) -> Result<ChromDataState<ChromOutput, BedValueError>, ProcessChromError<BedValueError>> {
         Ok(match self.bed_data.next_chrom() {
             Some(Ok((chrom, group))) => {
                 // First, if we don't want to allow out of order chroms, error here
@@ -68,7 +65,7 @@ impl<S: StreamingBedValues, E: From<io::Error>> ChromData<E> for BedParserStream
     }
 }
 
-pub struct BedParserParallelStreamingIterator<V, O: ChromValues, E> {
+pub struct BedParserParallelStreamingIterator<V, E, ChromOutput, ChromError> {
     allow_out_of_order_chroms: bool,
     last_chrom: Option<String>,
 
@@ -76,10 +73,12 @@ pub struct BedParserParallelStreamingIterator<V, O: ChromValues, E> {
     parse_fn: Parser<V>,
     path: PathBuf,
 
-    queued_reads: VecDeque<Result<ChromDataState<<O as ChromValues>::Error>, E>>,
+    queued_reads: VecDeque<Result<ChromDataState<ChromOutput, ChromError>, E>>,
 }
 
-impl<V, O: ChromValues, E> BedParserParallelStreamingIterator<V, O, E> {
+impl<V, E, ChromOutput, ChromError>
+    BedParserParallelStreamingIterator<V, E, ChromOutput, ChromError>
+{
     pub fn new(
         mut chrom_indices: Vec<(u64, String)>,
         allow_out_of_order_chroms: bool,
@@ -103,25 +102,28 @@ impl<V, O: ChromValues, E> BedParserParallelStreamingIterator<V, O, E> {
     }
 }
 
-impl<V, E: From<io::Error>> ChromData<E>
-    for BedParserParallelStreamingIterator<V, BedChromData<BedFileStream<V, BufReader<File>>>, E>
+impl<V, ChromOutput> ChromData<BedChromData<BedFileStream<V, BufReader<File>>>, ChromOutput>
+    for BedParserParallelStreamingIterator<
+        V,
+        ProcessChromError<BedValueError>,
+        ChromOutput,
+        BedValueError,
+    >
 {
-    type Output = BedChromData<BedFileStream<V, BufReader<File>>>;
-
     fn advance<
         F: FnMut(
             String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+            BedChromData<BedFileStream<V, BufReader<File>>>,
+        ) -> Result<ChromOutput, ProcessChromError<BedValueError>>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
-        let mut begin_next = |_self: &mut Self| -> Result<_, E> {
+    ) -> Result<ChromDataState<ChromOutput, BedValueError>, ProcessChromError<BedValueError>> {
+        let mut begin_next = |_self: &mut Self| -> Result<_, ProcessChromError<BedValueError>> {
             let curr = match _self.chrom_indices.pop() {
                 Some(c) => c,
                 None => {
-                    return Ok(ChromDataState::<<Self::Output as ChromValues>::Error>::Finished);
+                    return Ok(ChromDataState::<ChromOutput, BedValueError>::Finished);
                 }
             };
 
@@ -204,7 +206,7 @@ mod tests {
 
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
-    use crate::{BBIWriteOptions, ProcessChromError};
+    use crate::{BBIWriteOptions, ChromProcessingFnOutput, ProcessChromError};
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;

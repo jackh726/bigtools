@@ -16,7 +16,7 @@ use bigtools::bbiread::BBIReadError;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::reopen::ReopenableFile;
-use bigtools::{ChromData, ChromDataState, ChromProcessingFnOutput};
+use bigtools::{ChromData, ChromDataState, ProcessChromError};
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
@@ -218,19 +218,15 @@ struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
-impl<E: From<io::Error>> ChromData<E> for ChromGroupReadImpl {
-    type Output = MergingValues;
-
+impl<CO> ChromData<MergingValues, CO> for ChromGroupReadImpl {
     fn advance<
-        F: FnMut(
-            String,
-            Self::Output,
-        ) -> Result<ChromProcessingFnOutput<<Self::Output as ChromValues>::Error>, E>,
+        F: FnMut(String, MergingValues) -> Result<CO, ProcessChromError<MergingValuesError>>,
     >(
         &mut self,
         do_read: &mut F,
-    ) -> Result<ChromDataState<<Self::Output as ChromValues>::Error>, E> {
-        let next = self.iter.next();
+    ) -> Result<ChromDataState<CO, MergingValuesError>, ProcessChromError<MergingValuesError>> {
+        let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
+            self.iter.next();
         Ok(match next {
             Some(Err(err)) => ChromDataState::Error(err.into()),
             Some(Ok((chrom, _, mergingvalues))) => {
