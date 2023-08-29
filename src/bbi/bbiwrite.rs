@@ -628,14 +628,14 @@ pub(crate) async fn write_vals<
     let mut zooms_map: BTreeMap<u32, ZoomValue> =
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
-            .map(|size| -> io::Result<_> {
+            .map(|size| {
                 let section_iter: Vec<Box<dyn Iterator<Item = Section>>> = vec![];
                 let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                    TempFileBuffer::new()?;
+                    TempFileBuffer::new();
                 let value = (section_iter, buf, Some(write));
-                Ok((size, value))
+                (size, value)
             })
-            .collect::<io::Result<_>>()?;
+            .collect();
 
     let mut section_iter = vec![];
     let mut raw_file = file.into_inner()?;
@@ -676,7 +676,7 @@ pub(crate) async fn write_vals<
         //   All of this is done for zoom sections too.
         //
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-        let (procesing_input, processing_output) = setup_channels(&mut pool, options)?;
+        let (procesing_input, processing_output) = setup_channels(&mut pool, options);
 
         let (f_remote, f_handle) = process_chrom(
             procesing_input,
@@ -688,7 +688,7 @@ pub(crate) async fn write_vals<
             length,
         )
         .remote_handle();
-        pool.spawn(f_remote).expect("Couldn't spawn future.");
+        pool.spawn_ok(f_remote);
         Ok(ChromProcessingFnOutput(f_handle.boxed(), processing_output))
     };
 
@@ -864,13 +864,13 @@ pub(crate) async fn write_vals_no_zoom<
             let (ftx, frx) = channel(options.channel_size);
 
             let (sections_handle, buf, section_receiver) = {
-                let (buf, write) = TempFileBuffer::new()?;
+                let (buf, write) = TempFileBuffer::new();
                 let file = BufWriter::new(write);
 
                 let (section_sender, section_receiver) = unbounded();
                 let (sections_remote, sections_handle) =
                     write_data(file, section_sender, frx).remote_handle();
-                pool.spawn(sections_remote).expect("Couldn't spawn future.");
+                pool.spawn_ok(sections_remote);
                 (sections_handle, buf, section_receiver)
             };
 
@@ -894,7 +894,7 @@ pub(crate) async fn write_vals_no_zoom<
             length,
         )
         .remote_handle();
-        pool.spawn(f_remote).expect("Couldn't spawn future.");
+        pool.spawn_ok(f_remote);
         Ok(ChromProcessingFnOutputNoZooms(
             f_handle.boxed(),
             processing_output,
@@ -995,43 +995,43 @@ async fn write_data<W: Write, SourceError: Send>(
 pub(crate) fn setup_channels<SourceError: Send + 'static>(
     pool: &mut ThreadPool,
     options: BBIWriteOptions,
-) -> io::Result<(ChromProcessingInput, ChromProcessingOutput<SourceError>)> {
+) -> (ChromProcessingInput, ChromProcessingOutput<SourceError>) {
     let (ftx, frx) = channel(options.channel_size);
 
     let (sections_handle, buf, section_receiver) = {
-        let (buf, write) = TempFileBuffer::new()?;
+        let (buf, write) = TempFileBuffer::new();
         let file = BufWriter::new(write);
 
         let (section_sender, section_receiver) = unbounded();
         let (sections_remote, sections_handle) =
             write_data(file, section_sender, frx).remote_handle();
-        pool.spawn(sections_remote).expect("Couldn't spawn future.");
+        pool.spawn_ok(sections_remote);
         (sections_handle, buf, section_receiver)
     };
 
     let processed_zooms: Vec<_> =
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
-            .map(|size| -> io::Result<_> {
+            .map(|size| {
                 let (ftx, frx) = channel(options.channel_size);
-                let (buf, write) = TempFileBuffer::new()?;
+                let (buf, write) = TempFileBuffer::new();
                 let file = BufWriter::new(write);
 
                 let (section_sender, section_receiver) = unbounded();
                 let (remote, handle) = write_data(file, section_sender, frx).remote_handle();
-                pool.spawn(remote).expect("Couldn't spawn future.");
+                pool.spawn_ok(remote);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
                     data_write_future: Box::new(handle),
                     data: buf,
                     sections: section_receiver,
                 };
-                Ok((zoom_info, ftx))
+                (zoom_info, ftx)
             })
-            .collect::<io::Result<_>>()?;
+            .collect();
     let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) = processed_zooms.into_iter().unzip();
 
-    Ok((
+    (
         ChromProcessingInput {
             zooms_channels,
             ftx,
@@ -1042,7 +1042,7 @@ pub(crate) fn setup_channels<SourceError: Send + 'static>(
             data_write_future: Box::new(sections_handle),
             zooms: zoom_infos,
         },
-    ))
+    )
 }
 
 #[cfg(all(test, feature = "read"))]

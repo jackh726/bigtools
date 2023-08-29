@@ -34,7 +34,7 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
         .map(|chrom| {
             let bigbed = bigbed.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                TempFileBuffer::new()?;
+                TempFileBuffer::new();
             let writer = io::BufWriter::new(file);
             async fn file_future<R: SeekableRead + 'static>(
                 mut bigbed: BigBedRead<R>,

@@ -38,12 +38,12 @@ pub struct TempFileBufferWriter<R: Write + Send + 'static> {
 
 impl<R: Write + Send + 'static> TempFileBuffer<R> {
     /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to a temporary file
-    pub fn new() -> io::Result<(TempFileBuffer<R>, TempFileBufferWriter<R>)> {
+    pub fn new() -> (TempFileBuffer<R>, TempFileBufferWriter<R>) {
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
         let buffer_state = BufferState::NotStarted;
         let closed_file = Arc::new(AtomicCell::new(None));
         let real_file = Arc::new(AtomicCell::new(None));
-        Ok((
+        (
             TempFileBuffer {
                 closed: closed.clone(),
                 closed_file: closed_file.clone(),
@@ -56,7 +56,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 closed_file,
                 real_file,
             },
-        ))
+        )
     }
 
     /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to the "real" file.
