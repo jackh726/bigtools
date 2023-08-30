@@ -123,14 +123,6 @@ pub struct TempZoomInfo<SourceError> {
 pub(crate) type ChromProcessingInputSectionChannel = futures::channel::mpsc::Sender<
     Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
 >;
-pub(crate) struct ChromProcessingInput {
-    pub(crate) zooms_channels: Vec<ChromProcessingInputSectionChannel>,
-    pub(crate) ftx: ChromProcessingInputSectionChannel,
-}
-
-pub(crate) struct ChromProcessingInputNoZooms {
-    pub(crate) ftx: ChromProcessingInputSectionChannel,
-}
 
 pub type WriteSummaryFuture<SourceError> =
     Pin<Box<dyn Future<Output = Result<Summary, ProcessChromError<SourceError>>> + Send>>;
@@ -585,7 +577,16 @@ pub(crate) async fn write_vals<
     Values: ChromValues,
     V: ChromData<Values = Values>,
     Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
-    G: Fn(ChromProcessingInput, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
+    G: Fn(
+        Vec<ChromProcessingInputSectionChannel>,
+        ChromProcessingInputSectionChannel,
+        u32,
+        BBIWriteOptions,
+        ThreadPool,
+        Values,
+        String,
+        u32,
+    ) -> Fut,
 >(
     mut vals_iter: V,
     mut file: BufWriter<File>,
@@ -686,13 +687,10 @@ pub(crate) async fn write_vals<
             }
             (zoom_infos, zooms_channels)
         };
-        let processing_input = ChromProcessingInput {
-            zooms_channels,
-            ftx,
-        };
 
         let (f_remote, f_handle) = process_chrom(
-            processing_input,
+            zooms_channels,
+            ftx,
             chrom_id,
             options,
             pool.clone(),
@@ -813,7 +811,15 @@ pub(crate) async fn write_vals_no_zoom<
     Values: ChromValues,
     V: ChromData<Values = Values>,
     Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
-    G: Fn(ChromProcessingInputNoZooms, u32, BBIWriteOptions, ThreadPool, Values, String, u32) -> Fut,
+    G: Fn(
+        ChromProcessingInputSectionChannel,
+        u32,
+        BBIWriteOptions,
+        ThreadPool,
+        Values,
+        String,
+        u32,
+    ) -> Fut,
 >(
     mut vals_iter: V,
     mut file: BufWriter<File>,
@@ -873,18 +879,9 @@ pub(crate) async fn write_vals_no_zoom<
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, &mut pool);
 
-        let processing_input = ChromProcessingInputNoZooms { ftx };
-
-        let (f_remote, f_handle) = process_chrom(
-            processing_input,
-            chrom_id,
-            options,
-            pool.clone(),
-            data,
-            chrom,
-            length,
-        )
-        .remote_handle();
+        let (f_remote, f_handle) =
+            process_chrom(ftx, chrom_id, options, pool.clone(), data, chrom, length)
+                .remote_handle();
         pool.spawn_ok(f_remote);
 
         let curr_key = key;

@@ -13,13 +13,12 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData};
+use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, ProcessChromError,
-    SectionData,
+    write_rtreeindex, write_zooms, BBIWriteOptions, ProcessChromError, SectionData,
 };
 
 pub struct BigBedWrite {
@@ -140,7 +139,8 @@ impl BigBedWrite {
     }
 
     async fn process_chrom<I>(
-        processing_input: ChromProcessingInput,
+        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+        mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -151,11 +151,6 @@ impl BigBedWrite {
     where
         I: ChromValues<Value = BedEntry> + Send,
     {
-        let ChromProcessingInput {
-            mut zooms_channels,
-            mut ftx,
-        } = processing_input;
-
         // While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
         struct ZoomItem {
             size: u32,

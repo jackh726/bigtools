@@ -54,13 +54,12 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::reopen::{Reopen, SeekableRead};
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingInputNoZooms};
+use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
     self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_zooms, BBIWriteOptions, ChromProcessingInput, ProcessChromError,
-    SectionData,
+    write_rtreeindex, write_zooms, BBIWriteOptions, ProcessChromError, SectionData,
 };
 
 pub struct BigWigWrite {
@@ -245,7 +244,8 @@ impl BigWigWrite {
     }
 
     pub(crate) async fn process_chrom<I: ChromValues<Value = Value>>(
-        processing_input: ChromProcessingInput,
+        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+        mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -253,11 +253,6 @@ impl BigWigWrite {
         chrom: String,
         chrom_length: u32,
     ) -> Result<Summary, ProcessChromError<I::Error>> {
-        let ChromProcessingInput {
-            mut zooms_channels,
-            mut ftx,
-        } = processing_input;
-
         struct ZoomItem {
             // How many bases this zoom item covers
             size: u32,
@@ -443,7 +438,7 @@ impl BigWigWrite {
     }
 
     pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = Value>>(
-        processing_input: ChromProcessingInputNoZooms,
+        mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
         pool: ThreadPool,
@@ -451,8 +446,6 @@ impl BigWigWrite {
         chrom: String,
         chrom_length: u32,
     ) -> Result<Summary, ProcessChromError<I::Error>> {
-        let ChromProcessingInputNoZooms { mut ftx } = processing_input;
-
         struct BedGraphSection {
             items: Vec<Value>,
         }
