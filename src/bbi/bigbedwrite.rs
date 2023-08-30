@@ -139,7 +139,7 @@ impl BigBedWrite {
     }
 
     async fn process_chrom<I>(
-        mut zooms_channels: Vec<ChromProcessingInputSectionChannel>,
+        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
         mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
@@ -157,6 +157,7 @@ impl BigBedWrite {
             live_info: Option<(ZoomRecord, u64)>,
             overlap: IndexList<Value>,
             records: Vec<ZoomRecord>,
+            channel: ChromProcessingInputSectionChannel,
         }
         struct EntriesSection {
             items: Vec<BedEntry>,
@@ -169,13 +170,14 @@ impl BigBedWrite {
         let mut state_val = EntriesSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
             overlap: IndexList::new(),
-            zoom_items: std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-                .take(options.max_zooms as usize)
-                .map(|size| ZoomItem {
+            zoom_items: zooms_channels
+                .into_iter()
+                .map(|(size, channel)| ZoomItem {
                     size,
                     live_info: None,
                     overlap: IndexList::new(),
                     records: Vec::with_capacity(options.items_per_slot as usize),
+                    channel,
                 })
                 .collect(),
         };
@@ -310,7 +312,7 @@ impl BigBedWrite {
                 group.peek().and_then(|v| v.ok()).map(|v| v.start),
             );
 
-            for (i, zoom_item) in state_val.zoom_items.iter_mut().enumerate() {
+            for zoom_item in state_val.zoom_items.iter_mut() {
                 debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
 
                 let item_start = current_val.start;
@@ -392,7 +394,8 @@ impl BigBedWrite {
                                             items,
                                         ))
                                         .expect("Couldn't spawn.");
-                                    zooms_channels[i]
+                                    zoom_item
+                                        .channel
                                         .send(handle.boxed())
                                         .await
                                         .expect("Couln't send");
@@ -453,7 +456,8 @@ impl BigBedWrite {
                             let handle = pool
                                 .spawn_with_handle(encode_zoom_section(options.compress, items))
                                 .expect("Couldn't spawn.");
-                            zooms_channels[i]
+                            zoom_item
+                                .channel
                                 .send(handle.boxed())
                                 .await
                                 .expect("Couln't send");

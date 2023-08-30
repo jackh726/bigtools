@@ -578,7 +578,7 @@ pub(crate) async fn write_vals<
     V: ChromData<Values = Values>,
     Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
     G: Fn(
-        Vec<ChromProcessingInputSectionChannel>,
+        Vec<(u32, ChromProcessingInputSectionChannel)>,
         ChromProcessingInputSectionChannel,
         u32,
         BBIWriteOptions,
@@ -683,7 +683,7 @@ pub(crate) async fn write_vals<
                     sections: section_receiver,
                 };
                 zoom_infos.push(zoom_info);
-                zooms_channels.push(ftx);
+                zooms_channels.push((size, ftx));
             }
             (zoom_infos, zooms_channels)
         };
@@ -942,6 +942,225 @@ pub(crate) async fn write_vals_no_zoom<
         section_iter,
         max_uncompressed_buf_size,
     ))
+}
+
+pub(crate) async fn write_zoom_vals<
+    Values: ChromValues,
+    V: ChromData<Values = Values>,
+    Fut: Future<Output = Result<(), ProcessChromError<Values::Error>>> + Send + 'static,
+    G: Fn(
+        Vec<(u32, ChromProcessingInputSectionChannel)>,
+        u32,
+        BBIWriteOptions,
+        ThreadPool,
+        Values,
+    ) -> Fut,
+>(
+    mut vals_iter: V,
+    options: BBIWriteOptions,
+    process_chrom_zoom: G,
+    mut pool: ThreadPool,
+    chrom_ids: &HashMap<String, u32>,
+    average_size: u32,
+    mut file: BufWriter<File>,
+    data_size: u64,
+) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), ProcessChromError<Values::Error>> {
+    // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
+    type ZoomValue = (
+        Vec<crossbeam_channel::IntoIter<Section>>,
+        TempFileBuffer<BufWriter<File>>,
+        Option<TempFileBufferWriter<BufWriter<File>>>,
+    );
+
+    pub struct TempZoomInfo<SourceError> {
+        pub resolution: u32,
+        pub data_write_future: Box<
+            dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>>
+                + Send
+                + Unpin,
+        >,
+        pub data: TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
+        pub sections: crossbeam_channel::Receiver<Section>,
+    }
+
+    let mut zooms_map: BTreeMap<u32, ZoomValue> =
+        std::iter::successors(Some(average_size * 4), |z| Some(z * 4))
+            .skip_while(|size| {
+                let mut reduced_size = *size * 32;
+                if options.compress {
+                    reduced_size /= 2; // Estimate as kent does
+                }
+                reduced_size as u64 > data_size / 2
+            })
+            .take(options.max_zooms as usize)
+            .map(|size| {
+                let section_iter = vec![];
+                let (buf, write) = TempFileBuffer::new();
+                let value = (section_iter, buf, Some(write));
+                (size, value)
+            })
+            .collect();
+    let resolutions: Vec<_> = zooms_map.keys().copied().collect();
+
+    let first_zoom_data_offset = file.tell()?;
+    // We can immediately start to write to the file the first zoom
+    match zooms_map.first_entry() {
+        Some(mut first) => first.get_mut().1.switch(file),
+        None => return Ok((file, vec![], 0)),
+    }
+
+    let mut max_uncompressed_buf_size = 0;
+
+    let mut key = 0;
+    let mut output: BTreeMap<u32, _> = BTreeMap::new();
+
+    let mut do_read = |chrom: String,
+                       data: _,
+                       output: &mut BTreeMap<u32, _>|
+     -> Result<ChromProcessingKey, ProcessChromError<_>> {
+        // Make a new id for the chromosome
+        let chrom_id = *chrom_ids
+            .get(&chrom)
+            .expect("Should not have seen a new chrom.");
+
+        let (zoom_infos, zooms_channels) = {
+            let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
+            let mut zooms_channels = Vec::with_capacity(options.max_zooms as usize);
+
+            for size in resolutions.iter().copied() {
+                let (ftx, handle, buf, section_receiver) =
+                    future_channel(options.channel_size, &mut pool);
+                let zoom_info = TempZoomInfo {
+                    resolution: size,
+                    data_write_future: Box::new(handle),
+                    data: buf,
+                    sections: section_receiver,
+                };
+                zoom_infos.push(zoom_info);
+                zooms_channels.push((size, ftx));
+            }
+            (zoom_infos, zooms_channels)
+        };
+
+        let (f_remote, f_handle) =
+            process_chrom_zoom(zooms_channels, chrom_id, options, pool.clone(), data)
+                .remote_handle();
+        pool.spawn_ok(f_remote);
+
+        let curr_key = key;
+        key += 1;
+
+        output.insert(curr_key, (f_handle, zoom_infos));
+
+        Ok(ChromProcessingKey(curr_key))
+    };
+
+    loop {
+        match vals_iter.advance(&mut do_read, &mut output)? {
+            ChromDataState::NewChrom(read) => {
+                let read = output.remove(&read.0).unwrap();
+                let (process_future, mut zooms) = read;
+                // For each zoom, switch the current chromosome to write to the actual zoom file
+                for TempZoomInfo {
+                    resolution: size,
+                    data,
+                    ..
+                } in zooms.iter_mut()
+                {
+                    let zoom = zooms_map.get_mut(size).unwrap();
+                    let writer = zoom.2.take().unwrap();
+                    data.switch(writer);
+                }
+
+                process_future.await?;
+
+                for TempZoomInfo {
+                    resolution,
+                    data_write_future,
+                    data,
+                    sections,
+                } in zooms.into_iter()
+                {
+                    // First, we need to make sure that all the sections that were queued to encode have been written
+                    let data_write_data = data_write_future.await;
+                    let (_num_sections, uncompressed_buf_size) = match data_write_data {
+                        Ok(d) => d,
+                        Err(e) => return Err(e),
+                    };
+                    max_uncompressed_buf_size =
+                        max_uncompressed_buf_size.max(uncompressed_buf_size);
+
+                    let zoom = zooms_map.get_mut(&resolution).unwrap();
+                    // Add the section data to the zoom
+                    zoom.0.push(sections.into_iter());
+                    // Replace the zoom file again
+                    zoom.2.replace(data.await_real_file());
+                }
+            }
+            ChromDataState::Finished => break,
+            ChromDataState::Error(err) => return Err(ProcessChromError::SourceError(err)),
+        }
+    }
+
+    let mut zoom_entries = Vec::with_capacity(zooms_map.len());
+    let mut zooms_map_iter = zooms_map.into_iter();
+
+    // Since the first zoom has already been written to the file, no need to
+    let first_zoom = zooms_map_iter
+        .next()
+        .expect("Should have at least one zoom");
+    // First, we can drop the writer - no more data
+    drop(first_zoom.1 .2);
+    let first_zoom_sections = first_zoom.1 .0.into_iter().flatten();
+    let mut current_offset = first_zoom_data_offset;
+    let sections_iter = first_zoom_sections.map(|mut section| {
+        // TODO: assumes contiguous, see note for primary data
+        section.offset = current_offset;
+        current_offset += section.size;
+        section
+    });
+    // First zoom has already switched, real data
+    file = first_zoom.1 .1.await_real_file();
+    // Generate the rtree index
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+    let first_zoom_index_offset = file.tell()?;
+    write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+    zoom_entries.push(ZoomHeader {
+        reduction_level: first_zoom.0,
+        data_offset: first_zoom_data_offset,
+        index_offset: first_zoom_index_offset,
+    });
+
+    while let Some(zoom) = zooms_map_iter.next() {
+        let zoom_data_offset = file.tell()?;
+        // First, we can drop the writer - no more data
+        drop(zoom.1 .2);
+        let zoom_sections = zoom.1 .0.into_iter().flatten();
+        let mut current_offset = zoom_data_offset;
+        let sections_iter = zoom_sections.map(|mut section| {
+            // TODO: assumes contiguous, see note for primary data
+            section.offset = current_offset;
+            current_offset += section.size;
+            section
+        });
+        // Subsequence zooms have not switched to real file
+        // Await temp and write
+        let mut zoom_file = zoom.1 .1.await_temp_file();
+        zoom_file.seek(SeekFrom::Start(0))?;
+        let mut buf_reader = BufReader::new(zoom_file);
+        io::copy(&mut buf_reader, &mut file)?;
+        // Generate the rtree index
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+        let zoom_index_offset = file.tell()?;
+        write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+        zoom_entries.push(ZoomHeader {
+            reduction_level: first_zoom.0,
+            data_offset: zoom_data_offset,
+            index_offset: zoom_index_offset,
+        });
+    }
+
+    Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
 async fn write_data<W: Write, SourceError: Send>(
