@@ -132,23 +132,6 @@ pub(crate) struct ChromProcessingInputNoZooms {
     pub(crate) ftx: ChromProcessingInputSectionChannel,
 }
 
-pub(crate) struct ChromProcessingOutput<SourceError> {
-    pub sections: crossbeam_channel::Receiver<Section>,
-    pub data: TempFileBuffer<BufWriter<File>>,
-    pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
-    >,
-    pub zooms: Vec<TempZoomInfo<SourceError>>,
-}
-
-pub(crate) struct ChromProcessingOutputNoZooms<SourceError> {
-    pub sections: crossbeam_channel::Receiver<Section>,
-    pub data: TempFileBuffer<BufWriter<File>>,
-    pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
-    >,
-}
-
 pub type WriteSummaryFuture<SourceError> =
     Pin<Box<dyn Future<Output = Result<Summary, ProcessChromError<SourceError>>> + Send>>;
 
@@ -598,16 +581,6 @@ pub trait ChromData: Sized {
     >;
 }
 
-pub(crate) struct ChromProcessingFnOutput<Error>(
-    pub(crate) WriteSummaryFuture<Error>,
-    pub(crate) ChromProcessingOutput<Error>,
-);
-
-pub(crate) struct ChromProcessingFnOutputNoZooms<Error>(
-    pub(crate) WriteSummaryFuture<Error>,
-    pub(crate) ChromProcessingOutputNoZooms<Error>,
-);
-
 pub(crate) async fn write_vals<
     Values: ChromValues,
     V: ChromData<Values = Values>,
@@ -658,11 +631,11 @@ pub(crate) async fn write_vals<
     let mut chrom_ids = IdMap::default();
 
     let mut key = 0;
-    let mut output: BTreeMap<u32, ChromProcessingFnOutput<Values::Error>> = BTreeMap::new();
+    let mut output: BTreeMap<u32, _> = BTreeMap::new();
 
     let mut do_read = |chrom: String,
                        data: _,
-                       output: &mut BTreeMap<u32, ChromProcessingFnOutput<Values::Error>>|
+                       output: &mut BTreeMap<u32, _>|
      -> Result<ChromProcessingKey, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
@@ -689,44 +662,37 @@ pub(crate) async fn write_vals<
         //   All of this is done for zoom sections too.
         //
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-        let (procesing_input, processing_output) = {
-            let (ftx, sections_handle, buf, section_receiver) =
-                future_channel(options.channel_size, &mut pool);
+        let (ftx, sections_handle, buf, section_receiver) =
+            future_channel(options.channel_size, &mut pool);
 
-            let processed_zooms: Vec<_> =
+        let (zoom_infos, zooms_channels) = {
+            let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
+            let mut zooms_channels = Vec::with_capacity(options.max_zooms as usize);
+
+            let zoom_sizes =
                 std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-                    .take(options.max_zooms as usize)
-                    .map(|size| {
-                        let (ftx, handle, buf, section_receiver) =
-                            future_channel(options.channel_size, &mut pool);
-                        let zoom_info = TempZoomInfo {
-                            resolution: size,
-                            data_write_future: Box::new(handle),
-                            data: buf,
-                            sections: section_receiver,
-                        };
-                        (zoom_info, ftx)
-                    })
-                    .collect();
-            let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) =
-                processed_zooms.into_iter().unzip();
-
-            (
-                ChromProcessingInput {
-                    zooms_channels,
-                    ftx,
-                },
-                ChromProcessingOutput {
-                    sections: section_receiver,
+                    .take(options.max_zooms as usize);
+            for size in zoom_sizes {
+                let (ftx, handle, buf, section_receiver) =
+                    future_channel(options.channel_size, &mut pool);
+                let zoom_info = TempZoomInfo {
+                    resolution: size,
+                    data_write_future: Box::new(handle),
                     data: buf,
-                    data_write_future: Box::new(sections_handle),
-                    zooms: zoom_infos,
-                },
-            )
+                    sections: section_receiver,
+                };
+                zoom_infos.push(zoom_info);
+                zooms_channels.push(ftx);
+            }
+            (zoom_infos, zooms_channels)
+        };
+        let processing_input = ChromProcessingInput {
+            zooms_channels,
+            ftx,
         };
 
         let (f_remote, f_handle) = process_chrom(
-            procesing_input,
+            processing_input,
             chrom_id,
             options,
             pool.clone(),
@@ -742,7 +708,7 @@ pub(crate) async fn write_vals<
 
         output.insert(
             curr_key,
-            ChromProcessingFnOutput(f_handle.boxed(), processing_output),
+            (f_handle, section_receiver, buf, sections_handle, zoom_infos),
         );
 
         Ok(ChromProcessingKey(curr_key))
@@ -752,15 +718,7 @@ pub(crate) async fn write_vals<
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
                 let read = output.remove(&read.0).unwrap();
-                let ChromProcessingFnOutput(
-                    summary_future,
-                    ChromProcessingOutput {
-                        sections,
-                        mut data,
-                        data_write_future,
-                        mut zooms,
-                    },
-                ) = read;
+                let (summary_future, sections, mut data, data_write_future, mut zooms) = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
                 data.switch(file);
@@ -881,7 +839,7 @@ pub(crate) async fn write_vals_no_zoom<
     let mut chrom_ids = IdMap::default();
 
     let mut key = 0;
-    let mut output: BTreeMap<u32, ChromProcessingFnOutputNoZooms<Values::Error>> = BTreeMap::new();
+    let mut output: BTreeMap<u32, _> = BTreeMap::new();
 
     let mut do_read = |chrom: String,
                        data: _,
@@ -912,22 +870,13 @@ pub(crate) async fn write_vals_no_zoom<
         //   All of this is done for zoom sections too.
         //
         // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-        let (procesing_input, processing_output) = {
-            let (ftx, sections_handle, buf, section_receiver) =
-                future_channel(options.channel_size, &mut pool);
+        let (ftx, sections_handle, buf, section_receiver) =
+            future_channel(options.channel_size, &mut pool);
 
-            (
-                ChromProcessingInputNoZooms { ftx },
-                ChromProcessingOutputNoZooms {
-                    sections: section_receiver,
-                    data: buf,
-                    data_write_future: Box::new(sections_handle),
-                },
-            )
-        };
+        let processing_input = ChromProcessingInputNoZooms { ftx };
 
         let (f_remote, f_handle) = process_chrom(
-            procesing_input,
+            processing_input,
             chrom_id,
             options,
             pool.clone(),
@@ -941,10 +890,7 @@ pub(crate) async fn write_vals_no_zoom<
         let curr_key = key;
         key += 1;
 
-        output.insert(
-            curr_key,
-            ChromProcessingFnOutputNoZooms(f_handle.boxed(), processing_output),
-        );
+        output.insert(curr_key, (f_handle, section_receiver, buf, sections_handle));
 
         Ok(ChromProcessingKey(curr_key))
     };
@@ -953,14 +899,7 @@ pub(crate) async fn write_vals_no_zoom<
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
                 let read = output.remove(&read.0).unwrap();
-                let ChromProcessingFnOutputNoZooms(
-                    summary_future,
-                    ChromProcessingOutputNoZooms {
-                        sections,
-                        mut data,
-                        data_write_future,
-                    },
-                ) = read;
+                let (summary_future, sections, mut data, data_write_future) = read;
                 // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
                 // Switch that processing output to the real file
                 data.switch(file);
