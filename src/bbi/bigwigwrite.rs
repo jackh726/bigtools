@@ -453,17 +453,8 @@ impl BigWigWrite {
     ) -> Result<Summary, ProcessChromError<I::Error>> {
         let ChromProcessingInputNoZooms { mut ftx } = processing_input;
 
-        struct ZoomItem {
-            // How many bases this zoom item covers
-            size: u32,
-            // The current zoom entry
-            live_info: Option<ZoomRecord>,
-            // All zoom entries in the current section
-            records: Vec<ZoomRecord>,
-        }
         struct BedGraphSection {
             items: Vec<Value>,
-            zoom_items: Vec<ZoomItem>,
         }
 
         let mut summary = Summary {
@@ -477,14 +468,6 @@ impl BigWigWrite {
 
         let mut state_val = BedGraphSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
-            zoom_items: std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-                .take(options.max_zooms as usize)
-                .map(|size| ZoomItem {
-                    size,
-                    live_info: None,
-                    records: Vec::with_capacity(options.items_per_slot as usize),
-                })
-                .collect(),
         };
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
@@ -549,10 +532,6 @@ impl BigWigWrite {
         }
 
         debug_assert!(state_val.items.is_empty());
-        for zoom_item in state_val.zoom_items.iter_mut() {
-            debug_assert!(zoom_item.live_info.is_none());
-            debug_assert!(zoom_item.records.is_empty());
-        }
 
         if summary.total_items == 0 {
             summary.min_val = 0.0;
