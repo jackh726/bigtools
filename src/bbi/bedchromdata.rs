@@ -207,14 +207,9 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
 
 #[cfg(all(test, feature = "write"))]
 mod tests {
-    use futures::FutureExt;
-
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
-    use crate::{
-        future_channel, BBIWriteOptions, ChromProcessingFnOutput, ChromProcessingInput,
-        ChromProcessingOutput, ProcessChromError, TempZoomInfo,
-    };
+    use crate::ProcessChromError;
     use std::collections::BTreeMap;
     use std::fs::File;
     use std::io;
@@ -226,15 +221,6 @@ mod tests {
         dir.push("resources/test");
         dir.push("multi_chrom.bedGraph");
 
-        let chrom_map = std::collections::HashMap::from([
-            ("chr1".to_owned(), 100000),
-            ("chr2".to_owned(), 100000),
-            ("chr3".to_owned(), 100000),
-            ("chr4".to_owned(), 100000),
-            ("chr5".to_owned(), 100000),
-            ("chr6".to_owned(), 100000),
-        ]);
-
         let chrom_indices: Vec<(u64, String)> =
             crate::bed::indexer::index_chroms(File::open(dir.clone())?)?;
 
@@ -245,86 +231,20 @@ mod tests {
             parse_bedgraph,
         );
 
-        let mut pool = futures::executor::ThreadPoolBuilder::new()
-            .pool_size(1)
-            .create()
-            .expect("Unable to create thread pool.");
-        let options = BBIWriteOptions::default();
-
         let mut chrom_ids = crate::utils::idmap::IdMap::default();
         let mut key = 0;
-        let mut output: BTreeMap<u32, ChromProcessingFnOutput<_>> = BTreeMap::new();
+        let mut output: BTreeMap<u32, _> = BTreeMap::new();
         let mut do_read = |chrom: String,
-                           data: _,
-                           output: &mut BTreeMap<u32, ChromProcessingFnOutput<BedValueError>>|
+                           _: _,
+                           output: &mut BTreeMap<u32, _>|
          -> Result<ChromProcessingKey, ProcessChromError<BedValueError>> {
-            let length = match chrom_map.get(&chrom) {
-                Some(length) => *length,
-                None => {
-                    return Err(ProcessChromError::InvalidChromosome(format!(
-                        "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
-                        chrom
-                    )));
-                }
-            };
             // Make a new id for the chromosome
             let chrom_id = chrom_ids.get_id(&chrom);
-
-            let (procesing_input, processing_output) = {
-                let (ftx, sections_handle, buf, section_receiver) =
-                    future_channel(options.channel_size, &mut pool);
-
-                let processed_zooms: Vec<_> =
-                    std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-                        .take(options.max_zooms as usize)
-                        .map(|size| {
-                            let (ftx, handle, buf, section_receiver) =
-                                future_channel(options.channel_size, &mut pool);
-                            let zoom_info = TempZoomInfo {
-                                resolution: size,
-                                data_write_future: Box::new(handle),
-                                data: buf,
-                                sections: section_receiver,
-                            };
-                            (zoom_info, ftx)
-                        })
-                        .collect();
-                let (zoom_infos, zooms_channels): (Vec<_>, Vec<_>) =
-                    processed_zooms.into_iter().unzip();
-
-                (
-                    ChromProcessingInput {
-                        zooms_channels,
-                        ftx,
-                    },
-                    ChromProcessingOutput {
-                        sections: section_receiver,
-                        data: buf,
-                        data_write_future: Box::new(sections_handle),
-                        zooms: zoom_infos,
-                    },
-                )
-            };
-
-            let (f_remote, f_handle) = crate::BigWigWrite::process_chrom(
-                procesing_input,
-                chrom_id,
-                options,
-                pool.clone(),
-                data,
-                chrom,
-                length,
-            )
-            .remote_handle();
-            pool.spawn_ok(f_remote);
 
             let curr_key = key;
             key += 1;
 
-            output.insert(
-                curr_key,
-                ChromProcessingFnOutput(f_handle.boxed(), processing_output),
-            );
+            output.insert(curr_key, chrom_id);
 
             Ok(ChromProcessingKey(curr_key))
         };
