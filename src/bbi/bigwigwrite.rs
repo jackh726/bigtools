@@ -54,7 +54,7 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::reopen::{Reopen, SeekableRead};
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
+use crate::{write_info, ChromData, ChromProcessingInputSectionChannel, Section};
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
@@ -85,19 +85,8 @@ impl BigWigWrite {
         }
     }
 
-    pub fn write<
-        Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Values = Values>,
-    >(
-        self,
-        chrom_sizes: HashMap<String, u32>,
-        vals: V,
-        pool: ThreadPool,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
-        let fp = File::create(self.path.clone())?;
-        let mut file = BufWriter::new(fp);
-
-        write_blank_headers(&mut file)?;
+    fn write_pre<E>(file: &mut BufWriter<File>) -> Result<(u64, u64, u64), ProcessChromError<E>> {
+        write_blank_headers(file)?;
 
         let total_summary_offset = file.tell()?;
         file.write_all(&[0; 40])?;
@@ -112,16 +101,18 @@ impl BigWigWrite {
         file.write_u64::<NativeEndian>(0)?;
 
         let pre_data = file.tell()?;
-        // Write data to file and return
-        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(bbiwrite::write_vals(
-                vals,
-                file,
-                self.options,
-                BigWigWrite::process_chrom,
-                pool,
-                chrom_sizes.clone(),
-            ))?;
+
+        Ok((total_summary_offset, full_data_offset, pre_data))
+    }
+
+    fn write_mid<E>(
+        file: &mut BufWriter<File>,
+        pre_data: u64,
+        raw_sections_iter: impl Iterator<Item = Section>,
+        chrom_sizes: HashMap<String, u32>,
+        chrom_ids: &HashMap<String, u32>,
+        options: BBIWriteOptions,
+    ) -> Result<(u64, u64, u64, u64), ProcessChromError<E>> {
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;
         let sections_iter = raw_sections_iter.map(|mut section| {
@@ -137,11 +128,49 @@ impl BigWigWrite {
         // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
         // but requires us to know all the data ahead of time (when writing)
         let chrom_index_start = file.tell()?;
-        write_chrom_tree(&mut file, chrom_sizes, &chrom_ids.get_map())?;
+        write_chrom_tree(file, chrom_sizes, chrom_ids)?;
 
         let index_start = file.tell()?;
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, self.options);
-        write_rtreeindex(&mut file, nodes, levels, total_sections, self.options)?;
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+        write_rtreeindex(file, nodes, levels, total_sections, options)?;
+
+        Ok((data_size, chrom_index_start, index_start, total_sections))
+    }
+
+    pub fn write<
+        Values: ChromValues<Value = Value> + Send + 'static,
+        V: ChromData<Values = Values>,
+    >(
+        self,
+        chrom_sizes: HashMap<String, u32>,
+        vals: V,
+        pool: ThreadPool,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
+        let fp = File::create(self.path.clone())?;
+        let mut file = BufWriter::new(fp);
+
+        let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
+
+        // Write data to file and return
+        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
+            block_on(bbiwrite::write_vals(
+                vals,
+                file,
+                self.options,
+                BigWigWrite::process_chrom,
+                pool,
+                chrom_sizes.clone(),
+            ))?;
+
+        let chrom_ids = chrom_ids.get_map();
+        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
+            &mut file,
+            pre_data,
+            raw_sections_iter,
+            chrom_sizes,
+            &chrom_ids,
+            self.options,
+        )?;
 
         let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
         let num_zooms = zoom_entries.len() as u16;
@@ -180,23 +209,10 @@ impl BigWigWrite {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
-        write_blank_headers(&mut file)?;
-
-        let total_summary_offset = file.tell()?;
-        file.write_all(&[0; 40])?;
-
-        let full_data_offset = file.tell()?;
-
-        // Total items
-        // Unless we know the vals ahead of time, we can't estimate total sections ahead of time.
-        // Even then simply doing "(vals.len() as u32 + ITEMS_PER_SLOT - 1) / ITEMS_PER_SLOT"
-        // underestimates because sections are split by chrom too, not just size.
-        // Skip for now, and come back when we write real header + summary.
-        file.write_u64::<NativeEndian>(0)?;
+        let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
         let vals = make_vals(in_file.reopen()?);
 
-        let pre_data = file.tell()?;
         // Write data to file and return
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             block_on(bbiwrite::write_vals_no_zoom(
@@ -207,27 +223,16 @@ impl BigWigWrite {
                 pool.clone(),
                 chrom_sizes.clone(),
             ))?;
-        let data_size = file.tell()? - pre_data;
-        let mut current_offset = pre_data;
-        let sections_iter = raw_sections_iter.map(|mut section| {
-            // TODO: this assumes that all the data is contiguous
-            // This will fail if we ever space the sections in any way
-            section.offset = current_offset;
-            current_offset += section.size;
-            section
-        });
 
-        // Since the chrom tree is read before the index, we put this before the full data index
-        // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
-        // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
-        // but requires us to know all the data ahead of time (when writing)
-        let chrom_index_start = file.tell()?;
         let chrom_ids = chrom_ids.get_map();
-        write_chrom_tree(&mut file, chrom_sizes, &chrom_ids)?;
-
-        let index_start = file.tell()?;
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, self.options);
-        write_rtreeindex(&mut file, nodes, levels, total_sections, self.options)?;
+        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
+            &mut file,
+            pre_data,
+            raw_sections_iter,
+            chrom_sizes,
+            &chrom_ids,
+            self.options,
+        )?;
 
         let vals = make_vals(in_file);
 
