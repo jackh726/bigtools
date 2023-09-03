@@ -435,11 +435,6 @@ impl BigWigWrite {
         chrom: String,
         chrom_length: u32,
     ) -> Result<Summary, ProcessChromError<I::Error>> {
-        struct BedGraphSection {
-            items: Vec<Value>,
-            zoom_items: Vec<ZoomItem>,
-        }
-
         let mut summary = Summary {
             total_items: 0,
             bases_covered: 0,
@@ -449,18 +444,17 @@ impl BigWigWrite {
             sum_squares: 0.0,
         };
 
-        let mut state_val = BedGraphSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
-            zoom_items: zooms_channels
-                .into_iter()
-                .map(|(size, channel)| ZoomItem {
-                    size,
-                    live_info: None,
-                    records: Vec::with_capacity(options.items_per_slot as usize),
-                    channel,
-                })
-                .collect(),
-        };
+        let mut items = Vec::with_capacity(options.items_per_slot as usize);
+        let mut zoom_items: Vec<ZoomItem> = zooms_channels
+            .into_iter()
+            .map(|(size, channel)| ZoomItem {
+                size,
+                live_info: None,
+                records: Vec::with_capacity(options.items_per_slot as usize),
+                channel,
+            })
+            .collect();
+
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
@@ -471,7 +465,7 @@ impl BigWigWrite {
                 &chrom,
                 &mut chrom_values,
                 &mut summary,
-                &mut state_val.items,
+                &mut items,
                 options,
                 &pool,
                 &mut ftx,
@@ -480,7 +474,7 @@ impl BigWigWrite {
             .await?;
 
             BigWigWrite::process_val_zoom(
-                &mut state_val.zoom_items,
+                &mut zoom_items,
                 options,
                 current_val,
                 &mut chrom_values,
@@ -490,8 +484,8 @@ impl BigWigWrite {
             .await?;
         }
 
-        debug_assert!(state_val.items.is_empty());
-        for zoom_item in state_val.zoom_items.iter_mut() {
+        debug_assert!(items.is_empty());
+        for zoom_item in zoom_items.iter_mut() {
             debug_assert!(zoom_item.live_info.is_none());
             debug_assert!(zoom_item.records.is_empty());
         }
@@ -519,11 +513,6 @@ impl BigWigWrite {
             counts: u64,
         }
 
-        struct BedGraphSection {
-            items: Vec<Value>,
-            zoom_counts: Vec<ZoomCounts>,
-        }
-
         let mut summary = Summary {
             total_items: 0,
             bases_covered: 0,
@@ -533,7 +522,8 @@ impl BigWigWrite {
             sum_squares: 0.0,
         };
 
-        let zoom_counts = std::iter::successors(Some(10), |z| Some(z * 4))
+        let mut items: Vec<Value> = Vec::with_capacity(options.items_per_slot as usize);
+        let mut zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
             .take_while(|z| *z <= u64::MAX / 4 && *z <= chrom_length as u64 * 4)
             .map(|z| ZoomCounts {
                 resolution: z,
@@ -541,10 +531,7 @@ impl BigWigWrite {
                 counts: 0,
             })
             .collect();
-        let mut state_val = BedGraphSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
-            zoom_counts,
-        };
+
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
@@ -555,7 +542,7 @@ impl BigWigWrite {
                 &chrom,
                 &mut chrom_values,
                 &mut summary,
-                &mut state_val.items,
+                &mut items,
                 options,
                 &pool,
                 &mut ftx,
@@ -563,7 +550,7 @@ impl BigWigWrite {
             )
             .await?;
 
-            for zoom in &mut state_val.zoom_counts {
+            for zoom in &mut zoom_counts {
                 if current_val.start as u64 >= zoom.current_end {
                     zoom.counts += 1;
                     zoom.current_end = current_val.start as u64 + zoom.resolution;
@@ -575,15 +562,14 @@ impl BigWigWrite {
             }
         }
 
-        debug_assert!(state_val.items.is_empty());
+        debug_assert!(items.is_empty());
 
         if summary.total_items == 0 {
             summary.min_val = 0.0;
             summary.max_val = 0.0;
         }
 
-        let zoom_counts = state_val
-            .zoom_counts
+        let zoom_counts = zoom_counts
             .into_iter()
             .map(|z| (z.resolution, z.counts))
             .collect();
@@ -598,27 +584,22 @@ impl BigWigWrite {
         pool: ThreadPool,
         mut chrom_values: I,
     ) -> Result<(), ProcessChromError<I::Error>> {
-        struct BedGraphSection {
-            zoom_items: Vec<ZoomItem>,
-        }
+        let mut zoom_items: Vec<ZoomItem> = zooms_channels
+            .into_iter()
+            .map(|(size, channel)| ZoomItem {
+                size,
+                live_info: None,
+                records: Vec::with_capacity(options.items_per_slot as usize),
+                channel,
+            })
+            .collect();
 
-        let mut state_val = BedGraphSection {
-            zoom_items: zooms_channels
-                .into_iter()
-                .map(|(size, channel)| ZoomItem {
-                    size,
-                    live_info: None,
-                    records: Vec::with_capacity(options.items_per_slot as usize),
-                    channel,
-                })
-                .collect(),
-        };
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
 
             BigWigWrite::process_val_zoom(
-                &mut state_val.zoom_items,
+                &mut zoom_items,
                 options,
                 current_val,
                 &mut chrom_values,
@@ -628,7 +609,7 @@ impl BigWigWrite {
             .await?;
         }
 
-        for zoom_item in state_val.zoom_items.iter_mut() {
+        for zoom_item in zoom_items.iter_mut() {
             debug_assert!(zoom_item.live_info.is_none());
             debug_assert!(zoom_item.records.is_empty());
         }
