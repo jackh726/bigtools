@@ -271,6 +271,160 @@ impl BigWigWrite {
         Ok(())
     }
 
+    async fn process_val<I: ChromValues<Value = Value>>(
+        current_val: Value,
+        chrom_length: u32,
+        chrom: &String,
+        chrom_values: &mut I,
+        summary: &mut Summary,
+        items: &mut Vec<Value>,
+        options: BBIWriteOptions,
+        pool: &ThreadPool,
+        ftx: &mut ChromProcessingInputSectionChannel,
+        chrom_id: u32,
+    ) -> Result<(), ProcessChromError<I::Error>> {
+        // Check a few preconditions:
+        // - The current end is greater than or equal to the start
+        // - The current end is at most the chromosome length
+        // - If there is a next value, then it does not overlap value
+        // TODO: test these correctly fails
+        if current_val.start > current_val.end {
+            return Err(ProcessChromError::InvalidInput(format!(
+                "Invalid bed graph: {} > {}",
+                current_val.start, current_val.end
+            )));
+        }
+        if current_val.end > chrom_length {
+            return Err(ProcessChromError::InvalidInput(format!(
+                "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
+                current_val.end, chrom, chrom_length
+            )));
+        }
+        match chrom_values.peek() {
+            None | Some(Err(_)) => (),
+            Some(Ok(next_val)) => {
+                if current_val.end > next_val.start {
+                    return Err(ProcessChromError::InvalidInput(format!(
+                        "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
+                        chrom, current_val.start, current_val.end, next_val.start, next_val.end,
+                    )));
+                }
+            }
+        }
+
+        // Now, actually process the value.
+
+        // First, update the summary.
+        let len = current_val.end - current_val.start;
+        let val = f64::from(current_val.value);
+        summary.total_items += 1;
+        summary.bases_covered += u64::from(len);
+        summary.min_val = summary.min_val.min(val);
+        summary.max_val = summary.max_val.max(val);
+        summary.sum += f64::from(len) * val;
+        summary.sum_squares += f64::from(len) * val * val;
+
+        // Then, add the current item to the actual values, and encode if full, or last item
+        items.push(current_val);
+        if chrom_values.peek().is_none() || items.len() >= options.items_per_slot as usize {
+            let items = std::mem::take(items);
+            let handle = pool
+                .spawn_with_handle(encode_section(options.compress, items, chrom_id))
+                .expect("Couldn't spawn.");
+            ftx.send(handle.boxed()).await.expect("Couldn't send");
+        }
+
+        Ok(())
+    }
+
+    async fn process_val_zoom<I: ChromValues<Value = Value>>(
+        zoom_items: &mut Vec<ZoomItem>,
+        options: BBIWriteOptions,
+        current_val: Value,
+        chrom_values: &mut I,
+        pool: &ThreadPool,
+        chrom_id: u32,
+    ) -> Result<(), ProcessChromError<I::Error>> {
+        // Then, add the item to the zoom item queues. This is a bit complicated.
+        for zoom_item in zoom_items.iter_mut() {
+            debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+
+            // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
+            // Zoom summaries are compressed similarly to main data, with a given items per slot.
+            // It may be the case that our value spans across multiple zoom summaries, so this inner loop handles that.
+
+            // `add_start` indicates where we are *currently* adding bases from (either the start of this item or in the middle, but beginning of another zoom section)
+            let mut add_start = current_val.start;
+            loop {
+                // Write section if full; or if no next section, some items, and no current zoom record
+                if (add_start >= current_val.end
+                    && zoom_item.live_info.is_none()
+                    && chrom_values.peek().is_none()
+                    && !zoom_item.records.is_empty())
+                    || zoom_item.records.len() == options.items_per_slot as usize
+                {
+                    let items = std::mem::take(&mut zoom_item.records);
+                    let handle = pool
+                        .spawn_with_handle(encode_zoom_section(options.compress, items))
+                        .expect("Couldn't spawn.");
+                    zoom_item
+                        .channel
+                        .send(handle.boxed())
+                        .await
+                        .expect("Couln't send");
+                }
+                if add_start >= current_val.end {
+                    if chrom_values.peek().is_none() {
+                        if let Some(zoom2) = zoom_item.live_info.take() {
+                            zoom_item.records.push(zoom2);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                let val = f64::from(current_val.value);
+                let zoom2 = zoom_item.live_info.get_or_insert(ZoomRecord {
+                    chrom: chrom_id,
+                    start: add_start,
+                    end: add_start,
+                    summary: Summary {
+                        total_items: 0,
+                        bases_covered: 0,
+                        min_val: val,
+                        max_val: val,
+                        sum: 0.0,
+                        sum_squares: 0.0,
+                    },
+                });
+                // The end of zoom record
+                let next_end = zoom2.start + zoom_item.size;
+                // End of bases that we could add
+                let add_end = std::cmp::min(next_end, current_val.end);
+                // If the last zoom ends before this value starts, we don't add anything
+                if add_end >= add_start {
+                    let added_bases = add_end - add_start;
+                    zoom2.end = add_end;
+                    zoom2.summary.total_items += 1;
+                    zoom2.summary.bases_covered += u64::from(added_bases);
+                    zoom2.summary.min_val = zoom2.summary.min_val.min(val);
+                    zoom2.summary.max_val = zoom2.summary.max_val.max(val);
+                    zoom2.summary.sum += f64::from(added_bases) * val;
+                    zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
+                }
+                // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
+                // or we added to the end of the zoom), then write this zooms to the current section
+                if add_end == next_end {
+                    zoom_item.records.push(zoom_item.live_info.take().unwrap());
+                }
+                // Set where we would start for next time
+                add_start = add_end;
+            }
+            debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn process_chrom<I: ChromValues<Value = Value>>(
         zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
         mut ftx: ChromProcessingInputSectionChannel,
@@ -311,137 +465,29 @@ impl BigWigWrite {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
 
-            // Check a few preconditions:
-            // - The current end is greater than or equal to the start
-            // - The current end is at most the chromosome length
-            // - If there is a next value, then it does not overlap value
-            // TODO: test these correctly fails
-            if current_val.start > current_val.end {
-                return Err(ProcessChromError::InvalidInput(format!(
-                    "Invalid bed graph: {} > {}",
-                    current_val.start, current_val.end
-                )));
-            }
-            if current_val.end > chrom_length {
-                return Err(ProcessChromError::InvalidInput(format!(
-                    "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
-                    current_val.end, chrom, chrom_length
-                )));
-            }
-            match chrom_values.peek() {
-                None | Some(Err(_)) => (),
-                Some(Ok(next_val)) => {
-                    if current_val.end > next_val.start {
-                        return Err(ProcessChromError::InvalidInput(format!(
-                            "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
-                            chrom,
-                            current_val.start,
-                            current_val.end,
-                            next_val.start,
-                            next_val.end,
-                        )));
-                    }
-                }
-            }
+            BigWigWrite::process_val(
+                current_val,
+                chrom_length,
+                &chrom,
+                &mut chrom_values,
+                &mut summary,
+                &mut state_val.items,
+                options,
+                &pool,
+                &mut ftx,
+                chrom_id,
+            )
+            .await?;
 
-            // Now, actually process the value.
-
-            // First, update the summary.
-            let len = current_val.end - current_val.start;
-            let val = f64::from(current_val.value);
-            summary.total_items += 1;
-            summary.bases_covered += u64::from(len);
-            summary.min_val = summary.min_val.min(val);
-            summary.max_val = summary.max_val.max(val);
-            summary.sum += f64::from(len) * val;
-            summary.sum_squares += f64::from(len) * val * val;
-
-            // Then, add the item to the zoom item queues. This is a bit complicated.
-            for zoom_item in state_val.zoom_items.iter_mut() {
-                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
-
-                // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
-                // Zoom summaries are compressed similarly to main data, with a given items per slot.
-                // It may be the case that our value spans across multiple zoom summaries, so this inner loop handles that.
-
-                // `add_start` indicates where we are *currently* adding bases from (either the start of this item or in the middle, but beginning of another zoom section)
-                let mut add_start = current_val.start;
-                loop {
-                    // Write section if full; or if no next section, some items, and no current zoom record
-                    if (add_start >= current_val.end
-                        && zoom_item.live_info.is_none()
-                        && chrom_values.peek().is_none()
-                        && !zoom_item.records.is_empty())
-                        || zoom_item.records.len() == options.items_per_slot as usize
-                    {
-                        let items = std::mem::take(&mut zoom_item.records);
-                        let handle = pool
-                            .spawn_with_handle(encode_zoom_section(options.compress, items))
-                            .expect("Couldn't spawn.");
-                        zoom_item
-                            .channel
-                            .send(handle.boxed())
-                            .await
-                            .expect("Couln't send");
-                    }
-                    if add_start >= current_val.end {
-                        if chrom_values.peek().is_none() {
-                            if let Some(zoom2) = zoom_item.live_info.take() {
-                                zoom_item.records.push(zoom2);
-                                continue;
-                            }
-                        }
-                        break;
-                    }
-                    let zoom2 = zoom_item.live_info.get_or_insert(ZoomRecord {
-                        chrom: chrom_id,
-                        start: add_start,
-                        end: add_start,
-                        summary: Summary {
-                            total_items: 0,
-                            bases_covered: 0,
-                            min_val: val,
-                            max_val: val,
-                            sum: 0.0,
-                            sum_squares: 0.0,
-                        },
-                    });
-                    // The end of zoom record
-                    let next_end = zoom2.start + zoom_item.size;
-                    // End of bases that we could add
-                    let add_end = std::cmp::min(next_end, current_val.end);
-                    // If the last zoom ends before this value starts, we don't add anything
-                    if add_end >= add_start {
-                        let added_bases = add_end - add_start;
-                        zoom2.end = add_end;
-                        zoom2.summary.total_items += 1;
-                        zoom2.summary.bases_covered += u64::from(added_bases);
-                        zoom2.summary.min_val = zoom2.summary.min_val.min(val);
-                        zoom2.summary.max_val = zoom2.summary.max_val.max(val);
-                        zoom2.summary.sum += f64::from(added_bases) * val;
-                        zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
-                    }
-                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                    // or we added to the end of the zoom), then write this zooms to the current section
-                    if add_end == next_end {
-                        zoom_item.records.push(zoom_item.live_info.take().unwrap());
-                    }
-                    // Set where we would start for next time
-                    add_start = add_end;
-                }
-                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
-            }
-            // Then, add the current item to the actual values, and encode if full, or last item
-            state_val.items.push(current_val);
-            if chrom_values.peek().is_none()
-                || state_val.items.len() >= options.items_per_slot as usize
-            {
-                let items = std::mem::take(&mut state_val.items);
-                let handle = pool
-                    .spawn_with_handle(encode_section(options.compress, items, chrom_id))
-                    .expect("Couldn't spawn.");
-                ftx.send(handle.boxed()).await.expect("Couldn't send");
-            }
+            BigWigWrite::process_val_zoom(
+                &mut state_val.zoom_items,
+                options,
+                current_val,
+                &mut chrom_values,
+                &pool,
+                chrom_id,
+            )
+            .await?;
         }
 
         debug_assert!(state_val.items.is_empty());
@@ -503,62 +549,19 @@ impl BigWigWrite {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
 
-            // Check a few preconditions:
-            // - The current end is greater than or equal to the start
-            // - The current end is at most the chromosome length
-            // - If there is a next value, then it does not overlap value
-            // TODO: test these correctly fails
-            if current_val.start > current_val.end {
-                return Err(ProcessChromError::InvalidInput(format!(
-                    "Invalid bed graph: {} > {}",
-                    current_val.start, current_val.end
-                )));
-            }
-            if current_val.end > chrom_length {
-                return Err(ProcessChromError::InvalidInput(format!(
-                    "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
-                    current_val.end, chrom, chrom_length
-                )));
-            }
-            match chrom_values.peek() {
-                None | Some(Err(_)) => (),
-                Some(Ok(next_val)) => {
-                    if current_val.end > next_val.start {
-                        return Err(ProcessChromError::InvalidInput(format!(
-                            "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
-                            chrom,
-                            current_val.start,
-                            current_val.end,
-                            next_val.start,
-                            next_val.end,
-                        )));
-                    }
-                }
-            }
-
-            // Now, actually process the value.
-
-            // First, update the summary.
-            let len = current_val.end - current_val.start;
-            let val = f64::from(current_val.value);
-            summary.total_items += 1;
-            summary.bases_covered += u64::from(len);
-            summary.min_val = summary.min_val.min(val);
-            summary.max_val = summary.max_val.max(val);
-            summary.sum += f64::from(len) * val;
-            summary.sum_squares += f64::from(len) * val * val;
-
-            // Then, add the current item to the actual values, and encode if full, or last item
-            state_val.items.push(current_val);
-            if chrom_values.peek().is_none()
-                || state_val.items.len() >= options.items_per_slot as usize
-            {
-                let items = std::mem::take(&mut state_val.items);
-                let handle = pool
-                    .spawn_with_handle(encode_section(options.compress, items, chrom_id))
-                    .expect("Couldn't spawn.");
-                ftx.send(handle.boxed()).await.expect("Couldn't send");
-            }
+            BigWigWrite::process_val(
+                current_val,
+                chrom_length,
+                &chrom,
+                &mut chrom_values,
+                &mut summary,
+                &mut state_val.items,
+                options,
+                &pool,
+                &mut ftx,
+                chrom_id,
+            )
+            .await?;
 
             for zoom in &mut state_val.zoom_counts {
                 if current_val.start as u64 >= zoom.current_end {
@@ -614,84 +617,15 @@ impl BigWigWrite {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
 
-            // First, update the summary.
-            let val = f64::from(current_val.value);
-
-            // Then, add the item to the zoom item queues. This is a bit complicated.
-            for zoom_item in state_val.zoom_items.iter_mut() {
-                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
-
-                // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
-                // Zoom summaries are compressed similarly to main data, with a given items per slot.
-                // It may be the case that our value spans across multiple zoom summaries, so this inner loop handles that.
-
-                // `add_start` indicates where we are *currently* adding bases from (either the start of this item or in the middle, but beginning of another zoom section)
-                let mut add_start = current_val.start;
-                loop {
-                    // Write section if full; or if no next section, some items, and no current zoom record
-                    if (add_start >= current_val.end
-                        && zoom_item.live_info.is_none()
-                        && chrom_values.peek().is_none()
-                        && !zoom_item.records.is_empty())
-                        || zoom_item.records.len() == options.items_per_slot as usize
-                    {
-                        let items = std::mem::take(&mut zoom_item.records);
-                        let handle = pool
-                            .spawn_with_handle(encode_zoom_section(options.compress, items))
-                            .expect("Couldn't spawn.");
-                        zoom_item
-                            .channel
-                            .send(handle.boxed())
-                            .await
-                            .expect("Couln't send");
-                    }
-                    if add_start >= current_val.end {
-                        if chrom_values.peek().is_none() {
-                            if let Some(zoom2) = zoom_item.live_info.take() {
-                                zoom_item.records.push(zoom2);
-                                continue;
-                            }
-                        }
-                        break;
-                    }
-                    let zoom2 = zoom_item.live_info.get_or_insert(ZoomRecord {
-                        chrom: chrom_id,
-                        start: add_start,
-                        end: add_start,
-                        summary: Summary {
-                            total_items: 0,
-                            bases_covered: 0,
-                            min_val: val,
-                            max_val: val,
-                            sum: 0.0,
-                            sum_squares: 0.0,
-                        },
-                    });
-                    // The end of zoom record
-                    let next_end = zoom2.start + zoom_item.size;
-                    // End of bases that we could add
-                    let add_end = std::cmp::min(next_end, current_val.end);
-                    // If the last zoom ends before this value starts, we don't add anything
-                    if add_end >= add_start {
-                        let added_bases = add_end - add_start;
-                        zoom2.end = add_end;
-                        zoom2.summary.total_items += 1;
-                        zoom2.summary.bases_covered += u64::from(added_bases);
-                        zoom2.summary.min_val = zoom2.summary.min_val.min(val);
-                        zoom2.summary.max_val = zoom2.summary.max_val.max(val);
-                        zoom2.summary.sum += f64::from(added_bases) * val;
-                        zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
-                    }
-                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                    // or we added to the end of the zoom), then write this zooms to the current section
-                    if add_end == next_end {
-                        zoom_item.records.push(zoom_item.live_info.take().unwrap());
-                    }
-                    // Set where we would start for next time
-                    add_start = add_end;
-                }
-                debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
-            }
+            BigWigWrite::process_val_zoom(
+                &mut state_val.zoom_items,
+                options,
+                current_val,
+                &mut chrom_values,
+                &pool,
+                chrom_id,
+            )
+            .await?;
         }
 
         for zoom_item in state_val.zoom_items.iter_mut() {
