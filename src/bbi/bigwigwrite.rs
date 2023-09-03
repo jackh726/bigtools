@@ -52,7 +52,6 @@ use futures::task::SpawnExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 
 use crate::utils::chromvalues::ChromValues;
-use crate::utils::reopen::{Reopen, SeekableRead};
 use crate::utils::tell::Tell;
 use crate::{write_info, ChromData, ChromProcessingInputSectionChannel, Section};
 
@@ -196,13 +195,13 @@ impl BigWigWrite {
     }
 
     pub fn write_multipass<
-        F: Reopen + SeekableRead,
+        F,
         Values: ChromValues<Value = Value> + Send + 'static,
         V: ChromData<Values = Values>,
     >(
         self,
         in_file: F,
-        make_vals: impl Fn(F) -> V,
+        make_vals: impl Fn(&F) -> Result<V, ProcessChromError<Values::Error>>,
         chrom_sizes: HashMap<String, u32>,
         pool: ThreadPool,
     ) -> Result<(), ProcessChromError<Values::Error>> {
@@ -211,7 +210,7 @@ impl BigWigWrite {
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
-        let vals = make_vals(in_file.reopen()?);
+        let vals = make_vals(&in_file)?;
 
         // Write data to file and return
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
@@ -234,7 +233,7 @@ impl BigWigWrite {
             self.options,
         )?;
 
-        let vals = make_vals(in_file);
+        let vals = make_vals(&in_file)?;
 
         let (mut file, zoom_entries, zoom_uncompress_buf_size) =
             block_on(bbiwrite::write_zoom_vals(

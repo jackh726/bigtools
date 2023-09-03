@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use bigtools::utils::cli::BBIWriteArgs;
-use bigtools::utils::reopen::ReopenableFile;
 use clap::Parser;
 
 use bigtools::bbi::BigWigWrite;
@@ -136,21 +135,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 outb.write(chrom_map, chsi, pool)?;
             } else {
-                let infile = ReopenableFile {
-                    file: File::open(&bedgraphpath)?,
-                    path: bedgraphpath,
-                };
                 outb.write_multipass(
-                    infile,
-                    |infile| {
+                    (),
+                    |_| {
                         let chsi = BedParserParallelStreamingIterator::new(
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
-                            PathBuf::from(infile.path.clone()),
+                            PathBuf::from(bedgraphpath.clone()),
                             parse_bedgraph,
                         );
 
-                        chsi
+                        Ok(chsi)
                     },
                     chrom_map,
                     pool,
@@ -163,18 +158,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
                 outb.write(chrom_map, chsi, pool)?;
             } else {
-                let infile = ReopenableFile {
-                    file: infile,
-                    path: bedgraphpath,
-                };
                 outb.write_multipass(
-                    infile,
-                    |infile| {
+                    (),
+                    |_| {
+                        let infile = File::open(&bedgraphpath)?;
                         let vals_iter = BedParser::from_bedgraph_file(infile);
                         let chsi =
                             BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
 
-                        chsi
+                        Ok(chsi)
                     },
                     chrom_map,
                     pool,
