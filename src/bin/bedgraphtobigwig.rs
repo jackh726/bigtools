@@ -136,8 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 outb.write(chrom_map, chsi, pool)?;
             } else {
                 outb.write_multipass(
-                    (),
-                    |_| {
+                    || {
                         let chsi = BedParserParallelStreamingIterator::new(
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
@@ -159,8 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 outb.write(chrom_map, chsi, pool)?;
             } else {
                 outb.write_multipass(
-                    (),
-                    |_| {
+                    || {
                         let infile = File::open(&bedgraphpath)?;
                         let vals_iter = BedParser::from_bedgraph_file(infile);
                         let chsi =
