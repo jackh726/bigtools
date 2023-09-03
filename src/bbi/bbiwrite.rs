@@ -810,7 +810,9 @@ pub(crate) async fn write_vals<
 pub(crate) async fn write_vals_no_zoom<
     Values: ChromValues,
     V: ChromData<Values = Values>,
-    Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>> + Send + 'static,
+    Fut: Future<Output = Result<(Summary, Vec<(u64, u64)>), ProcessChromError<Values::Error>>>
+        + Send
+        + 'static,
     G: Fn(
         ChromProcessingInputSectionChannel,
         u32,
@@ -831,6 +833,7 @@ pub(crate) async fn write_vals_no_zoom<
     (
         IdMap,
         Summary,
+        BTreeMap<u64, u64>,
         BufWriter<File>,
         Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         usize,
@@ -840,6 +843,10 @@ pub(crate) async fn write_vals_no_zoom<
     let mut section_iter = vec![];
 
     let mut summary: Option<Summary> = None;
+    let total_zoom_counts = std::iter::successors(Some(10), |z: &u64| Some((*z).saturating_mul(4)))
+        .take_while(|z| *z < u64::MAX)
+        .map(|z| (z, 0));
+    let mut total_zoom_counts: BTreeMap<u64, u64> = BTreeMap::from_iter(total_zoom_counts);
     let mut max_uncompressed_buf_size = 0;
 
     let mut chrom_ids = IdMap::default();
@@ -903,7 +910,8 @@ pub(crate) async fn write_vals_no_zoom<
 
                 // All the futures are actually just handles, so these are purely for the result
                 let joined_future = try_join!(summary_future, data_write_future)?;
-                let (chrom_summary, (_num_sections, uncompressed_buf_size)) = joined_future;
+                let ((chrom_summary, zoom_counts), (_num_sections, uncompressed_buf_size)) =
+                    joined_future;
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
                 section_iter.push(sections.into_iter());
                 file = data.await_real_file();
@@ -918,6 +926,12 @@ pub(crate) async fn write_vals_no_zoom<
                         summary.sum += chrom_summary.sum;
                         summary.sum_squares += chrom_summary.sum_squares;
                     }
+                }
+
+                let zoom_count_map = BTreeMap::from_iter(zoom_counts.into_iter());
+                for zoom_count in total_zoom_counts.iter_mut() {
+                    let chrom_zoom_count = zoom_count_map.get(&zoom_count.0).copied().unwrap_or(1);
+                    *zoom_count.1 += chrom_zoom_count;
                 }
             }
             ChromDataState::Finished => break chrom_ids,
@@ -938,6 +952,7 @@ pub(crate) async fn write_vals_no_zoom<
     Ok((
         chrom_ids,
         summary_complete,
+        total_zoom_counts,
         file,
         section_iter,
         max_uncompressed_buf_size,
@@ -962,6 +977,7 @@ pub(crate) async fn write_zoom_vals<
     mut pool: ThreadPool,
     chrom_ids: &HashMap<String, u32>,
     average_size: u32,
+    zoom_counts: BTreeMap<u64, u64>,
     mut file: BufWriter<File>,
     data_size: u64,
 ) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), ProcessChromError<Values::Error>> {
@@ -983,23 +999,25 @@ pub(crate) async fn write_zoom_vals<
         pub sections: crossbeam_channel::Receiver<Section>,
     }
 
-    let mut zooms_map: BTreeMap<u32, ZoomValue> =
-        std::iter::successors(Some(average_size * 4), |z| Some(z * 4))
-            .skip_while(|size| {
-                let mut reduced_size = *size * 32;
-                if options.compress {
-                    reduced_size /= 2; // Estimate as kent does
-                }
-                reduced_size as u64 > data_size / 2
-            })
-            .take(options.max_zooms as usize)
-            .map(|size| {
-                let section_iter = vec![];
-                let (buf, write) = TempFileBuffer::new();
-                let value = (section_iter, buf, Some(write));
-                (size, value)
-            })
-            .collect();
+    let min_first_zoom_size = average_size.max(10) * 4;
+    let mut zooms_map: BTreeMap<u32, ZoomValue> = zoom_counts
+        .into_iter()
+        .skip_while(|z| z.0 > min_first_zoom_size as u64)
+        .skip_while(|z| {
+            let mut reduced_size = z.1 * 32;
+            if options.compress {
+                reduced_size /= 2; // Estimate as kent does
+            }
+            reduced_size as u64 > data_size / 2
+        })
+        .take(options.max_zooms as usize)
+        .map(|size| {
+            let section_iter = vec![];
+            let (buf, write) = TempFileBuffer::new();
+            let value = (section_iter, buf, Some(write));
+            (size.0 as u32, value)
+        })
+        .collect();
     let resolutions: Vec<_> = zooms_map.keys().copied().collect();
 
     let first_zoom_data_offset = file.tell()?;

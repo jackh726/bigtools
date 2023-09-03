@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use bigtools::bed::indexer::index_chroms;
 use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use bigtools::utils::cli::BBIWriteArgs;
+use bigtools::utils::reopen::ReopenableFile;
 use clap::Parser;
 
 use bigtools::bbi::BigWigWrite;
@@ -31,6 +32,12 @@ struct Cli {
     #[arg(short = 'p', long)]
     #[arg(default_value = "auto")]
     pub parallel: String,
+
+    /// If set, indicates that only a single pass should be done on the input file. This is most useful
+    /// on large files in order to reduce total time. This automatically happens when the input is `stdin`.
+    #[arg(long)]
+    #[arg(default_value_t = true)]
+    single_pass: bool,
 
     #[command(flatten)]
     write_args: BBIWriteArgs,
@@ -120,18 +127,59 @@ fn main() -> Result<(), Box<dyn Error>> {
         if parallel {
             let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
 
-            let chsi = BedParserParallelStreamingIterator::new(
-                chrom_indices,
-                allow_out_of_order_chroms,
-                PathBuf::from(bedgraphpath),
-                parse_bedgraph,
-            );
-            outb.write(chrom_map, chsi, pool)?;
-        } else {
-            let vals_iter = BedParser::from_bedgraph_file(infile);
+            if matches.single_pass {
+                let chsi = BedParserParallelStreamingIterator::new(
+                    chrom_indices,
+                    allow_out_of_order_chroms,
+                    PathBuf::from(bedgraphpath),
+                    parse_bedgraph,
+                );
+                outb.write(chrom_map, chsi, pool)?;
+            } else {
+                let infile = ReopenableFile {
+                    file: File::open(&bedgraphpath)?,
+                    path: bedgraphpath,
+                };
+                outb.write_multipass(
+                    infile,
+                    |infile| {
+                        let chsi = BedParserParallelStreamingIterator::new(
+                            chrom_indices.clone(),
+                            allow_out_of_order_chroms,
+                            PathBuf::from(infile.path.clone()),
+                            parse_bedgraph,
+                        );
 
-            let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-            outb.write(chrom_map, chsi, pool)?;
+                        chsi
+                    },
+                    chrom_map,
+                    pool,
+                )?;
+            }
+        } else {
+            if matches.single_pass {
+                let vals_iter = BedParser::from_bedgraph_file(infile);
+
+                let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+                outb.write(chrom_map, chsi, pool)?;
+            } else {
+                let infile = ReopenableFile {
+                    file: infile,
+                    path: bedgraphpath,
+                };
+                outb.write_multipass(
+                    infile,
+                    |infile| {
+                        let vals_iter = BedParser::from_bedgraph_file(infile);
+                        let chsi =
+                            BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+
+                        chsi
+                    },
+                    chrom_map,
+                    pool,
+                )?;
+            }
         }
     };
 

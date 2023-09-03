@@ -198,7 +198,7 @@ impl BigWigWrite {
 
         let pre_data = file.tell()?;
         // Write data to file and return
-        let (chrom_ids, summary, mut file, raw_sections_iter, mut uncompress_buf_size) =
+        let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             block_on(bbiwrite::write_vals_no_zoom(
                 vals,
                 file,
@@ -238,7 +238,8 @@ impl BigWigWrite {
                 BigWigWrite::process_chrom_zoom,
                 pool,
                 &chrom_ids,
-                10,
+                (summary.bases_covered as f64 / summary.total_items as f64) as u32,
+                zoom_counts,
                 file,
                 data_size,
             ))?;
@@ -459,9 +460,17 @@ impl BigWigWrite {
         mut chrom_values: I,
         chrom: String,
         chrom_length: u32,
-    ) -> Result<Summary, ProcessChromError<I::Error>> {
+    ) -> Result<(Summary, Vec<(u64, u64)>), ProcessChromError<I::Error>> {
+        #[derive(Debug, Copy, Clone)]
+        struct ZoomCounts {
+            resolution: u64,
+            current_end: u64,
+            counts: u64,
+        }
+
         struct BedGraphSection {
             items: Vec<Value>,
+            zoom_counts: Vec<ZoomCounts>,
         }
 
         let mut summary = Summary {
@@ -473,8 +482,17 @@ impl BigWigWrite {
             sum_squares: 0.0,
         };
 
+        let zoom_counts = std::iter::successors(Some(10), |z| Some(z * 4))
+            .take_while(|z| *z <= u64::MAX / 4 && *z <= chrom_length as u64 * 4)
+            .map(|z| ZoomCounts {
+                resolution: z,
+                current_end: 0,
+                counts: 0,
+            })
+            .collect();
         let mut state_val = BedGraphSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
+            zoom_counts,
         };
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
@@ -536,6 +554,17 @@ impl BigWigWrite {
                     .expect("Couldn't spawn.");
                 ftx.send(handle.boxed()).await.expect("Couldn't send");
             }
+
+            for zoom in &mut state_val.zoom_counts {
+                if current_val.start as u64 >= zoom.current_end {
+                    zoom.counts += 1;
+                    zoom.current_end = current_val.start as u64 + zoom.resolution;
+                }
+                while current_val.end as u64 > zoom.current_end {
+                    zoom.counts += 1;
+                    zoom.current_end += zoom.resolution;
+                }
+            }
         }
 
         debug_assert!(state_val.items.is_empty());
@@ -544,7 +573,14 @@ impl BigWigWrite {
             summary.min_val = 0.0;
             summary.max_val = 0.0;
         }
-        Ok(summary)
+
+        let zoom_counts = state_val
+            .zoom_counts
+            .into_iter()
+            .map(|z| (z.resolution, z.counts))
+            .collect();
+
+        Ok((summary, zoom_counts))
     }
 
     pub(crate) async fn process_chrom_zoom<I: ChromValues<Value = Value>>(
