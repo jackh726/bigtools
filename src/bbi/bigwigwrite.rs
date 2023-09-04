@@ -136,6 +136,7 @@ impl BigWigWrite {
         Ok((data_size, chrom_index_start, index_start, total_sections))
     }
 
+    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values and for reading through the values (potentially parallelized by chromosome).
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
         V: ChromData<Values = Values>,
@@ -194,6 +195,68 @@ impl BigWigWrite {
         Ok(())
     }
 
+    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values, but will read through values on the current thread.
+    pub fn write_singlethreaded<
+        Values: ChromValues<Value = Value>,
+        V: ChromData<Values = Values>,
+    >(
+        self,
+        chrom_sizes: HashMap<String, u32>,
+        vals: V,
+        pool: ThreadPool,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
+        let fp = File::create(self.path.clone())?;
+        let mut file = BufWriter::new(fp);
+
+        let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
+
+        // Write data to file and return
+        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
+            block_on(bbiwrite::write_vals_singlethreaded(
+                vals,
+                file,
+                self.options,
+                BigWigWrite::process_chrom,
+                pool,
+                chrom_sizes.clone(),
+            ))?;
+
+        let chrom_ids = chrom_ids.get_map();
+        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
+            &mut file,
+            pre_data,
+            raw_sections_iter,
+            chrom_sizes,
+            &chrom_ids,
+            self.options,
+        )?;
+
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        let num_zooms = zoom_entries.len() as u16;
+
+        write_info(
+            &mut file,
+            BIGWIG_MAGIC,
+            num_zooms,
+            chrom_index_start,
+            full_data_offset,
+            index_start,
+            0,
+            0,
+            0,
+            total_summary_offset,
+            uncompress_buf_size,
+            zoom_entries,
+            summary,
+            total_sections,
+        )?;
+
+        Ok(())
+    }
+
+    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values and for reading through the values (potentially parallelized by chromosome).
+    /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
+    /// high resolution zooms takes up a substantial portion of total processing time.
     pub fn write_multipass<
         Values: ChromValues<Value = Value> + Send + 'static,
         V: ChromData<Values = Values>,

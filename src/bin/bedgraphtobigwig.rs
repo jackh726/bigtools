@@ -103,12 +103,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedgraphpath == "-" || bedgraphpath == "stdin" {
-        let stdin = std::io::stdin();
-        // FIXME: This will lock on every line read, when we should be able to lock once
+        let stdin = std::io::stdin().lock();
         let vals_iter = BedParser::from_bedgraph_file(stdin);
 
         let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-        outb.write(chrom_map, chsi, pool)?;
+        outb.write_singlethreaded(chrom_map, chsi, pool)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
         let parallel = match (nthreads, matches.parallel.as_ref()) {
