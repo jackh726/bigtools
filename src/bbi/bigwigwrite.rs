@@ -48,6 +48,7 @@ use futures::executor::{block_on, ThreadPool};
 use futures::future::FutureExt;
 use futures::sink::SinkExt;
 use futures::task::SpawnExt;
+use futures::Future;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 
@@ -146,53 +147,29 @@ impl BigWigWrite {
         vals: V,
         pool: ThreadPool,
     ) -> Result<(), ProcessChromError<Values::Error>> {
-        let fp = File::create(self.path.clone())?;
-        let mut file = BufWriter::new(fp);
-
-        let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
-
-        // Write data to file and return
-        let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(bbiwrite::write_vals(
-                vals,
-                file,
-                self.options,
-                BigWigWrite::process_chrom,
-                pool,
-                chrom_sizes.clone(),
-            ))?;
-
-        let chrom_ids = chrom_ids.get_map();
-        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
-            &mut file,
-            pre_data,
-            raw_sections_iter,
-            chrom_sizes,
-            &chrom_ids,
-            self.options,
-        )?;
-
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
-        let num_zooms = zoom_entries.len() as u16;
-
-        write_info(
-            &mut file,
-            BIGWIG_MAGIC,
-            num_zooms,
-            chrom_index_start,
-            full_data_offset,
-            index_start,
-            0,
-            0,
-            0,
-            total_summary_offset,
-            uncompress_buf_size,
-            zoom_entries,
-            summary,
-            total_sections,
-        )?;
-
-        Ok(())
+        let process_chrom = |zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+                             ftx: ChromProcessingInputSectionChannel,
+                             chrom_id: u32,
+                             options: BBIWriteOptions,
+                             pool: ThreadPool,
+                             chrom_values: Values,
+                             chrom: String,
+                             chrom_length: u32| {
+            let fut = BigWigWrite::process_chrom(
+                zooms_channels,
+                ftx,
+                chrom_id,
+                options,
+                pool.clone(),
+                chrom_values,
+                chrom,
+                chrom_length,
+            );
+            let (fut, handle) = fut.remote_handle();
+            pool.spawn_ok(fut);
+            handle
+        };
+        self.write_internal(chrom_sizes, vals, pool, process_chrom)
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values, but will read through values on the current thread.
@@ -205,6 +182,30 @@ impl BigWigWrite {
         vals: V,
         pool: ThreadPool,
     ) -> Result<(), ProcessChromError<Values::Error>> {
+        self.write_internal(chrom_sizes, vals, pool, BigWigWrite::process_chrom)
+    }
+
+    fn write_internal<
+        Values: ChromValues<Value = Value>,
+        V: ChromData<Values = Values>,
+        Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>>,
+        G: Fn(
+            Vec<(u32, ChromProcessingInputSectionChannel)>,
+            ChromProcessingInputSectionChannel,
+            u32,
+            BBIWriteOptions,
+            ThreadPool,
+            Values,
+            String,
+            u32,
+        ) -> Fut,
+    >(
+        self,
+        chrom_sizes: HashMap<String, u32>,
+        vals: V,
+        pool: ThreadPool,
+        process_chrom: G,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -212,11 +213,11 @@ impl BigWigWrite {
 
         // Write data to file and return
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(bbiwrite::write_vals_singlethreaded(
+            block_on(bbiwrite::write_vals(
                 vals,
                 file,
                 self.options,
-                BigWigWrite::process_chrom,
+                process_chrom,
                 pool,
                 chrom_sizes.clone(),
             ))?;
