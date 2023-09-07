@@ -548,6 +548,10 @@ pub enum ChromDataState<ChromOutput, Error> {
 }
 
 pub struct ChromProcessingKey(pub(crate) u32);
+pub struct ChromProcessingSetup(
+    Vec<(u32, futures_mpsc::Sender<Pin<Box<(dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>> + std::marker::Send + 'static)>>>)>,
+    futures_mpsc::Sender<Pin<Box<(dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>> + std::marker::Send + 'static)>>>,
+);
 
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
@@ -698,22 +702,12 @@ pub(crate) async fn write_vals<
     let mut key = 0;
     let mut output: BTreeMap<u32, _> = BTreeMap::new();
 
-    let mut do_read = |chrom: String,
-                       data: _,
-                       output: &mut BTreeMap<u32, _>|
-     -> Result<ChromProcessingKey, ProcessChromError<_>> {
-        let length = match chrom_sizes.get(&chrom) {
-            Some(length) => *length,
-            None => {
-                return Err(ProcessChromError::InvalidChromosome(format!(
-                    "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
-                    chrom
-                )));
-            }
-        };
-        // Make a new id for the chromosome
-        let chrom_id = chrom_ids.get_id(&chrom);
 
+    let mut summary: Option<Summary> = None;
+    let (send, recv) = futures_mpsc::unbounded();
+    let write_fut = write_chroms(file, zooms_map, recv);
+
+    let setup_chrom = || -> ChromProcessingSetup {
         // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
         // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
         // This is heavily multi-threaded using Futures. A brief summary:
@@ -752,6 +746,31 @@ pub(crate) async fn write_vals<
             (zoom_infos, zooms_channels)
         };
 
+        match send.unbounded_send((section_receiver, buf, sections_handle, zoom_infos)) {
+            Ok(_) => {}
+            Err(_) => panic!("Expected to always send."),
+        }
+
+        ChromProcessingSetup(zooms_channels, ftx)
+    };
+    let mut do_read = |chrom: String,
+                       data: _,
+                       output: &mut BTreeMap<u32, _>|
+     -> Result<ChromProcessingKey, ProcessChromError<_>> {
+        let length = match chrom_sizes.get(&chrom) {
+            Some(length) => *length,
+            None => {
+                return Err(ProcessChromError::InvalidChromosome(format!(
+                    "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
+                    chrom
+                )));
+            }
+        };
+        // Make a new id for the chromosome
+        let chrom_id = chrom_ids.get_id(&chrom);
+
+        let ChromProcessingSetup(zooms_channels, ftx) = setup_chrom();
+
         let fut = process_chrom(
             zooms_channels,
             ftx,
@@ -768,26 +787,19 @@ pub(crate) async fn write_vals<
 
         output.insert(
             curr_key,
-            (fut, section_receiver, buf, sections_handle, zoom_infos),
+            fut,
         );
 
         Ok(ChromProcessingKey(curr_key))
     };
 
-    let mut summary: Option<Summary> = None;
-    let (send, recv) = futures_mpsc::unbounded();
-    let write_fut = write_chroms(file, zooms_map, recv);
     let (write_fut, write_fut_handle) = write_fut.remote_handle();
     pool.spawn_ok(write_fut);
     loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
-                let (_0, _1, _2, _3, _4) = output.remove(&read.0).unwrap();
-                match send.unbounded_send((_1, _2, _3, _4)) {
-                    Ok(_) => {}
-                    Err(_) => panic!("Expected to always send."),
-                }
-                let chrom_summary = _0.await?;
+                let fut = output.remove(&read.0).unwrap();
+                let chrom_summary = fut.await?;
                 match &mut summary {
                     None => summary = Some(chrom_summary),
                     Some(summary) => {
