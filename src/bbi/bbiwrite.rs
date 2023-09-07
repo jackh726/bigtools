@@ -549,8 +549,27 @@ pub enum ChromDataState<ChromOutput, Error> {
 
 pub struct ChromProcessingKey(pub(crate) u32);
 pub struct ChromProcessingSetup(
-    Vec<(u32, futures_mpsc::Sender<Pin<Box<(dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>> + std::marker::Send + 'static)>>>)>,
-    futures_mpsc::Sender<Pin<Box<(dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>> + std::marker::Send + 'static)>>>,
+    Vec<(
+        u32,
+        futures_mpsc::Sender<
+            Pin<
+                Box<
+                    (dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>>
+                         + std::marker::Send
+                         + 'static),
+                >,
+            >,
+        >,
+    )>,
+    futures_mpsc::Sender<
+        Pin<
+            Box<
+                (dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>>
+                     + std::marker::Send
+                     + 'static),
+            >,
+        >,
+    >,
 );
 
 /// Effectively like an Iterator of chromosome data
@@ -702,7 +721,6 @@ pub(crate) async fn write_vals<
     let mut key = 0;
     let mut output: BTreeMap<u32, _> = BTreeMap::new();
 
-
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
     let write_fut = write_chroms(file, zooms_map, recv);
@@ -785,10 +803,7 @@ pub(crate) async fn write_vals<
         let curr_key = key;
         key += 1;
 
-        output.insert(
-            curr_key,
-            fut,
-        );
+        output.insert(curr_key, fut);
 
         Ok(ChromProcessingKey(curr_key))
     };

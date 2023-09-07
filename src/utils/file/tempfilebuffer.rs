@@ -231,7 +231,15 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
     fn update(&mut self) -> io::Result<()> {
         match &mut self.buffer_state {
             BufferState::NotStarted => {
-                self.buffer_state = BufferState::Temp(Some(tempfile::tempfile()?));
+                let real_file = self.real_file.swap(None).take();
+                match real_file {
+                    Some(new_file) => {
+                        self.buffer_state = BufferState::Real(Some(new_file));
+                    }
+                    None => {
+                        self.buffer_state = BufferState::Temp(Some(tempfile::tempfile()?));
+                    }
+                }
             }
             BufferState::Temp(ref mut file) => {
                 let real_file = self.real_file.swap(None).take();
