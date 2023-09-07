@@ -35,7 +35,7 @@ struct Cli {
     /// If set, indicates that only a single pass should be done on the input file. This is most useful
     /// on large files in order to reduce total time. This automatically happens when the input is `stdin`.
     #[arg(long)]
-    #[arg(default_value_t = true)]
+    #[arg(default_value_t = false)]
     single_pass: bool,
 
     #[command(flatten)]
