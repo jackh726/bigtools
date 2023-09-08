@@ -1210,7 +1210,7 @@ pub(crate) async fn write_zoom_vals<
         index_offset: first_zoom_index_offset,
     });
 
-    while let Some(zoom) = zooms_map_iter.next() {
+    while let Some(mut zoom) = zooms_map_iter.next() {
         let zoom_data_offset = file.tell()?;
         // First, we can drop the writer - no more data
         drop(zoom.1 .2);
@@ -1223,11 +1223,8 @@ pub(crate) async fn write_zoom_vals<
             section
         });
         // Subsequence zooms have not switched to real file
-        // Await temp and write
-        let mut zoom_file = zoom.1 .1.await_temp_file();
-        zoom_file.seek(SeekFrom::Start(0))?;
-        let mut buf_reader = BufReader::new(zoom_file);
-        io::copy(&mut buf_reader, &mut file)?;
+        zoom.1 .1.switch(file);
+        file = zoom.1 .1.await_real_file();
         // Generate the rtree index
         let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
         let zoom_index_offset = file.tell()?;
