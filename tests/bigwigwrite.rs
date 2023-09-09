@@ -1,20 +1,18 @@
+use std::collections::HashMap;
 use std::error::Error;
+use std::fs::File;
 use std::io::{self};
+use std::path::PathBuf;
 
+use tempfile;
+
+use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
+use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::utils::chromvalues::ChromValues;
 
 #[test]
 fn test() -> Result<(), Box<dyn Error>> {
-    use std::collections::HashMap;
-    use std::fs::File;
-    use std::path::PathBuf;
-
-    use tempfile;
-
-    use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
-    use bigtools::bed::bedparser::BedParser;
-    use bigtools::utils::chromvalues::ChromValues;
-
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
 
@@ -61,16 +59,62 @@ fn test() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_multi() -> io::Result<()> {
-    use std::collections::HashMap;
-    use std::fs::File;
-    use std::path::PathBuf;
+fn test_multi_pass() -> Result<(), Box<dyn Error>> {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.push("resources/test");
 
-    use tempfile;
+    let mut single_chrom_bedgraph = dir.clone();
+    single_chrom_bedgraph.push("single_chrom.bedGraph");
 
-    use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
-    use bigtools::bed::bedparser::BedParser;
+    let first = {
+        let infile = File::open(single_chrom_bedgraph.clone())?;
+        let mut vals_iter = BedParser::from_bedgraph_file(infile);
+        let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
+        group.next().unwrap().unwrap()
+    };
 
+    let pool = futures::executor::ThreadPoolBuilder::new()
+        .pool_size(6)
+        .create()
+        .expect("Unable to create thread pool.");
+
+    let tempfile = tempfile::NamedTempFile::new()?;
+
+    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
+
+    let mut chrom_map = HashMap::new();
+    chrom_map.insert("chr17".to_string(), 83257441);
+
+    outb.write_multipass(
+        || {
+            let infile = File::open(single_chrom_bedgraph.clone())?;
+            let vals_iter = BedParser::from_bedgraph_file(infile);
+            let chsi = BedParserStreamingIterator::new(vals_iter, false);
+            Ok(chsi)
+        },
+        chrom_map,
+        pool,
+    )
+    .unwrap();
+
+    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+
+    let chroms = bwread.get_chroms();
+    assert_eq!(chroms.len(), 1);
+    assert_eq!(chroms[0].name, "chr17");
+    assert_eq!(chroms[0].length, 83257441);
+
+    let mut intervals = bwread.get_interval("chr17", 0, 83257441)?;
+    let first_interval = intervals.next().unwrap().unwrap();
+    assert_eq!(first.start, first_interval.start);
+    assert_eq!(first.end, first_interval.end);
+    assert_eq!(first.value, first_interval.value);
+
+    Ok(())
+}
+
+#[test]
+fn test_multi_chrom() -> io::Result<()> {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
 
