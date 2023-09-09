@@ -274,13 +274,34 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
+        let process_chrom = |ftx: ChromProcessingInputSectionChannel,
+                             chrom_id: u32,
+                             options: BBIWriteOptions,
+                             pool: ThreadPool,
+                             chrom_values: Values,
+                             chrom: String,
+                             chrom_length: u32| {
+            let fut = BigWigWrite::process_chrom_no_zooms(
+                ftx,
+                chrom_id,
+                options,
+                pool.clone(),
+                chrom_values,
+                chrom,
+                chrom_length,
+            );
+            let (fut, handle) = fut.remote_handle();
+            pool.spawn_ok(fut);
+            handle
+        };
+
         // Write data to file and return
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             block_on(bbiwrite::write_vals_no_zoom(
                 vals,
                 file,
                 self.options,
-                BigWigWrite::process_chrom_no_zooms,
+                process_chrom,
                 pool.clone(),
                 chrom_sizes.clone(),
             ))?;

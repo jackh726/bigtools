@@ -14,7 +14,6 @@ use futures::channel::mpsc::channel;
 use futures::executor::ThreadPool;
 use futures::future::{Future, FutureExt};
 use futures::stream::StreamExt;
-use futures::try_join;
 
 use serde::{Deserialize, Serialize};
 
@@ -548,29 +547,6 @@ pub enum ChromDataState<ChromOutput, Error> {
 }
 
 pub struct ChromProcessingKey(pub(crate) u32);
-pub struct ChromProcessingSetup(
-    Vec<(
-        u32,
-        futures_mpsc::Sender<
-            Pin<
-                Box<
-                    (dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>>
-                         + std::marker::Send
-                         + 'static),
-                >,
-            >,
-        >,
-    )>,
-    futures_mpsc::Sender<
-        Pin<
-            Box<
-                (dyn futures::Future<Output = Result<(SectionData, usize), std::io::Error>>
-                     + std::marker::Send
-                     + 'static),
-            >,
-        >,
-    >,
-);
 
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
@@ -608,8 +584,13 @@ type Data<Error> = (
     futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
     Vec<TempZoomInfo<Error>>,
 );
+type DataWithoutzooms<Error> = (
+    crossbeam_channel::Receiver<Section>,
+    TempFileBuffer<BufWriter<File>>,
+    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
+);
 
-async fn write_chroms<Error: Send + 'static>(
+async fn write_chroms_with_zooms<Error: Send + 'static>(
     mut file: BufWriter<File>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
     mut receiver: futures_mpsc::UnboundedReceiver<Data<Error>>,
@@ -672,6 +653,39 @@ async fn write_chroms<Error: Send + 'static>(
     Ok((file, max_uncompressed_buf_size, section_iter, zooms_map))
 }
 
+async fn write_chroms_without_zooms<Error: Send + 'static>(
+    mut file: BufWriter<File>,
+    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms<Error>>,
+) -> Result<
+    (
+        BufWriter<File>,
+        usize,
+        Vec<crossbeam_channel::IntoIter<Section>>,
+    ),
+    ProcessChromError<Error>,
+> {
+    let mut section_iter = vec![];
+    let mut max_uncompressed_buf_size = 0;
+    loop {
+        let read = receiver.next().await;
+        let (sections, mut data, data_write_future) = match read {
+            None => break,
+            Some(read) => read,
+        };
+        // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
+        // Switch that processing output to the real file
+        data.switch(file);
+
+        // All the futures are actually just handles, so these are purely for the result
+        let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
+        max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
+        section_iter.push(sections.into_iter());
+        file = data.await_real_file();
+    }
+
+    Ok((file, max_uncompressed_buf_size, section_iter))
+}
+
 pub(crate) async fn write_vals<
     Values: ChromValues,
     V: ChromData<Values = Values>,
@@ -723,9 +737,9 @@ pub(crate) async fn write_vals<
 
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
-    let write_fut = write_chroms(file, zooms_map, recv);
+    let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
 
-    let setup_chrom = || -> ChromProcessingSetup {
+    let setup_chrom = || {
         // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
         // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
         // This is heavily multi-threaded using Futures. A brief summary:
@@ -769,7 +783,7 @@ pub(crate) async fn write_vals<
             Err(_) => panic!("Expected to always send."),
         }
 
-        ChromProcessingSetup(zooms_channels, ftx)
+        (zooms_channels, ftx)
     };
     let mut do_read = |chrom: String,
                        data: _,
@@ -787,7 +801,7 @@ pub(crate) async fn write_vals<
         // Make a new id for the chromosome
         let chrom_id = chrom_ids.get_id(&chrom);
 
-        let ChromProcessingSetup(zooms_channels, ftx) = setup_chrom();
+        let (zooms_channels, ftx) = setup_chrom();
 
         let fut = process_chrom(
             zooms_channels,
@@ -885,10 +899,10 @@ pub(crate) async fn write_vals_no_zoom<
     ) -> Fut,
 >(
     mut vals_iter: V,
-    mut file: BufWriter<File>,
+    file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
-    mut pool: ThreadPool,
+    pool: ThreadPool,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
     (
@@ -901,20 +915,44 @@ pub(crate) async fn write_vals_no_zoom<
     ),
     ProcessChromError<Values::Error>,
 > {
-    let mut section_iter = vec![];
-
-    let mut summary: Option<Summary> = None;
     let total_zoom_counts = std::iter::successors(Some(10), |z: &u64| Some((*z).saturating_mul(4)))
         .take_while(|z| *z < u64::MAX)
         .map(|z| (z, 0));
     let mut total_zoom_counts: BTreeMap<u64, u64> = BTreeMap::from_iter(total_zoom_counts);
-    let mut max_uncompressed_buf_size = 0;
 
     let mut chrom_ids = IdMap::default();
 
     let mut key = 0;
     let mut output: BTreeMap<u32, _> = BTreeMap::new();
 
+    let mut summary: Option<Summary> = None;
+    let (send, recv) = futures_mpsc::unbounded();
+    let write_fut = write_chroms_without_zooms::<Values::Error>(file, recv);
+
+    let setup_chrom = || {
+        // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
+        // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
+        // This is heavily multi-threaded using Futures. A brief summary:
+        // - All reading from the ChromValues is done in a single future (process_chrom). This futures in charge of keeping track of sections (and zoom data).
+        //   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
+        //   This is the most CPU-intensive part of the entire write.
+        // - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
+        //   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
+        //   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
+        //   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
+        //   All of this is done for zoom sections too.
+        //
+        // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
+        let (ftx, sections_handle, buf, section_receiver) =
+            future_channel(options.channel_size, &pool);
+
+        match send.unbounded_send((section_receiver, buf, sections_handle)) {
+            Ok(_) => {}
+            Err(_) => panic!("Expected to always send."),
+        }
+
+        ftx
+    };
     let mut do_read = |chrom: String,
                        data: _,
                        output: &mut BTreeMap<u32, _>|
@@ -931,51 +969,25 @@ pub(crate) async fn write_vals_no_zoom<
         // Make a new id for the chromosome
         let chrom_id = chrom_ids.get_id(&chrom);
 
-        // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
-        // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
-        // This is heavily multi-threaded using Futures. A brief summary:
-        // - All reading from the ChromValues is done in a single future (process_chrom). This futures in charge of keeping track of sections (and zoom data).
-        //   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
-        //   This is the most CPU-intensive part of the entire write.
-        // - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
-        //   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
-        //   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
-        //   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
-        //   All of this is done for zoom sections too.
-        //
-        // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
-        let (ftx, sections_handle, buf, section_receiver) =
-            future_channel(options.channel_size, &mut pool);
+        let ftx = setup_chrom();
 
-        let (f_remote, f_handle) =
-            process_chrom(ftx, chrom_id, options, pool.clone(), data, chrom, length)
-                .remote_handle();
-        pool.spawn_ok(f_remote);
+        let fut = process_chrom(ftx, chrom_id, options, pool.clone(), data, chrom, length);
 
         let curr_key = key;
         key += 1;
 
-        output.insert(curr_key, (f_handle, section_receiver, buf, sections_handle));
+        output.insert(curr_key, fut);
 
         Ok(ChromProcessingKey(curr_key))
     };
 
-    let chrom_ids = loop {
+    let (write_fut, write_fut_handle) = write_fut.remote_handle();
+    pool.spawn_ok(write_fut);
+    loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
-                let read = output.remove(&read.0).unwrap();
-                let (summary_future, sections, mut data, data_write_future) = read;
-                // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
-                // Switch that processing output to the real file
-                data.switch(file);
-
-                // All the futures are actually just handles, so these are purely for the result
-                let joined_future = try_join!(summary_future, data_write_future)?;
-                let ((chrom_summary, zoom_counts), (_num_sections, uncompressed_buf_size)) =
-                    joined_future;
-                max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-                section_iter.push(sections.into_iter());
-                file = data.await_real_file();
+                let fut = output.remove(&read.0).unwrap();
+                let (chrom_summary, zoom_counts) = fut.await?;
 
                 match &mut summary {
                     None => summary = Some(chrom_summary),
@@ -995,10 +1007,11 @@ pub(crate) async fn write_vals_no_zoom<
                     *zoom_count.1 += chrom_zoom_count;
                 }
             }
-            ChromDataState::Finished => break chrom_ids,
+            ChromDataState::Finished => break,
             ChromDataState::Error(err) => return Err(ProcessChromError::SourceError(err)),
         }
-    };
+    }
+    drop(send);
 
     let summary_complete = summary.unwrap_or(Summary {
         total_items: 0,
@@ -1008,6 +1021,8 @@ pub(crate) async fn write_vals_no_zoom<
         sum: 0.0,
         sum_squares: 0.0,
     });
+
+    let (file, max_uncompressed_buf_size, section_iter) = write_fut_handle.await?;
 
     let section_iter = section_iter.into_iter().flatten();
     Ok((
