@@ -48,7 +48,7 @@ a bigWig can be created using [`BigWigWrite::write`] or a bigBed with
 data, and a `ThreadPool` to spawn processing on.
 */
 
-pub mod bbi;
+mod bbi;
 pub mod bed;
 pub mod utils;
 

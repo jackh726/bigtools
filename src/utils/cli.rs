@@ -40,6 +40,7 @@ pub struct BBIWriteArgs {
     pub items_per_slot: u32,
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! compat_replace {
     (

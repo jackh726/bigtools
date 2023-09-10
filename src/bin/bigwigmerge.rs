@@ -10,12 +10,11 @@ use clap::Parser;
 use crossbeam_channel::unbounded;
 use thiserror::Error;
 
-use bigtools::bbi::Value;
-use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
-use bigtools::bbiread::BBIReadError;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::reopen::ReopenableFile;
+use bigtools::Value;
+use bigtools::{BBIRead, BBIReadError, BigWigRead, BigWigWrite};
 use bigtools::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 
 pub struct MergingValues {
@@ -133,7 +132,7 @@ pub fn get_merged_vals(
                     }
                 }
                 // We don't want to a new file descriptor for every chrom
-                bws.push((w.info.clone(), w.inner_read().path.to_string()));
+                bws.push((w.get_info().clone(), w.inner_read().path.to_string()));
             }
             let size = size.unwrap();
 

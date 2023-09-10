@@ -5,10 +5,10 @@ use std::path::Path;
 
 use clap::Parser;
 
-use bigtools::bbi::BigWigRead;
-use bigtools::bbiread::BBIReadError;
 use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
+use bigtools::BBIReadError;
+use bigtools::BigWigRead;
 
 struct Options {
     withnames: bool,

@@ -9,10 +9,9 @@ use clap::Parser;
 
 use futures::task::SpawnExt;
 
-use bigtools::bbi::{BBIRead, BigBedRead, ChromAndSize};
-use bigtools::bbiread::BBIReadError;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use bigtools::{BBIRead, BBIReadError, BigBedRead, ChromAndSize};
 
 pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     bigbed: BigBedRead<R>,

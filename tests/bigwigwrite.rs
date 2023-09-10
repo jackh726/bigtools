@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 use tempfile;
 
-use bigtools::bbi::{BBIRead, BigWigRead, BigWigWrite};
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::chromvalues::ChromValues;
+use bigtools::{BBIRead, BigWigRead, BigWigWrite};
 
 #[test]
 fn test() -> Result<(), Box<dyn Error>> {

@@ -10,9 +10,9 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     use tempfile;
 
-    use bigtools::bbi::{BBIRead, BigBedRead, BigBedWrite};
     use bigtools::bed::bedparser::BedParser;
     use bigtools::utils::chromvalues::ChromValues;
+    use bigtools::{BBIRead, BigBedRead, BigBedWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");

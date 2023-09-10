@@ -8,9 +8,8 @@ use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::cli::BBIWriteArgs;
 use clap::Parser;
 
-use bigtools::bbi::BigBedWrite;
-use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::BedParser;
+use bigtools::{BigBedWrite, InputSortType};
 
 #[derive(Parser)]
 #[command(about = "Converts a bed to a bigBed.", long_about = None)]

@@ -9,10 +9,9 @@ use clap::Parser;
 
 use futures::task::SpawnExt;
 
-use bigtools::bbi::{BBIRead, BigWigRead, ChromAndSize};
-use bigtools::bbiread::BBIReadError;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
+use bigtools::{BBIRead, BBIReadError, BigWigRead, ChromAndSize};
 use ufmt::uwrite;
 
 pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(

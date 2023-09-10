@@ -1,17 +1,17 @@
 #[cfg(feature = "read")]
-pub mod bbiread;
+pub(crate) mod bbiread;
 #[cfg(feature = "write")]
-pub mod bbiwrite;
+pub(crate) mod bbiwrite;
 #[cfg(feature = "write")]
 pub mod bedchromdata;
 #[cfg(feature = "read")]
-pub mod bigbedread;
+pub(crate) mod bigbedread;
 #[cfg(feature = "write")]
-pub mod bigbedwrite;
+pub(crate) mod bigbedwrite;
 #[cfg(feature = "read")]
-pub mod bigwigread;
+pub(crate) mod bigwigread;
 #[cfg(feature = "write")]
-pub mod bigwigwrite;
+pub(crate) mod bigwigwrite;
 
 #[cfg(feature = "write")]
 use serde::{Deserialize, Serialize};

@@ -10,9 +10,8 @@ use bigtools::bedchromdata::{BedParserParallelStreamingIterator, BedParserStream
 use bigtools::utils::cli::BBIWriteArgs;
 use clap::Parser;
 
-use bigtools::bbi::BigWigWrite;
-use bigtools::bbiwrite::InputSortType;
 use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
+use bigtools::{BigWigWrite, InputSortType};
 
 #[derive(Parser)]
 #[command(about = "Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.", long_about = None)]

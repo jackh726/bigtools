@@ -11,8 +11,8 @@ use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
 
-use bigtools::bbi::BigWigRead;
 use bigtools::utils::misc::{stats_for_bed_item, Name};
+use bigtools::BigWigRead;
 use crossbeam_channel::TryRecvError;
 
 #[derive(Parser)]

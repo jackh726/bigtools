@@ -100,7 +100,7 @@ impl From<BBIFileReadInfoError> for BigBedReadAttachError {
 }
 
 pub struct BigBedRead<R> {
-    pub info: BBIFileInfo,
+    info: BBIFileInfo,
     read: R,
 }
 

@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-use bigtools::bbi::{BigWigRead, BigWigReadAttachError};
+use bigtools::{BigWigRead, BigWigReadAttachError};
 
 fn main() -> Result<(), BigWigReadAttachError> {
     let matches = Command::new("Verify")

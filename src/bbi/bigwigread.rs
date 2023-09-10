@@ -142,7 +142,7 @@ impl From<BBIFileReadInfoError> for BigWigReadAttachError {
 }
 
 pub struct BigWigRead<R> {
-    pub info: BBIFileInfo,
+    info: BBIFileInfo,
     read: R,
 }
 

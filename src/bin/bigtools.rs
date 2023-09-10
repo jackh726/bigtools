@@ -2,12 +2,12 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
-use bigtools::{BigWigRead, BigWigReadAttachError};
+use bigtools::{BBIRead, BigWigRead, BigWigReadAttachError};
 use clap::{Arg, Command};
 
-use bigtools::bbi::{BigBedRead, BigBedReadAttachError};
 use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
+use bigtools::{BigBedRead, BigBedReadAttachError};
 
 struct IntersectOptions {}
 
@@ -94,9 +94,9 @@ fn intersect<R: SeekableRead + 'static>(
 
 fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<()> {
     let chroms = match BigWigRead::open_file(&bpath) {
-        Ok(bigwig) => bigwig.info.chrom_info,
+        Ok(bigwig) => bigwig.get_info().chrom_info.clone(),
         Err(BigWigReadAttachError::NotABigWig) => match BigBedRead::open_file(&bpath) {
-            Ok(bigbed) => bigbed.info.chrom_info,
+            Ok(bigbed) => bigbed.get_info().chrom_info.clone(),
             Err(BigBedReadAttachError::NotABigBed) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,

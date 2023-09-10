@@ -39,7 +39,7 @@ pub(crate) struct SectionData {
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-pub struct Section {
+pub(crate) struct Section {
     pub(crate) chrom: u32,
     pub(crate) start: u32,
     pub(crate) end: u32,
@@ -110,7 +110,7 @@ pub enum ProcessChromError<SourceError> {
     SourceError(SourceError),
 }
 
-pub struct TempZoomInfo<SourceError> {
+pub(crate) struct TempZoomInfo<SourceError> {
     pub resolution: u32,
     pub data_write_future: Box<
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
@@ -122,9 +122,6 @@ pub struct TempZoomInfo<SourceError> {
 pub(crate) type ChromProcessingInputSectionChannel = futures::channel::mpsc::Sender<
     Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
 >;
-
-pub type WriteSummaryFuture<SourceError> =
-    Pin<Box<dyn Future<Output = Result<Summary, ProcessChromError<SourceError>>> + Send>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -740,19 +737,6 @@ pub(crate) async fn write_vals<
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
 
     let setup_chrom = || {
-        // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
-        // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
-        // This is heavily multi-threaded using Futures. A brief summary:
-        // - All reading from the ChromValues is done in a single future (process_chrom). This futures in charge of keeping track of sections (and zoom data).
-        //   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
-        //   This is the most CPU-intensive part of the entire write.
-        // - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
-        //   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
-        //   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
-        //   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
-        //   All of this is done for zoom sections too.
-        //
-        // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, &pool);
 
@@ -930,19 +914,6 @@ pub(crate) async fn write_vals_no_zoom<
     let write_fut = write_chroms_without_zooms::<Values::Error>(file, recv);
 
     let setup_chrom = || {
-        // This converts a ChromValues (streaming iterator) to a (WriteSummaryFuture, ChromProcessingOutput).
-        // This is a separate function so this can techincally be run for mulitple chromosomes simulatenously.
-        // This is heavily multi-threaded using Futures. A brief summary:
-        // - All reading from the ChromValues is done in a single future (process_chrom). This futures in charge of keeping track of sections (and zoom data).
-        //   When a section is full, a Future is created to byte-encode the data and compress it (if compression is on). The same is true for zoom sections.
-        //   This is the most CPU-intensive part of the entire write.
-        // - The section futures are sent (in order) by channel to a separate future for the sole purpose of writing the (maybe compressed) section data to a `TempFileBuffer`.
-        //   The data is written to a temporary file, since this may be happening in parallel (where we don't know the real file offset of these sections).
-        //   `TempFileBuffer` allows "switching" to the real file once it's available (on the read side), so if the real file is available, I/O ops are not duplicated.
-        //   Once the section data is written to the file, the file offset data is stored in a `FileBufferedChannel`. This is needed for the index.
-        //   All of this is done for zoom sections too.
-        //
-        // The futures that are returned are only handles to remote futures that are spawned immediately on `pool`.
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, &pool);
 
