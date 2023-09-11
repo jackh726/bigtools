@@ -21,6 +21,7 @@ use crate::bbiwrite::{
     write_rtreeindex, write_zooms, BBIWriteOptions, ProcessChromError, SectionData,
 };
 
+/// The struct used to write a bigBed file
 pub struct BigBedWrite {
     pub path: String,
     pub options: BBIWriteOptions,

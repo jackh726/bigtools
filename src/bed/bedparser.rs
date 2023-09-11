@@ -1,3 +1,5 @@
+//! Utilities for parsing a bed file.
+//!
 //! There are roughly two layers of abstraction here, each with a different purpose.
 //!
 //! The first layer of abstraction is enscapsulated in the `StreamingBedValues` trait. Briefly,

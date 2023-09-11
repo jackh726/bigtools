@@ -1,3 +1,7 @@
+/*!
+Utitilies for reading and writing the autosql section of a bigBed.
+*/
+
 pub const BED3: &str = r#"
 table bed3
 "Simple bed"

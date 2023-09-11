@@ -1,8 +1,8 @@
 use clap::{Arg, Command};
 
-use bigtools::{BBIRead, BigWigRead, BigWigReadAttachError};
+use bigtools::{BBIRead, BigWigRead, BigWigReadOpenError};
 
-fn main() -> Result<(), BigWigReadAttachError> {
+fn main() -> Result<(), BigWigReadOpenError> {
     let matches = Command::new("BigWigInfo")
         .arg(
             Arg::new("bigwig")

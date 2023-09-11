@@ -9,10 +9,10 @@ use thiserror::Error;
 use crate::bbi::{BBIFile, BedEntry, ZoomRecord};
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
-    ChromAndSize, ZoomIntervalIter,
+    ChromInfo, ZoomIntervalIter,
 };
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::ZoomIntervalError;
+use crate::{BBIReadInternal, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -73,8 +73,9 @@ where
     }
 }
 
+/// Possible errors encountered when opening a bigBed file to read
 #[derive(Error, Debug)]
-pub enum BigBedReadAttachError {
+pub enum BigBedReadOpenError {
     #[error("File is not a bigBed.")]
     NotABigBed,
     #[error("The chromosomes are invalid.")]
@@ -83,22 +84,23 @@ pub enum BigBedReadAttachError {
     IoError(io::Error),
 }
 
-impl From<io::Error> for BigBedReadAttachError {
+impl From<io::Error> for BigBedReadOpenError {
     fn from(error: io::Error) -> Self {
-        BigBedReadAttachError::IoError(error)
+        BigBedReadOpenError::IoError(error)
     }
 }
 
-impl From<BBIFileReadInfoError> for BigBedReadAttachError {
+impl From<BBIFileReadInfoError> for BigBedReadOpenError {
     fn from(error: BBIFileReadInfoError) -> Self {
         match error {
-            BBIFileReadInfoError::UnknownMagic => BigBedReadAttachError::NotABigBed,
-            BBIFileReadInfoError::InvalidChroms => BigBedReadAttachError::InvalidChroms,
-            BBIFileReadInfoError::IoError(e) => BigBedReadAttachError::IoError(e),
+            BBIFileReadInfoError::UnknownMagic => BigBedReadOpenError::NotABigBed,
+            BBIFileReadInfoError::InvalidChroms => BigBedReadOpenError::InvalidChroms,
+            BBIFileReadInfoError::IoError(e) => BigBedReadOpenError::IoError(e),
         }
     }
 }
 
+/// The struct used to read a bigBed file
 pub struct BigBedRead<R> {
     info: BBIFileInfo,
     read: R,
@@ -124,21 +126,14 @@ impl<R: SeekableRead> BBIRead for BigBedRead<R> {
         &mut self.read
     }
 
-    fn get_chroms(&self) -> Vec<ChromAndSize> {
-        self.info
-            .chrom_info
-            .iter()
-            .map(|c| ChromAndSize {
-                name: c.name.clone(),
-                length: c.length,
-            })
-            .collect::<Vec<_>>()
+    fn get_chroms(&self) -> Vec<ChromInfo> {
+        self.info.chrom_info.clone()
     }
 }
 
 impl BigBedRead<ReopenableFile> {
     /// Opens a new `BigBedRead` from a given path as a file.
-    pub fn open_file(path: &str) -> Result<Self, BigBedReadAttachError> {
+    pub fn open_file(path: &str) -> Result<Self, BigBedReadOpenError> {
         let reopen = ReopenableFile {
             path: path.to_string(),
             file: File::open(path)?,
@@ -156,11 +151,11 @@ where
     R: SeekableRead,
 {
     /// Opens a new `BigBedRead` with for a given type that implements both `Read` and `Seek`
-    pub fn open(mut read: R) -> Result<Self, BigBedReadAttachError> {
+    pub fn open(mut read: R) -> Result<Self, BigBedReadOpenError> {
         let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigBed => {}
-            _ => return Err(BigBedReadAttachError::NotABigBed),
+            _ => return Err(BigBedReadOpenError::NotABigBed),
         }
 
         Ok(BigBedRead { info, read })

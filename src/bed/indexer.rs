@@ -1,9 +1,13 @@
+/*!
+Utilities for indexing a bed file that is start-sorted (chromosomes may be out of order).
+*/
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 
 use crate::utils::indexlist::{Index, IndexList};
 use crate::utils::tell::Tell;
 
+/// Returns a Vec of offsets into a bed file, and the chromosome starting at each offset.
 pub fn index_chroms(file: File) -> io::Result<Vec<(u64, String)>> {
     let mut file = BufReader::new(file);
 

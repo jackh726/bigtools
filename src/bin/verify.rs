@@ -1,8 +1,8 @@
 use clap::{Arg, Command};
 
-use bigtools::{BigWigRead, BigWigReadAttachError};
+use bigtools::{BigWigRead, BigWigReadOpenError};
 
-fn main() -> Result<(), BigWigReadAttachError> {
+fn main() -> Result<(), BigWigReadOpenError> {
     let matches = Command::new("Verify")
         .about("Verifies different parts of a bigwig or bigbed file. By default, it only verifies the header is correct and that file offsets are valid.")
         .arg(Arg::new("input")

@@ -72,6 +72,7 @@ struct ZoomItem {
     channel: ChromProcessingInputSectionChannel,
 }
 
+/// The struct used to write a bigWig file
 pub struct BigWigWrite {
     pub path: String,
     pub options: BBIWriteOptions,

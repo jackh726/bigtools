@@ -62,17 +62,23 @@ pub(crate) enum RTreeChildren {
     Nodes(Vec<RTreeNode>),
 }
 
+/// Options for required input sort order of values
 #[derive(Copy, Clone)]
 pub enum InputSortType {
+    /// Both the chromosomes and start values must be sorted
     ALL,
+    /// Start values within a chromosome must be sorted, but chromosomes may be out of order
     START,
     // TODO
     //NONE,
 }
 
+/// The default block size used when writing a bbi file
 pub const DEFAULT_BLOCK_SIZE: u32 = 256;
+/// The default items per slot used when writing a bbi file
 pub const DEFAULT_ITEMS_PER_SLOT: u32 = 1024;
 
+/// Options for writing to a bbi file
 #[derive(Copy, Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
@@ -98,6 +104,7 @@ impl Default for BBIWriteOptions {
     }
 }
 
+/// Possible errors encountered when processing a chromosome when writing a bbi file
 #[derive(Error, Debug)]
 pub enum ProcessChromError<SourceError> {
     #[error("{}", .0)]
@@ -543,6 +550,7 @@ pub enum ChromDataState<ChromOutput, Error> {
     Error(Error),
 }
 
+/// An opaque key to indicate an processing chromosome
 pub struct ChromProcessingKey(pub(crate) u32);
 
 /// Effectively like an Iterator of chromosome data

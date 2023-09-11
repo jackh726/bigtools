@@ -11,7 +11,7 @@ use futures::task::SpawnExt;
 
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
-use bigtools::{BBIRead, BBIReadError, BigWigRead, ChromAndSize};
+use bigtools::{BBIRead, BBIReadError, BigWigRead, ChromInfo};
 use ufmt::uwrite;
 
 pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
@@ -24,7 +24,7 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
 ) -> Result<(), BBIReadError> {
     /*
     // This is the simple single-threaded approach
-    let mut chroms: Vec<ChromAndSize> = bigwig.get_chroms();
+    let mut chroms: Vec<ChromInfo> = bigwig.get_chroms();
     chroms.sort_by(|a, b| a.name.cmp(&b.name));
     let mut writer = io::BufWriter::new(out_file);
     for chrom in chroms {
@@ -52,7 +52,7 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
             let writer = io::BufWriter::new(file);
             async fn file_future<R: Reopen + SeekableRead + 'static>(
                 mut bigwig: BigWigRead<R>,
-                chrom: ChromAndSize,
+                chrom: ChromInfo,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
                 start: Option<u32>,
                 end: Option<u32>,

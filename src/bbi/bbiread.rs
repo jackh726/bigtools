@@ -13,27 +13,32 @@ use crate::bed::bedparser::BedValueError;
 use crate::utils::reopen::SeekableRead;
 
 #[derive(Copy, Clone, Debug)]
-pub struct Block {
+pub(crate) struct Block {
     pub offset: u64,
     pub size: u64,
 }
 
+/// Header info for a bbi file
+///
+/// Note that info on internal properties like file offsets are not public.
+/// Reading data is available through higher-level functions.
 #[derive(Copy, Clone, Debug)]
 pub struct BBIHeader {
     pub endianness: Endianness,
-
     pub version: u16,
+    pub field_count: u16,
+    pub defined_field_count: u16,
+
     pub(crate) zoom_levels: u16,
     pub(crate) chromosome_tree_offset: u64,
     pub(crate) full_data_offset: u64,
     pub(crate) full_index_offset: u64,
-    pub(crate) _field_count: u16,
-    pub(crate) _defined_field_count: u16,
     pub(crate) auto_sql_offset: u64,
     pub(crate) total_summary_offset: u64,
     pub(crate) uncompress_buf_size: u32,
 }
 
+/// Information on a chromosome in a bbi file
 #[derive(Clone, Debug)]
 pub struct ChromInfo {
     pub name: String,
@@ -41,23 +46,22 @@ pub struct ChromInfo {
     pub(crate) id: u32,
 }
 
-#[derive(Debug)]
-pub struct ChromAndSize {
-    pub name: String,
-    pub length: u32,
-}
-
-impl PartialEq for ChromAndSize {
-    fn eq(&self, other: &ChromAndSize) -> bool {
+impl PartialEq for ChromInfo {
+    fn eq(&self, other: &ChromInfo) -> bool {
         self.name == other.name
     }
 }
 
+/// Info on a bbi file
 #[derive(Clone, Debug)]
 pub struct BBIFileInfo {
+    /// The type of the bbi file - either a bigBed or a bigWig
     pub filetype: BBIFile,
+    /// Header info
     pub header: BBIHeader,
+    /// Info on zooms in the bbi file
     pub zoom_headers: Vec<ZoomHeader>,
+    /// The chromosome info the bbi file is based on
     pub chrom_info: Vec<ChromInfo>,
 }
 
@@ -81,7 +85,7 @@ impl BBIFileInfo {
 }
 
 #[derive(Error, Debug)]
-pub enum BBIFileReadInfoError {
+pub(crate) enum BBIFileReadInfoError {
     #[error("Invalid magic (likely not a BigWig or BigBed file)")]
     UnknownMagic,
     #[error("Invalid chromosomes section")]
@@ -91,7 +95,7 @@ pub enum BBIFileReadInfoError {
 }
 
 #[derive(Error, Debug)]
-pub enum CirTreeSearchError {
+pub(crate) enum CirTreeSearchError {
     #[error("The passed chromosome ({}) was incorrect.", .0)]
     InvalidChromosome(String),
     #[error("Invalid magic (likely a bug).")]
@@ -100,6 +104,7 @@ pub enum CirTreeSearchError {
     IoError(#[from] io::Error),
 }
 
+/// Possible errors encountered when reading a bbi file
 #[derive(Error, Debug)]
 pub enum BBIReadError {
     #[error("The passed chromosome ({}) was incorrect.", .0)]
@@ -108,14 +113,23 @@ pub enum BBIReadError {
     UnknownMagic,
     #[error("The file was invalid: {}", .0)]
     InvalidFile(String),
-    #[error("Error searching the cir tree.")]
-    CirTreeSearchError(#[from] CirTreeSearchError),
     #[error("Error parsing bed-like data.")]
     BedValueError(#[from] BedValueError),
     #[error("Error occurred: {}", .0)]
     IoError(#[from] io::Error),
 }
 
+impl From<CirTreeSearchError> for BBIReadError {
+    fn from(value: CirTreeSearchError) -> Self {
+        match value {
+            CirTreeSearchError::InvalidChromosome(chrom) => BBIReadError::InvalidChromosome(chrom),
+            CirTreeSearchError::UnknownMagic => BBIReadError::UnknownMagic,
+            CirTreeSearchError::IoError(e) => BBIReadError::IoError(e),
+        }
+    }
+}
+
+/// Potential errors found when trying to read data from a zoom level
 #[derive(Error, Debug)]
 pub enum ZoomIntervalError {
     #[error("The passed reduction level was not found")]
@@ -132,21 +146,11 @@ impl From<ChromIdNotFound> for ZoomIntervalError {
 
 impl From<CirTreeSearchError> for ZoomIntervalError {
     fn from(e: CirTreeSearchError) -> Self {
-        ZoomIntervalError::BBIReadError(BBIReadError::CirTreeSearchError(e))
+        ZoomIntervalError::BBIReadError(e.into())
     }
 }
 
-pub trait BBIRead {
-    type Read: SeekableRead;
-
-    /// Get basic info about the bbi file
-    fn get_info(&self) -> &BBIFileInfo;
-
-    /// Gets a reader to the underlying file
-    fn reader(&mut self) -> &mut Self::Read;
-
-    fn get_chroms(&self) -> Vec<ChromAndSize>;
-
+pub(crate) trait BBIReadInternal: BBIRead {
     /// This assumes the file is at the cir tree start
     fn search_cir_tree(
         &mut self,
@@ -228,6 +232,21 @@ pub trait BBIRead {
     }
 }
 
+impl<T: BBIRead> BBIReadInternal for T {}
+
+/// Generic methods for reading a bbi file
+pub trait BBIRead {
+    type Read: SeekableRead;
+
+    /// Get basic info about the bbi file
+    fn get_info(&self) -> &BBIFileInfo;
+
+    /// Gets a reader to the underlying file
+    fn reader(&mut self) -> &mut Self::Read;
+
+    fn get_chroms(&self) -> Vec<ChromInfo>;
+}
+
 pub(crate) fn read_info<R: SeekableRead>(
     mut file: &mut R,
 ) -> Result<BBIFileInfo, BBIFileReadInfoError> {
@@ -249,8 +268,8 @@ pub(crate) fn read_info<R: SeekableRead>(
         chromosome_tree_offset,
         full_data_offset,
         full_index_offset,
-        _field_count,
-        _defined_field_count,
+        field_count,
+        defined_field_count,
         auto_sql_offset,
         total_summary_offset,
         uncompress_buf_size,
@@ -261,8 +280,8 @@ pub(crate) fn read_info<R: SeekableRead>(
             let chromosome_tree_offset = header_data.get_u64();
             let full_data_offset = header_data.get_u64();
             let full_index_offset = header_data.get_u64();
-            let _field_count = header_data.get_u16();
-            let _defined_field_count = header_data.get_u16();
+            let field_count = header_data.get_u16();
+            let defined_field_count = header_data.get_u16();
             let auto_sql_offset = header_data.get_u64();
             let total_summary_offset = header_data.get_u64();
             let uncompress_buf_size = header_data.get_u32();
@@ -274,8 +293,8 @@ pub(crate) fn read_info<R: SeekableRead>(
                 chromosome_tree_offset,
                 full_data_offset,
                 full_index_offset,
-                _field_count,
-                _defined_field_count,
+                field_count,
+                defined_field_count,
                 auto_sql_offset,
                 total_summary_offset,
                 uncompress_buf_size,
@@ -287,8 +306,8 @@ pub(crate) fn read_info<R: SeekableRead>(
             let chromosome_tree_offset = header_data.get_u64_le();
             let full_data_offset = header_data.get_u64_le();
             let full_index_offset = header_data.get_u64_le();
-            let _field_count = header_data.get_u16_le();
-            let _defined_field_count = header_data.get_u16_le();
+            let field_count = header_data.get_u16_le();
+            let defined_field_count = header_data.get_u16_le();
             let auto_sql_offset = header_data.get_u64_le();
             let total_summary_offset = header_data.get_u64_le();
             let uncompress_buf_size = header_data.get_u32_le();
@@ -300,8 +319,8 @@ pub(crate) fn read_info<R: SeekableRead>(
                 chromosome_tree_offset,
                 full_data_offset,
                 full_index_offset,
-                _field_count,
-                _defined_field_count,
+                field_count,
+                defined_field_count,
                 auto_sql_offset,
                 total_summary_offset,
                 uncompress_buf_size,
@@ -316,8 +335,8 @@ pub(crate) fn read_info<R: SeekableRead>(
         chromosome_tree_offset,
         full_data_offset,
         full_index_offset,
-        _field_count,
-        _defined_field_count,
+        field_count,
+        defined_field_count,
         auto_sql_offset,
         total_summary_offset,
         uncompress_buf_size,
@@ -423,7 +442,7 @@ fn read_zoom_headers<R: SeekableRead>(
 }
 
 #[derive(Error, Debug)]
-pub enum ChromTreeBlockReadError {
+enum ChromTreeBlockReadError {
     #[error("{}", .0)]
     InvalidFile(String),
     #[error("Error occurred: {}", .0)]

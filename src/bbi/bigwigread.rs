@@ -50,10 +50,10 @@ use thiserror::Error;
 use crate::bbi::{BBIFile, Summary, Value, ZoomRecord};
 use crate::bbiread::{
     get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
-    ChromAndSize, ZoomIntervalIter,
+    ChromInfo, ZoomIntervalIter,
 };
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::ZoomIntervalError;
+use crate::{BBIReadInternal, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -115,8 +115,9 @@ where
     }
 }
 
+/// Possible errors encountered when opening a bigWig file to read
 #[derive(Debug, Error)]
-pub enum BigWigReadAttachError {
+pub enum BigWigReadOpenError {
     #[error("NotABigWig")]
     NotABigWig,
     #[error("InvalidChroms")]
@@ -125,22 +126,23 @@ pub enum BigWigReadAttachError {
     IoError(io::Error),
 }
 
-impl From<io::Error> for BigWigReadAttachError {
+impl From<io::Error> for BigWigReadOpenError {
     fn from(error: io::Error) -> Self {
-        BigWigReadAttachError::IoError(error)
+        BigWigReadOpenError::IoError(error)
     }
 }
 
-impl From<BBIFileReadInfoError> for BigWigReadAttachError {
+impl From<BBIFileReadInfoError> for BigWigReadOpenError {
     fn from(error: BBIFileReadInfoError) -> Self {
         match error {
-            BBIFileReadInfoError::UnknownMagic => BigWigReadAttachError::NotABigWig,
-            BBIFileReadInfoError::InvalidChroms => BigWigReadAttachError::InvalidChroms,
-            BBIFileReadInfoError::IoError(e) => BigWigReadAttachError::IoError(e),
+            BBIFileReadInfoError::UnknownMagic => BigWigReadOpenError::NotABigWig,
+            BBIFileReadInfoError::InvalidChroms => BigWigReadOpenError::InvalidChroms,
+            BBIFileReadInfoError::IoError(e) => BigWigReadOpenError::IoError(e),
         }
     }
 }
 
+/// The struct used to read a bigWig file
 pub struct BigWigRead<R> {
     info: BBIFileInfo,
     read: R,
@@ -166,21 +168,14 @@ impl<R: SeekableRead> BBIRead for BigWigRead<R> {
         &mut self.read
     }
 
-    fn get_chroms(&self) -> Vec<ChromAndSize> {
-        self.info
-            .chrom_info
-            .iter()
-            .map(|c| ChromAndSize {
-                name: c.name.clone(),
-                length: c.length,
-            })
-            .collect::<Vec<_>>()
+    fn get_chroms(&self) -> Vec<ChromInfo> {
+        self.info.chrom_info.clone()
     }
 }
 
 impl BigWigRead<ReopenableFile> {
     /// Opens a new `BigWigRead` from a given path as a file.
-    pub fn open_file(path: &str) -> Result<Self, BigWigReadAttachError> {
+    pub fn open_file(path: &str) -> Result<Self, BigWigReadOpenError> {
         let reopen = ReopenableFile {
             path: path.to_string(),
             file: File::open(path)?,
@@ -198,11 +193,11 @@ where
     R: SeekableRead,
 {
     /// Opens a new `BigWigRead` with for a given type that implements both `Read` and `Seek`
-    pub fn open(mut read: R) -> Result<Self, BigWigReadAttachError> {
+    pub fn open(mut read: R) -> Result<Self, BigWigReadOpenError> {
         let info = read_info(&mut read)?;
         match info.filetype {
             BBIFile::BigWig => {}
-            _ => return Err(BigWigReadAttachError::NotABigWig),
+            _ => return Err(BigWigReadOpenError::NotABigWig),
         }
 
         Ok(BigWigRead { info, read })
@@ -343,9 +338,7 @@ where
         end: u32,
     ) -> Result<Vec<f32>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self
-            .get_overlapping_blocks(chrom_name, start, end)
-            .map_err(|e| BBIReadError::CirTreeSearchError(e))?;
+        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.reader().tell()?;

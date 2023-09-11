@@ -11,7 +11,7 @@ use futures::task::SpawnExt;
 
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
-use bigtools::{BBIRead, BBIReadError, BigBedRead, ChromAndSize};
+use bigtools::{BBIRead, BBIReadError, BigBedRead, ChromInfo};
 
 pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     bigbed: BigBedRead<R>,
@@ -37,7 +37,7 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
             let writer = io::BufWriter::new(file);
             async fn file_future<R: SeekableRead + 'static>(
                 mut bigbed: BigBedRead<R>,
-                chrom: ChromAndSize,
+                chrom: ChromInfo,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
                 start: Option<u32>,
                 end: Option<u32>,
