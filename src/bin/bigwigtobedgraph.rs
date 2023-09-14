@@ -11,7 +11,7 @@ use futures::task::SpawnExt;
 
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
-use bigtools::{BBIRead, BBIReadError, BigWigRead, ChromInfo};
+use bigtools::{BBIReadError, BigWigRead, ChromInfo};
 use ufmt::uwrite;
 
 pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
@@ -24,7 +24,7 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
 ) -> Result<(), BBIReadError> {
     /*
     // This is the simple single-threaded approach
-    let mut chroms: Vec<ChromInfo> = bigwig.get_chroms();
+    let mut chroms: Vec<ChromInfo> = bigwig.chroms();
     chroms.sort_by(|a, b| a.name.cmp(&b.name));
     let mut writer = io::BufWriter::new(out_file);
     for chrom in chroms {
@@ -42,8 +42,9 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
         .expect("Unable to create thread pool.");
 
     let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig
-        .get_chroms()
+        .chroms()
         .into_iter()
+        .cloned()
         .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
         .map(|chrom| {
             let bigwig = bigwig.reopen()?;

@@ -17,7 +17,7 @@ Provides the interface for reading bigWig files.
 let mut bwread = BigWigRead::open_file(&bigwig)?;
 
 // Then, we could get the chromosomes and lengths
-let chroms = bwread.get_chroms();
+let chroms = bwread.chroms();
 assert_eq!(chroms.len(), 1);
 assert_eq!(chroms[0].length, 83257441);
 
@@ -157,19 +157,33 @@ impl<R: Reopen> Reopen for BigWigRead<R> {
     }
 }
 
-impl<R: SeekableRead> BBIRead for BigWigRead<R> {
-    type Read = R;
-
-    fn get_info(&self) -> &BBIFileInfo {
+impl<R> BBIRead for BigWigRead<R> {
+    fn info(&self) -> &BBIFileInfo {
         &self.info
     }
+
+    fn chroms(&self) -> &[ChromInfo] {
+        &self.info.chrom_info
+    }
+}
+
+impl<R: SeekableRead> BBIReadInternal for BigWigRead<R> {
+    type Read = R;
 
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }
+}
 
-    fn get_chroms(&self) -> Vec<ChromInfo> {
-        self.info.chrom_info.clone()
+impl<R> BigWigRead<R> {
+    /// Get basic info about this bigBed
+    pub fn info(&self) -> &BBIFileInfo {
+        &self.info
+    }
+
+    /// Gets the chromosomes present in this bigBed
+    pub fn chroms(&self) -> &[ChromInfo] {
+        &self.info.chrom_info
     }
 }
 
@@ -218,7 +232,7 @@ where
     /// Note: For version 1 of bigWigs, there is no total summary. In that
     /// case, 0 is returned for all of the summary except total items. If this
     /// matters to you, you can check the version using
-    /// `get_info().header.version > 1`.
+    /// `info().header.version > 1`.
     pub fn get_summary(&mut self) -> io::Result<Summary> {
         let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;

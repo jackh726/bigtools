@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-use bigtools::{BBIRead, BigWigRead, BigWigReadOpenError};
+use bigtools::{BigWigRead, BigWigReadOpenError};
 
 fn main() -> Result<(), BigWigReadOpenError> {
     let matches = Command::new("BigWigInfo")
@@ -20,22 +20,22 @@ fn main() -> Result<(), BigWigReadOpenError> {
             use bigtools::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(bigwigpath);
             let mut bigwig = BigWigRead::open(f)?;
-            println!("Header: {:#?}", bigwig.get_info().header);
+            println!("Header: {:#?}", bigwig.info().header);
             println!("Summary: {:#?}", bigwig.get_summary());
-            println!("Zooms: {:#?}", bigwig.get_info().zoom_headers);
+            println!("Zooms: {:#?}", bigwig.info().zoom_headers);
         } else {
             let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-            println!("Header: {:#?}", bigwig.get_info().header);
+            println!("Header: {:#?}", bigwig.info().header);
             println!("Summary: {:#?}", bigwig.get_summary());
-            println!("Zooms: {:#?}", bigwig.get_info().zoom_headers);
+            println!("Zooms: {:#?}", bigwig.info().zoom_headers);
         }
     }
     #[cfg(not(feature = "remote"))]
     {
         let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-        println!("Header: {:#?}", bigwig.get_info().header);
+        println!("Header: {:#?}", bigwig.info().header);
         println!("Summary: {:#?}", bigwig.get_summary());
-        println!("Zooms: {:#?}", bigwig.get_info().zoom_headers);
+        println!("Zooms: {:#?}", bigwig.info().zoom_headers);
     }
 
     Ok(())

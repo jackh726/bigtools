@@ -115,19 +115,33 @@ impl<R: Reopen> Reopen for BigBedRead<R> {
     }
 }
 
-impl<R: SeekableRead> BBIRead for BigBedRead<R> {
-    type Read = R;
-
-    fn get_info(&self) -> &BBIFileInfo {
+impl<R> BBIRead for BigBedRead<R> {
+    fn info(&self) -> &BBIFileInfo {
         &self.info
     }
+
+    fn chroms(&self) -> &[ChromInfo] {
+        &self.info.chrom_info
+    }
+}
+
+impl<R: SeekableRead> BBIReadInternal for BigBedRead<R> {
+    type Read = R;
 
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }
+}
 
-    fn get_chroms(&self) -> Vec<ChromInfo> {
-        self.info.chrom_info.clone()
+impl<R> BigBedRead<R> {
+    /// Get basic info about this bigBed
+    pub fn info(&self) -> &BBIFileInfo {
+        &self.info
+    }
+
+    /// Gets the chromosomes present in this bigBed
+    pub fn chroms(&self) -> &[ChromInfo] {
+        &self.info.chrom_info
     }
 }
 
@@ -187,7 +201,7 @@ where
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
-            .get_info()
+            .info()
             .chrom_info
             .iter()
             .find(|&x| x.name == chrom_name)
@@ -217,7 +231,7 @@ where
         let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
-            .get_info()
+            .info()
             .chrom_info
             .iter()
             .find(|&x| x.name == chrom_name)

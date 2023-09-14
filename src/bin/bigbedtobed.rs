@@ -11,7 +11,7 @@ use futures::task::SpawnExt;
 
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
-use bigtools::{BBIRead, BBIReadError, BigBedRead, ChromInfo};
+use bigtools::{BBIReadError, BigBedRead, ChromInfo};
 
 pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     bigbed: BigBedRead<R>,
@@ -27,8 +27,9 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
         .expect("Unable to create thread pool.");
 
     let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigbed
-        .get_chroms()
+        .chroms()
         .into_iter()
+        .cloned()
         .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
         .map(|chrom| {
             let bigbed = bigbed.reopen()?;

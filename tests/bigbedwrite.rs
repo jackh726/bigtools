@@ -12,7 +12,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     use bigtools::bed::bedparser::BedParser;
     use bigtools::utils::chromvalues::ChromValues;
-    use bigtools::{BBIRead, BigBedRead, BigBedWrite};
+    use bigtools::{BigBedRead, BigBedWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
@@ -53,7 +53,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
-    let chroms = bwread.get_chroms();
+    let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 3);
     assert_eq!(chroms[0].name, "chr17");
     assert_eq!(chroms[0].length, 83257441);

@@ -151,6 +151,11 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
 }
 
 pub(crate) trait BBIReadInternal: BBIRead {
+    type Read: SeekableRead;
+
+    /// Gets a reader to the underlying file
+    fn reader(&mut self) -> &mut Self::Read;
+
     /// This assumes the file is at the cir tree start
     fn search_cir_tree(
         &mut self,
@@ -161,7 +166,7 @@ pub(crate) trait BBIReadInternal: BBIRead {
     ) -> Result<Vec<Block>, CirTreeSearchError> {
         // TODO: Move anything relying on self out to separate method
         let chrom_ix = {
-            let chrom_info = &self.get_info().chrom_info;
+            let chrom_info = &self.info().chrom_info;
             let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
             match chrom {
                 Some(c) => c.id,
@@ -173,7 +178,7 @@ pub(crate) trait BBIReadInternal: BBIRead {
             }
         };
 
-        let endianness = self.get_info().header.endianness;
+        let endianness = self.info().header.endianness;
         let mut file = self.reader();
         file.seek(SeekFrom::Start(at))?;
         let mut header_data = BytesMut::zeroed(48);
@@ -227,24 +232,17 @@ pub(crate) trait BBIReadInternal: BBIRead {
         start: u32,
         end: u32,
     ) -> Result<Vec<Block>, CirTreeSearchError> {
-        let full_index_offset = self.get_info().header.full_index_offset;
+        let full_index_offset = self.info().header.full_index_offset;
         self.search_cir_tree(full_index_offset, chrom_name, start, end)
     }
 }
 
-impl<T: BBIRead> BBIReadInternal for T {}
-
 /// Generic methods for reading a bbi file
 pub trait BBIRead {
-    type Read: SeekableRead;
-
     /// Get basic info about the bbi file
-    fn get_info(&self) -> &BBIFileInfo;
+    fn info(&self) -> &BBIFileInfo;
 
-    /// Gets a reader to the underlying file
-    fn reader(&mut self) -> &mut Self::Read;
-
-    fn get_chroms(&self) -> Vec<ChromInfo>;
+    fn chroms(&self) -> &[ChromInfo];
 }
 
 pub(crate) fn read_info<R: SeekableRead>(
@@ -720,14 +718,14 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
 }
 
 /// Gets the data (uncompressed, if applicable) from a given block
-pub(crate) fn get_block_data<B: BBIRead>(
+pub(crate) fn get_block_data<B: BBIReadInternal>(
     bbifile: &mut B,
     block: &Block,
     known_offset: u64,
 ) -> io::Result<Cursor<Vec<u8>>> {
     use libdeflater::Decompressor;
 
-    let uncompress_buf_size = bbifile.get_info().header.uncompress_buf_size as usize;
+    let uncompress_buf_size = bbifile.info().header.uncompress_buf_size as usize;
     let file = bbifile.reader();
 
     // TODO: Could minimize this by chunking block reads
@@ -753,7 +751,7 @@ pub(crate) fn get_block_data<B: BBIRead>(
     Ok(Cursor::new(block_data))
 }
 
-pub(crate) fn get_zoom_block_values<B: BBIRead>(
+pub(crate) fn get_zoom_block_values<B: BBIReadInternal>(
     bbifile: &mut B,
     block: Block,
     known_offset: &mut u64,
@@ -767,7 +765,7 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
     let itemcount = len / (4 * 8);
     let mut records = Vec::with_capacity(itemcount);
 
-    let endianness = bbifile.get_info().header.endianness;
+    let endianness = bbifile.info().header.endianness;
 
     let mut bytes = BytesMut::zeroed(itemcount * (4 * 8));
     data_mut.read_exact(&mut bytes)?;
@@ -867,7 +865,7 @@ where
 impl<'a, I, B> Iterator for ZoomIntervalIter<'a, I, B>
 where
     I: Iterator<Item = Block> + Send,
-    B: BBIRead,
+    B: BBIReadInternal,
 {
     type Item = Result<ZoomRecord, BBIReadError>;
 

@@ -4,7 +4,7 @@ use std::error::Error;
 fn test_valid_read() -> Result<(), Box<dyn Error>> {
     use std::path::PathBuf;
 
-    use bigtools::{BBIRead, BigWigRead};
+    use bigtools::BigWigRead;
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.push("resources/test");
@@ -15,7 +15,7 @@ fn test_valid_read() -> Result<(), Box<dyn Error>> {
     let mut bwread = BigWigRead::open_file(&valid_bigwig.to_string_lossy()).unwrap();
 
     // Test that chrom tree parsing works
-    let chroms = bwread.get_chroms();
+    let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 1);
     // chr17
     assert_eq!(chroms[0].length, 83257441);

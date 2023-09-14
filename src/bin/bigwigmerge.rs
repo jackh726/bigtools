@@ -14,7 +14,7 @@ use bigtools::utils::chromvalues::ChromValues;
 use bigtools::utils::merge::merge_sections_many;
 use bigtools::utils::reopen::ReopenableFile;
 use bigtools::Value;
-use bigtools::{BBIRead, BBIReadError, BigWigRead, BigWigWrite};
+use bigtools::{BBIReadError, BigWigRead, BigWigWrite};
 use bigtools::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 
 pub struct MergingValues {
@@ -105,14 +105,18 @@ pub fn get_merged_vals(
         // Check that all chrom sizes match for all files
         let mut chrom_sizes = BTreeMap::new();
         let mut chrom_map = HashMap::new();
-        for chrom in bigwigs.iter().flat_map(BBIRead::get_chroms).map(|c| c.name) {
+        for chrom in bigwigs
+            .iter()
+            .flat_map(BigWigRead::chroms)
+            .map(|c| c.name.clone())
+        {
             if chrom_sizes.get(&chrom).is_some() {
                 continue;
             }
             let mut size = None;
             let mut bws = Vec::with_capacity(bigwigs.len());
             for w in bigwigs.iter() {
-                let chroms = w.get_chroms();
+                let chroms = w.chroms();
                 let res = chroms.iter().find(|v| v.name == chrom);
                 let res = match res {
                     Some(res) => res,
@@ -132,7 +136,7 @@ pub fn get_merged_vals(
                     }
                 }
                 // We don't want to a new file descriptor for every chrom
-                bws.push((w.get_info().clone(), w.inner_read().path.to_string()));
+                bws.push((w.info().clone(), w.inner_read().path.to_string()));
             }
             let size = size.unwrap();
 

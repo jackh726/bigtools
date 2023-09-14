@@ -2,7 +2,7 @@ use std::error::Error;
 
 use clap::{Arg, Command};
 
-use bigtools::{BBIRead, BigBedRead};
+use bigtools::BigBedRead;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = Command::new("Testing")
@@ -17,8 +17,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bigwigpath = matches.get_one::<String>("bigbed").unwrap().to_owned();
 
     let mut bigwig = BigBedRead::open_file(&bigwigpath)?;
-    println!("info: {:?}", bigwig.get_info());
-    println!("Header: {:?}", bigwig.get_info().header);
+    println!("info: {:?}", bigwig.info());
+    println!("Header: {:?}", bigwig.info().header);
 
     let intervals: Vec<_> = bigwig
         .get_interval("chr1", 12_244_400, 12_258_000)?

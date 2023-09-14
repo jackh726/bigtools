@@ -9,7 +9,7 @@ use tempfile;
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::chromvalues::ChromValues;
-use bigtools::{BBIRead, BigWigRead, BigWigWrite};
+use bigtools::{BigWigRead, BigWigWrite};
 
 #[test]
 fn test() -> Result<(), Box<dyn Error>> {
@@ -44,7 +44,7 @@ fn test() -> Result<(), Box<dyn Error>> {
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
-    let chroms = bwread.get_chroms();
+    let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 1);
     assert_eq!(chroms[0].name, "chr17");
     assert_eq!(chroms[0].length, 83257441);
@@ -99,7 +99,7 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
-    let chroms = bwread.get_chroms();
+    let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 1);
     assert_eq!(chroms[0].name, "chr17");
     assert_eq!(chroms[0].length, 83257441);
@@ -144,7 +144,7 @@ fn test_multi_chrom() -> io::Result<()> {
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
-    let chroms = bwread.get_chroms();
+    let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 6);
 
     assert_eq!(
