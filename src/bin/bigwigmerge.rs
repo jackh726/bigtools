@@ -111,7 +111,6 @@ pub fn get_merged_vals(
                 continue;
             }
             let mut size = None;
-            let sizes = Vec::with_capacity(bigwigs.len());
             let mut bws = Vec::with_capacity(bigwigs.len());
             for w in bigwigs.iter() {
                 let chroms = w.get_chroms();
@@ -136,16 +135,10 @@ pub fn get_merged_vals(
                 // We don't want to a new file descriptor for every chrom
                 bws.push((w.info.clone(), w.inner_read().path.to_string()));
             }
-            let size = sizes[0];
-            if !sizes.iter().all(|s| *s == size) {
-                eprintln!("Chrom '{:?}' had different sizes in the bigwig files. (Are you using the same assembly?)", chrom);
-                return Err(MergingValuesError::MismatchedChroms(
-                    "Invalid input (nonmatching chroms)".to_owned(),
-                ));
+            if let Some(size) = size {
+                chrom_sizes.insert(chrom.clone(), (size, bws));
+                chrom_map.insert(chrom.clone(), size);
             }
-
-            chrom_sizes.insert(chrom.clone(), (size, bws));
-            chrom_map.insert(chrom.clone(), size);
         }
 
         (chrom_sizes, chrom_map)
