@@ -144,8 +144,8 @@ impl From<BBIFileReadInfoError> for BigWigReadOpenError {
 
 /// The struct used to read a bigWig file
 pub struct BigWigRead<R> {
-    info: BBIFileInfo,
-    read: R,
+    pub(super) info: BBIFileInfo,
+    pub(super) read: R,
 }
 
 impl<R: Reopen> Reopen for BigWigRead<R> {

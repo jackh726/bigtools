@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
@@ -10,7 +11,8 @@ use crate::bbi::{
     CIR_TREE_MAGIC,
 };
 use crate::bed::bedparser::BedValueError;
-use crate::utils::reopen::SeekableRead;
+use crate::utils::reopen::{ReopenableFile, SeekableRead};
+use crate::{BigBedRead, BigWigRead};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Block {
@@ -243,6 +245,93 @@ pub trait BBIRead {
     fn info(&self) -> &BBIFileInfo;
 
     fn chroms(&self) -> &[ChromInfo];
+}
+
+pub enum GenericBBIRead<R> {
+    BigWig(BigWigRead<R>),
+    BigBed(BigBedRead<R>),
+}
+
+impl<R> BBIRead for GenericBBIRead<R> {
+    fn info(&self) -> &BBIFileInfo {
+        match self {
+            GenericBBIRead::BigWig(b) => b.info(),
+            GenericBBIRead::BigBed(b) => b.info(),
+        }
+    }
+
+    fn chroms(&self) -> &[ChromInfo] {
+        match self {
+            GenericBBIRead::BigWig(b) => b.chroms(),
+            GenericBBIRead::BigBed(b) => b.chroms(),
+        }
+    }
+}
+
+/// Possible errors encountered when opening a bigBed file to read
+#[derive(Error, Debug)]
+pub enum GenericBBIFileOpenError {
+    #[error("File is not a bigWig or bigBed.")]
+    NotABBIFile,
+    #[error("The chromosomes are invalid.")]
+    InvalidChroms,
+    #[error("An error occurred: {}", .0)]
+    IoError(#[from] io::Error),
+}
+
+impl From<BBIFileReadInfoError> for GenericBBIFileOpenError {
+    fn from(error: BBIFileReadInfoError) -> Self {
+        match error {
+            BBIFileReadInfoError::UnknownMagic => GenericBBIFileOpenError::NotABBIFile,
+            BBIFileReadInfoError::InvalidChroms => GenericBBIFileOpenError::InvalidChroms,
+            BBIFileReadInfoError::IoError(e) => GenericBBIFileOpenError::IoError(e),
+        }
+    }
+}
+
+impl<R> GenericBBIRead<R> {
+    pub fn bigwig(self) -> Option<BigWigRead<R>> {
+        match self {
+            GenericBBIRead::BigWig(b) => Some(b),
+            GenericBBIRead::BigBed(_) => None,
+        }
+    }
+
+    pub fn bigbed(self) -> Option<BigBedRead<R>> {
+        match self {
+            GenericBBIRead::BigBed(b) => Some(b),
+            GenericBBIRead::BigWig(_) => None,
+        }
+    }
+}
+
+impl<R> GenericBBIRead<R>
+where
+    R: SeekableRead,
+{
+    /// Opens a generic bbi file for a given type that implements both `Read` and `Seek`
+    pub fn open(mut read: R) -> Result<Self, GenericBBIFileOpenError> {
+        let info = read_info(&mut read)?;
+        match info.filetype {
+            BBIFile::BigWig => Ok(GenericBBIRead::BigWig(BigWigRead { info, read })),
+            BBIFile::BigBed => Ok(GenericBBIRead::BigBed(BigBedRead { info, read })),
+        }
+    }
+}
+
+impl GenericBBIRead<ReopenableFile> {
+    /// Opens a generic bbi file
+    pub fn open_file(path: &str) -> Result<Self, GenericBBIFileOpenError> {
+        let reopen = ReopenableFile {
+            path: path.to_string(),
+            file: File::open(path)?,
+        };
+        let b = GenericBBIRead::open(reopen);
+        if b.is_err() {
+            eprintln!("Error when opening: {}", path);
+        }
+        b
+    }
 }
 
 pub(crate) fn read_info<R: SeekableRead>(

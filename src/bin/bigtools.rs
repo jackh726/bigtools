@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
-use bigtools::{BigWigRead, BigWigReadOpenError};
+use bigtools::{BBIRead, GenericBBIRead};
 use clap::{Arg, Command};
 
 use bigtools::utils::reopen::SeekableRead;
@@ -93,18 +93,8 @@ fn intersect<R: SeekableRead + 'static>(
 }
 
 fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<()> {
-    let chroms = match BigWigRead::open_file(&bpath) {
-        Ok(bigwig) => bigwig.chroms().to_vec(),
-        Err(BigWigReadOpenError::NotABigWig) => match BigBedRead::open_file(&bpath) {
-            Ok(bigbed) => bigbed.chroms().to_vec(),
-            Err(BigBedReadOpenError::NotABigBed) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Only bigWigs and bigBeds are supported as `b` files."),
-                ));
-            }
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))),
-        },
+    let chroms = match GenericBBIRead::open_file(&bpath) {
+        Ok(b) => b.chroms().to_vec(),
         Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))),
     };
     let chroms = HashSet::from_iter(chroms.into_iter().map(|c| c.name));

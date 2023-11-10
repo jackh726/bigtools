@@ -81,13 +81,7 @@ pub enum BigBedReadOpenError {
     #[error("The chromosomes are invalid.")]
     InvalidChroms,
     #[error("An error occurred: {}", .0)]
-    IoError(io::Error),
-}
-
-impl From<io::Error> for BigBedReadOpenError {
-    fn from(error: io::Error) -> Self {
-        BigBedReadOpenError::IoError(error)
-    }
+    IoError(#[from] io::Error),
 }
 
 impl From<BBIFileReadInfoError> for BigBedReadOpenError {
@@ -102,8 +96,8 @@ impl From<BBIFileReadInfoError> for BigBedReadOpenError {
 
 /// The struct used to read a bigBed file
 pub struct BigBedRead<R> {
-    info: BBIFileInfo,
-    read: R,
+    pub(super) info: BBIFileInfo,
+    pub(super) read: R,
 }
 
 impl<R: Reopen> Reopen for BigBedRead<R> {
@@ -164,7 +158,7 @@ impl<R> BigBedRead<R>
 where
     R: SeekableRead,
 {
-    /// Opens a new `BigBedRead` with for a given type that implements both `Read` and `Seek`
+    /// Opens a new `BigBedRead` for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, BigBedReadOpenError> {
         let info = read_info(&mut read)?;
         match info.filetype {
