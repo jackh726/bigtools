@@ -18,7 +18,7 @@ impl<B: BufRead> StreamingLineReader<B> {
         self.current_line.clear();
         match self.buf_read.read_line(&mut self.current_line) {
             Ok(size) if size == 0 => None,
-            Ok(_) => Some(Ok(&self.current_line)),
+            Ok(_) => Some(Ok(self.current_line.trim_end())),
             Err(e) => Some(Err(e)),
         }
     }
@@ -39,12 +39,12 @@ mod tests {
         let f = File::open(dir)?;
         let bf = BufReader::new(f);
         let mut slr = StreamingLineReader::new(bf);
-        assert_eq!("chr17\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
-        assert_eq!("chr17\t101\t200\t0.5\n", slr.read().unwrap().unwrap());
-        assert_eq!("chr17\t201\t300\t0.5\n", slr.read().unwrap().unwrap());
-        assert_eq!("chr18\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
-        assert_eq!("chr18\t101\t200\t0.5\n", slr.read().unwrap().unwrap());
-        assert_eq!("chr19\t1\t100\t0.5\n", slr.read().unwrap().unwrap());
+        assert_eq!("chr17\t1\t100\t0.5", slr.read().unwrap().unwrap());
+        assert_eq!("chr17\t101\t200\t0.5", slr.read().unwrap().unwrap());
+        assert_eq!("chr17\t201\t300\t0.5", slr.read().unwrap().unwrap());
+        assert_eq!("chr18\t1\t100\t0.5", slr.read().unwrap().unwrap());
+        assert_eq!("chr18\t101\t200\t0.5", slr.read().unwrap().unwrap());
+        assert_eq!("chr19\t1\t100\t0.5", slr.read().unwrap().unwrap());
         assert!(slr.read().is_none());
         Ok(())
     }

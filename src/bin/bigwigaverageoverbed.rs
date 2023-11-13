@@ -4,10 +4,10 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 
-use bigtools::bed::bedparser::{parse_bed, BedParser};
-use bigtools::bed::indexer::index_chroms;
-use bigtools::utils::chromvalues::ChromValues;
+use bigtools::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
+use bigtools::utils::file_view::FileView;
 use bigtools::utils::reopen::{Reopen, SeekableRead};
+use bigtools::utils::split_file_into_chunks_by_size;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
 
@@ -46,7 +46,7 @@ struct Cli {
     #[arg(long)]
     end: Option<u32>,
 
-    /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms).
+    /// Set the number of threads to use. This tool will nearly always benefit from more cores.
     /// Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
@@ -73,10 +73,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let mut inbigwig = BigWigRead::open_file(&bigwigpath)?;
     let outbed = File::create(bedoutpath)?;
-    let mut bedoutwriter = BufWriter::new(outbed);
-
-    let bedin = BufReader::new(File::open(&bedinpath)?);
-    let mut bedstream = StreamingLineReader::new(bedin);
+    let mut bedoutwriter: BufWriter<File> = BufWriter::new(outbed);
 
     let name = match matches.namecol.as_deref() {
         Some("interval") => Name::Interval,
@@ -102,41 +99,26 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let parallel = nthreads > 1;
 
     if parallel {
-        fn process_chrom<R: Reopen + SeekableRead>(
+        let chunks = split_file_into_chunks_by_size(File::open(&bedinpath)?, nthreads as u64)?;
+
+        fn process_chunk<R: Reopen + SeekableRead>(
             start: u64,
-            chrom: String,
+            end: u64,
             bedinpath: String,
             name: Name,
             inbigwig: &mut BigWigRead<R>,
         ) -> Result<File, Box<dyn Error + Send + Sync>> {
             let mut tmp = tempfile::tempfile()?;
 
-            let mut chrom_bed_file = File::open(bedinpath)?;
-            chrom_bed_file.seek(SeekFrom::Start(start))?;
-            let mut bed_parser = BedParser::from_bed_file(chrom_bed_file);
-            let mut data = match bed_parser.next_chrom() {
-                Some(Ok((next_chrom, data))) => {
-                    if next_chrom != chrom {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("Invalid indexing."),
-                        )
-                        .into());
-                    }
-                    data
-                }
-                Some(Err(e)) => {
-                    return Err(e.into());
-                }
-                None => {
-                    return Err(
-                        io::Error::new(io::ErrorKind::Other, format!("Invalid indexing.")).into(),
-                    );
-                }
+            let chrom_bed_file = File::open(bedinpath)?;
+            let chrom_bed_file = FileView::new(chrom_bed_file, start, end)?;
+            let mut bed_stream = BedFileStream {
+                bed: StreamingLineReader::new(BufReader::new(chrom_bed_file)),
+                parse: parse_bed,
             };
 
             loop {
-                let entry = match data.next() {
+                let (chrom, entry) = match bed_stream.next() {
                     None => break,
                     Some(Err(e)) => {
                         return Err(e.into());
@@ -144,7 +126,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     Some(Ok(entry)) => entry,
                 };
 
-                let entry = match stats_for_bed_item(name, &chrom, entry, inbigwig) {
+                let entry = match stats_for_bed_item(name, chrom, entry, inbigwig) {
                     Ok(stats) => stats,
                     Err(e) => {
                         return Err(e.into());
@@ -161,41 +143,38 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(tmp)
         }
 
-        let bed = File::open(&bedinpath)?;
-        let chrom_indices: Vec<(u64, String)> = index_chroms(bed)?;
-
-        let mut chrom_data = VecDeque::with_capacity(chrom_indices.len());
-        let (chrom_data_sender, chrom_data_receiver) = crossbeam_channel::unbounded();
-        for (start, chrom) in chrom_indices {
+        let mut chunk_data = VecDeque::with_capacity(chunks.len());
+        let (chunk_data_sender, chunk_data_receiver) = crossbeam_channel::unbounded();
+        for (start, end) in chunks {
             let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
-            chrom_data.push_back(result_receiver);
-            chrom_data_sender
-                .send((start, chrom, bedinpath.to_string(), result_sender))
+            chunk_data.push_back(result_receiver);
+            chunk_data_sender
+                .send((start, end, bedinpath.to_string(), result_sender))
                 .unwrap();
         }
-        drop(chrom_data_sender);
+        drop(chunk_data_sender);
         let mut threads = Vec::with_capacity(nthreads - 1);
         for _ in 0..(nthreads - 1) {
             let inbigwig_ = inbigwig.reopen()?;
-            let chrom_data_receiver_ = chrom_data_receiver.clone();
+            let chunk_data_receiver_ = chunk_data_receiver.clone();
             let do_process_chrom = move || {
                 let mut inbigwig = inbigwig_;
-                let chrom_data_receiver = chrom_data_receiver_;
+                let chunk_data_receiver = chunk_data_receiver_;
                 loop {
-                    let next_chrom = chrom_data_receiver.recv();
-                    let (start, chrom, bedinpath, result_sender) = match next_chrom {
+                    let next_chunk = chunk_data_receiver.recv();
+                    let (start, end, bedinpath, result_sender) = match next_chunk {
                         Ok(n) => n,
                         Err(_) => break,
                     };
 
-                    let result = process_chrom(start, chrom, bedinpath, name, &mut inbigwig);
+                    let result = process_chunk(start, end, bedinpath, name, &mut inbigwig);
                     result_sender.send(result).unwrap();
                 }
             };
             let join_handle = std::thread::spawn(do_process_chrom);
             threads.push(join_handle);
         }
-        while let Some(result_receiver) = chrom_data.pop_front() {
+        while let Some(result_receiver) = chunk_data.pop_front() {
             let mut wait = false;
             loop {
                 if !wait {
@@ -209,8 +188,8 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                         Err(e @ TryRecvError::Disconnected) => return Err(e.into()),
                         Err(TryRecvError::Empty) => {
-                            let next_chrom = chrom_data_receiver.recv();
-                            let (start, chrom, bedinpath, result_sender) = match next_chrom {
+                            let next_chunk = chunk_data_receiver.recv();
+                            let (start, chrom, bedinpath, result_sender) = match next_chunk {
                                 Ok(n) => n,
                                 Err(_) => {
                                     wait = true;
@@ -219,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             };
 
                             let result =
-                                process_chrom(start, chrom, bedinpath, name, &mut inbigwig);
+                                process_chunk(start, chrom, bedinpath, name, &mut inbigwig);
                             result_sender.send(result).unwrap();
                         }
                     }
@@ -238,6 +217,10 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
     } else {
+        let bed = File::open(&bedinpath)?;
+        let bedin: BufReader<File> = BufReader::new(bed);
+        let mut bedstream = StreamingLineReader::new(bedin);
+
         loop {
             let line = match bedstream.read() {
                 None => break,

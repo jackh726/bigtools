@@ -40,7 +40,6 @@ def main():
     start_and_monitor(args.command, args.log, args.interval)
 
 def start_and_monitor(command, logfile, interval):
-    command = args.command
     print("Starting up command '{0}' and attaching to process".format(command))
     sprocess = subprocess.Popen(command, shell=True)
     pid = sprocess.pid

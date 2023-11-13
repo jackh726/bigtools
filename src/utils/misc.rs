@@ -9,7 +9,7 @@ use crate::BedEntry;
 
 use thiserror::Error;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Name {
     Interval,
     None,
@@ -80,7 +80,7 @@ pub fn stats_for_bed_item<R: SeekableRead>(
             }
         },
         Name::Interval => format!("{}:{}-{}", chrom, start, end),
-        Name::None => format!("{}\t{}\t{}\t{}\n", chrom, start, end, entry.rest),
+        Name::None => format!("{}\t{}\t{}\t{}", chrom, start, end, entry.rest),
     };
 
     Ok(BigWigAverageOverBedEntry {

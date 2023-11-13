@@ -222,7 +222,7 @@ mod tests {
         dir.push("multi_chrom.bedGraph");
 
         let chrom_indices: Vec<(u64, String)> =
-            crate::bed::indexer::index_chroms(File::open(dir.clone())?)?;
+            crate::bed::indexer::index_chroms(File::open(dir.clone())?)?.unwrap();
 
         let mut chsi = BedParserParallelStreamingIterator::new(
             chrom_indices,

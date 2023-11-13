@@ -9,7 +9,6 @@
 //! The second layer of abstraction (`BedParser`) manages the state information for when values switch
 //! from one chromosome to another. The is important because bigwig/bigbed writing is "chunked" by chromosome.
 
-use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::sync::Arc;
 
@@ -219,8 +218,8 @@ impl<S: StreamingBedValues> BedParser<S> {
     }
 }
 
-impl BedParser<BedFileStream<BedEntry, BufReader<File>>> {
-    pub fn from_bed_file(file: File) -> Self {
+impl<R: Read> BedParser<BedFileStream<BedEntry, BufReader<R>>> {
+    pub fn from_bed_file(file: R) -> Self {
         BedParser::new(BedFileStream {
             bed: StreamingLineReader::new(BufReader::new(file)),
             parse: parse_bed,

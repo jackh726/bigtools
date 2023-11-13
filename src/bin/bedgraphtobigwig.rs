@@ -25,7 +25,7 @@ struct Cli {
     /// The output bigwig path
     output: String,
 
-    /// Set whether to read and convert the bedGraph in parallel.
+    /// Set whether to read and convert the bedGraph in parallel. Requires that the bedGraph is sorted.
     /// Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.
     #[arg(short = 'p', long)]
     #[arg(default_value = "auto")]
@@ -109,21 +109,35 @@ fn main() -> Result<(), Box<dyn Error>> {
         outb.write_singlethreaded(chrom_map, chsi, pool)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
-        let parallel = match (nthreads, matches.parallel.as_ref()) {
-            (1, _) | (_, "auto") => infile.metadata()?.len() >= 200_000_000,
-            (_, "yes") => true,
-            (_, "no") => false,
+        let (parallel, parallel_required) = match (nthreads, matches.parallel.as_ref()) {
+            (1, _) | (_, "no") => (false, false),
+            (_, "auto") => (infile.metadata()?.len() >= 200_000_000, false),
+            (_, "yes") => (true, true),
             (_, v) => {
                 eprintln!(
                     "Unexpected value for `parallel`: \"{}\". Defaulting to `auto`.",
                     v
                 );
-                true
+                (infile.metadata()?.len() >= 200_000_000, false)
             }
         };
-        if parallel {
-            let chrom_indices: Vec<(u64, String)> = index_chroms(infile)?;
-
+        let chrom_indices = match parallel {
+            false => None,
+            true => {
+                let index = index_chroms(infile)?;
+                match (index, parallel_required) {
+                    (Some(index), _) => Some(index),
+                    (None, true) => {
+                        eprintln!(
+                            "Parallel conversion requires a sorted bedGraph file. Cancelling.",
+                        );
+                        return Ok(());
+                    }
+                    (None, false) => None,
+                }
+            }
+        };
+        if let Some(chrom_indices) = chrom_indices {
             if matches.single_pass {
                 let chsi = BedParserParallelStreamingIterator::new(
                     chrom_indices,
@@ -149,6 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
         } else {
+            let infile = File::open(&bedgraphpath)?;
             if matches.single_pass {
                 let vals_iter = BedParser::from_bedgraph_file(infile);
 

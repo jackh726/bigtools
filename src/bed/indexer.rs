@@ -8,7 +8,7 @@ use crate::utils::indexlist::{Index, IndexList};
 use crate::utils::tell::Tell;
 
 /// Returns a Vec of offsets into a bed file, and the chromosome starting at each offset.
-pub fn index_chroms(file: File) -> io::Result<Vec<(u64, String)>> {
+pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
     let mut file = BufReader::new(file);
 
     let mut line = String::new();
@@ -73,9 +73,10 @@ pub fn index_chroms(file: File) -> io::Result<Vec<(u64, String)>> {
         let tell = file.tell()?;
         file.read_line(line)?;
         let chrom = parse_line(&*line)?;
-        if chrom.is_none() {
-            return Ok(());
-        }
+        let chrom = match chrom {
+            Some(chrom) => chrom,
+            None => return Ok(()),
+        };
 
         // There are three options:
         // 1) The chrom is the same as the previous one. We need to index
@@ -96,7 +97,7 @@ pub fn index_chroms(file: File) -> io::Result<Vec<(u64, String)>> {
         //    to continue to index between the previous and current as well as
         //    between the current and next.
 
-        let curr = chroms.insert_after(prev, (tell, chrom.unwrap())).unwrap();
+        let curr = chroms.insert_after(prev, (tell, chrom)).unwrap();
 
         if chroms[curr].1 != chroms[prev].1 && tell < next_tell {
             do_index(file_size, file, chroms, line, prev, Some(curr), limit - 1)?;
@@ -121,8 +122,15 @@ pub fn index_chroms(file: File) -> io::Result<Vec<(u64, String)>> {
 
     let mut chroms: Vec<_> = chroms.into_iter().collect();
     chroms.dedup_by_key(|index| index.1.clone());
+    let mut deduped_chroms = chroms.clone();
+    deduped_chroms.sort();
+    deduped_chroms.dedup_by_key(|index| index.1.clone());
+    if chroms.len() != deduped_chroms.len() {
+        dbg!(&chroms, &deduped_chroms);
+        return Ok(None);
+    }
 
-    Ok(chroms)
+    Ok(Some(chroms))
 }
 
 #[cfg(test)]
@@ -164,7 +172,7 @@ mod tests {
         }
 
         let f = File::open(dir)?;
-        let indexed_chroms = index_chroms(f)?;
+        let indexed_chroms = index_chroms(f)?.unwrap();
         assert_eq!(chroms, indexed_chroms);
 
         Ok(())
