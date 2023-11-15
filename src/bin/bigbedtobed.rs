@@ -7,11 +7,12 @@ use std::path::Path;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
 
-use futures::task::SpawnExt;
+use futures::FutureExt;
 
 use bigtools::utils::reopen::{Reopen, SeekableRead};
 use bigtools::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use bigtools::{BBIReadError, BigBedRead, ChromInfo};
+use tokio::runtime;
 
 pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     bigbed: BigBedRead<R>,
@@ -21,10 +22,14 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     start: Option<u32>,
     end: Option<u32>,
 ) -> Result<(), BBIReadError> {
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(nthreads)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = if nthreads == 1 {
+        runtime::Builder::new_current_thread().build().unwrap()
+    } else {
+        runtime::Builder::new_multi_thread()
+            .worker_threads(nthreads - 1)
+            .build()
+            .unwrap()
+    };
 
     let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigbed
         .chroms()
@@ -67,9 +72,9 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
                 }
                 Ok(())
             }
-            let handle = pool
-                .spawn_with_handle(file_future(bigbed, chrom, writer, start, end))
-                .expect("Couldn't spawn.");
+            let handle = runtime
+                .spawn(file_future(bigbed, chrom, writer, start, end))
+                .map(|f| f.unwrap());
             Ok((handle, buf))
         })
         .collect::<Vec<_>>();
@@ -77,7 +82,7 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     for res in chrom_files {
         let (f, mut buf) = res.unwrap();
         buf.switch(out_file);
-        futures::executor::block_on(f).unwrap();
+        runtime.block_on(f).unwrap();
         out_file = buf.await_real_file();
     }
 

@@ -12,6 +12,7 @@ use clap::Parser;
 
 use bigtools::bed::bedparser::{parse_bedgraph, BedParser};
 use bigtools::{BigWigWrite, InputSortType};
+use tokio::runtime;
 
 #[derive(Parser)]
 #[command(about = "Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained.", long_about = None)]
@@ -95,10 +96,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(nthreads)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = if nthreads == 1 {
+        runtime::Builder::new_current_thread().build().unwrap()
+    } else {
+        runtime::Builder::new_multi_thread()
+            .worker_threads(nthreads - 1)
+            .build()
+            .unwrap()
+    };
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedgraphpath == "-" || bedgraphpath == "stdin" {
@@ -106,7 +111,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let vals_iter = BedParser::from_bedgraph_file(stdin);
 
         let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-        outb.write_singlethreaded(chrom_map, chsi, pool)?;
+        outb.write_singlethreaded(chrom_map, chsi, runtime)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
         let (parallel, parallel_required) = match (nthreads, matches.parallel.as_ref()) {
@@ -145,7 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     PathBuf::from(bedgraphpath),
                     parse_bedgraph,
                 );
-                outb.write(chrom_map, chsi, pool)?;
+                outb.write(chrom_map, chsi, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -159,7 +164,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Ok(chsi)
                     },
                     chrom_map,
-                    pool,
+                    runtime,
                 )?;
             }
         } else {
@@ -168,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let vals_iter = BedParser::from_bedgraph_file(infile);
 
                 let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-                outb.write(chrom_map, chsi, pool)?;
+                outb.write(chrom_map, chsi, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -180,7 +185,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Ok(chsi)
                     },
                     chrom_map,
-                    pool,
+                    runtime,
                 )?;
             }
         }

@@ -25,32 +25,32 @@ let vals = BedParserStreamingIterator::new(vals_iter, false);
 let mut chrom_map = HashMap::new();
 chrom_map.insert("chr17".to_string(), 83257441);
 
-// We also need a `ThreadPool` to spawn processing on.
-let pool = futures::executor::ThreadPoolBuilder::new()
-    .pool_size(6)
-    .create()
-    .expect("Unable to create thread pool.");
+// We also need a `Runtime` to spawn processing on.
+let runtime = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(6)
+    .build()
+    .expect("Unable to create runtime.");
 
 // Finally, we can create a `BigWigWrite` with a file to write to. We'll use a temporary file.
 let tempfile = tempfile::NamedTempFile::new()?;
 let out = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 // Then write.
-out.write(chrom_map, vals, pool)?;
+out.write(chrom_map, vals, runtime)?;
 # Ok(())
 # }
 ```
 */
 use std::collections::HashMap;
 use std::fs::File;
+use std::future::Future;
 use std::io::{self, BufWriter, Write};
 
-use futures::executor::{block_on, ThreadPool};
 use futures::future::FutureExt;
 use futures::sink::SinkExt;
-use futures::task::SpawnExt;
-use futures::Future;
 
 use byteorder::{NativeEndian, WriteBytesExt};
+use tokio::runtime::{Handle, Runtime};
+use tokio::task;
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
@@ -138,7 +138,7 @@ impl BigWigWrite {
         Ok((data_size, chrom_index_start, index_start, total_sections))
     }
 
-    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values and for reading through the values (potentially parallelized by chromosome).
+    /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
         V: ChromData<Values = Values>,
@@ -146,13 +146,13 @@ impl BigWigWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-        pool: ThreadPool,
+        runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
         let process_chrom = |zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
                              ftx: ChromProcessingInputSectionChannel,
                              chrom_id: u32,
                              options: BBIWriteOptions,
-                             pool: ThreadPool,
+                             runtime: Handle,
                              chrom_values: Values,
                              chrom: String,
                              chrom_length: u32| {
@@ -161,19 +161,17 @@ impl BigWigWrite {
                 ftx,
                 chrom_id,
                 options,
-                pool.clone(),
+                runtime.clone(),
                 chrom_values,
                 chrom,
                 chrom_length,
             );
-            let (fut, handle) = fut.remote_handle();
-            pool.spawn_ok(fut);
-            handle
+            runtime.spawn(fut).map(|f| f.unwrap())
         };
-        self.write_internal(chrom_sizes, vals, pool, process_chrom)
+        self.write_internal(chrom_sizes, vals, runtime.handle().clone(), process_chrom)
     }
 
-    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values, but will read through values on the current thread.
+    /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values, but will read through values on the current thread.
     pub fn write_singlethreaded<
         Values: ChromValues<Value = Value>,
         V: ChromData<Values = Values>,
@@ -181,9 +179,10 @@ impl BigWigWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-        pool: ThreadPool,
+        runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
-        self.write_internal(chrom_sizes, vals, pool, BigWigWrite::process_chrom)
+        let runtime = runtime.handle().clone();
+        self.write_internal(chrom_sizes, vals, runtime, BigWigWrite::process_chrom)
     }
 
     fn write_internal<
@@ -195,7 +194,7 @@ impl BigWigWrite {
             ChromProcessingInputSectionChannel,
             u32,
             BBIWriteOptions,
-            ThreadPool,
+            Handle,
             Values,
             String,
             u32,
@@ -204,7 +203,7 @@ impl BigWigWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-        pool: ThreadPool,
+        runtime: Handle,
         process_chrom: G,
     ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
@@ -212,16 +211,17 @@ impl BigWigWrite {
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
-        // Write data to file and return
+        let local = task::LocalSet::new();
+        let output = runtime.block_on(local.run_until(bbiwrite::write_vals(
+            vals,
+            file,
+            self.options,
+            process_chrom,
+            runtime.clone(),
+            chrom_sizes.clone(),
+        )));
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(bbiwrite::write_vals(
-                vals,
-                file,
-                self.options,
-                process_chrom,
-                pool,
-                chrom_sizes.clone(),
-            ))?;
+            output?;
 
         let chrom_ids = chrom_ids.get_map();
         let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
@@ -256,7 +256,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    /// Write the values from `V` as a bigWig. Will utilize the provided threadpool for encoding values and for reading through the values (potentially parallelized by chromosome).
+    /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
     /// high resolution zooms takes up a substantial portion of total processing time.
     pub fn write_multipass<
@@ -266,8 +266,10 @@ impl BigWigWrite {
         self,
         make_vals: impl Fn() -> Result<V, ProcessChromError<Values::Error>>,
         chrom_sizes: HashMap<String, u32>,
-        pool: ThreadPool,
+        runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
+        let runtime_handle = runtime.handle();
+
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -278,7 +280,7 @@ impl BigWigWrite {
         let process_chrom = |ftx: ChromProcessingInputSectionChannel,
                              chrom_id: u32,
                              options: BBIWriteOptions,
-                             pool: ThreadPool,
+                             runtime: Handle,
                              chrom_values: Values,
                              chrom: String,
                              chrom_length: u32| {
@@ -286,26 +288,27 @@ impl BigWigWrite {
                 ftx,
                 chrom_id,
                 options,
-                pool.clone(),
+                runtime_handle.clone(),
                 chrom_values,
                 chrom,
                 chrom_length,
             );
             let (fut, handle) = fut.remote_handle();
-            pool.spawn_ok(fut);
+            runtime.spawn(fut);
             handle
         };
 
-        // Write data to file and return
+        let local = task::LocalSet::new();
+        let output = runtime.block_on(local.run_until(bbiwrite::write_vals_no_zoom(
+            vals,
+            file,
+            self.options,
+            process_chrom,
+            runtime_handle.clone(),
+            chrom_sizes.clone(),
+        )));
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
-            block_on(bbiwrite::write_vals_no_zoom(
-                vals,
-                file,
-                self.options,
-                process_chrom,
-                pool.clone(),
-                chrom_sizes.clone(),
-            ))?;
+            output?;
 
         let chrom_ids = chrom_ids.get_map();
         let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
@@ -319,18 +322,19 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
-        let (mut file, zoom_entries, zoom_uncompress_buf_size) =
-            block_on(bbiwrite::write_zoom_vals(
-                vals,
-                self.options,
-                BigWigWrite::process_chrom_zoom,
-                pool,
-                &chrom_ids,
-                (summary.bases_covered as f64 / summary.total_items as f64) as u32,
-                zoom_counts,
-                file,
-                data_size,
-            ))?;
+        let local = task::LocalSet::new();
+        let output = runtime.block_on(local.run_until(bbiwrite::write_zoom_vals(
+            vals,
+            self.options,
+            BigWigWrite::process_chrom_zoom,
+            runtime_handle.clone(),
+            &chrom_ids,
+            (summary.bases_covered as f64 / summary.total_items as f64) as u32,
+            zoom_counts,
+            file,
+            data_size,
+        )));
+        let (mut file, zoom_entries, zoom_uncompress_buf_size) = output?;
         uncompress_buf_size = uncompress_buf_size.max(zoom_uncompress_buf_size);
         let num_zooms = zoom_entries.len() as u16;
 
@@ -362,7 +366,7 @@ impl BigWigWrite {
         summary: &mut Summary,
         items: &mut Vec<Value>,
         options: BBIWriteOptions,
-        pool: &ThreadPool,
+        runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
         chrom_id: u32,
     ) -> Result<(), ProcessChromError<I::Error>> {
@@ -411,9 +415,9 @@ impl BigWigWrite {
         items.push(current_val);
         if chrom_values.peek().is_none() || items.len() >= options.items_per_slot as usize {
             let items = std::mem::take(items);
-            let handle = pool
-                .spawn_with_handle(encode_section(options.compress, items, chrom_id))
-                .expect("Couldn't spawn.");
+            let handle = runtime
+                .spawn(encode_section(options.compress, items, chrom_id))
+                .map(|f| f.unwrap());
             ftx.send(handle.boxed()).await.expect("Couldn't send");
         }
 
@@ -425,7 +429,7 @@ impl BigWigWrite {
         options: BBIWriteOptions,
         current_val: Value,
         chrom_values: &mut I,
-        pool: &ThreadPool,
+        runtime: &Handle,
         chrom_id: u32,
     ) -> Result<(), ProcessChromError<I::Error>> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
@@ -447,9 +451,9 @@ impl BigWigWrite {
                     || zoom_item.records.len() == options.items_per_slot as usize
                 {
                     let items = std::mem::take(&mut zoom_item.records);
-                    let handle = pool
-                        .spawn_with_handle(encode_zoom_section(options.compress, items))
-                        .expect("Couldn't spawn.");
+                    let handle = runtime
+                        .spawn(encode_zoom_section(options.compress, items))
+                        .map(|f| f.unwrap());
                     zoom_item
                         .channel
                         .send(handle.boxed())
@@ -513,7 +517,7 @@ impl BigWigWrite {
         mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
-        pool: ThreadPool,
+        runtime: Handle,
         mut chrom_values: I,
         chrom: String,
         chrom_length: u32,
@@ -550,7 +554,7 @@ impl BigWigWrite {
                 &mut summary,
                 &mut items,
                 options,
-                &pool,
+                &runtime,
                 &mut ftx,
                 chrom_id,
             )
@@ -561,7 +565,7 @@ impl BigWigWrite {
                 options,
                 current_val,
                 &mut chrom_values,
-                &pool,
+                &runtime,
                 chrom_id,
             )
             .await?;
@@ -584,7 +588,7 @@ impl BigWigWrite {
         mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
-        pool: ThreadPool,
+        runtime: Handle,
         mut chrom_values: I,
         chrom: String,
         chrom_length: u32,
@@ -627,7 +631,7 @@ impl BigWigWrite {
                 &mut summary,
                 &mut items,
                 options,
-                &pool,
+                &runtime,
                 &mut ftx,
                 chrom_id,
             )
@@ -664,7 +668,7 @@ impl BigWigWrite {
         zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
         chrom_id: u32,
         options: BBIWriteOptions,
-        pool: ThreadPool,
+        runtime: Handle,
         mut chrom_values: I,
     ) -> Result<(), ProcessChromError<I::Error>> {
         let mut zoom_items: Vec<ZoomItem> = zooms_channels
@@ -686,7 +690,7 @@ impl BigWigWrite {
                 options,
                 current_val,
                 &mut chrom_values,
-                &pool,
+                &runtime,
                 chrom_id,
             )
             .await?;

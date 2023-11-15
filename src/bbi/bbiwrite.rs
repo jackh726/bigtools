@@ -11,11 +11,11 @@ use thiserror::Error;
 
 use futures::channel::mpsc as futures_mpsc;
 use futures::channel::mpsc::channel;
-use futures::executor::ThreadPool;
 use futures::future::{Future, FutureExt};
 use futures::stream::StreamExt;
 
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Handle;
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
@@ -700,7 +700,7 @@ pub(crate) async fn write_vals<
         ChromProcessingInputSectionChannel,
         u32,
         BBIWriteOptions,
-        ThreadPool,
+        Handle,
         Values,
         String,
         u32,
@@ -710,7 +710,7 @@ pub(crate) async fn write_vals<
     file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
-    pool: ThreadPool,
+    runtime: Handle,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
     (
@@ -746,7 +746,7 @@ pub(crate) async fn write_vals<
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
-            future_channel(options.channel_size, &pool);
+            future_channel(options.channel_size, &runtime);
 
         let (zoom_infos, zooms_channels) = {
             let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
@@ -757,7 +757,7 @@ pub(crate) async fn write_vals<
                     .take(options.max_zooms as usize);
             for size in zoom_sizes {
                 let (ftx, handle, buf, section_receiver) =
-                    future_channel(options.channel_size, &pool);
+                    future_channel(options.channel_size, &runtime);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
                     data_write_future: Box::new(handle),
@@ -800,7 +800,7 @@ pub(crate) async fn write_vals<
             ftx,
             chrom_id,
             options,
-            pool.clone(),
+            runtime.clone(),
             data,
             chrom,
             length,
@@ -815,7 +815,7 @@ pub(crate) async fn write_vals<
     };
 
     let (write_fut, write_fut_handle) = write_fut.remote_handle();
-    pool.spawn_ok(write_fut);
+    runtime.spawn(write_fut);
     loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
@@ -884,7 +884,7 @@ pub(crate) async fn write_vals_no_zoom<
         ChromProcessingInputSectionChannel,
         u32,
         BBIWriteOptions,
-        ThreadPool,
+        Handle,
         Values,
         String,
         u32,
@@ -894,7 +894,7 @@ pub(crate) async fn write_vals_no_zoom<
     file: BufWriter<File>,
     options: BBIWriteOptions,
     process_chrom: G,
-    pool: ThreadPool,
+    runtime: Handle,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
     (
@@ -923,7 +923,7 @@ pub(crate) async fn write_vals_no_zoom<
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
-            future_channel(options.channel_size, &pool);
+            future_channel(options.channel_size, &runtime);
 
         match send.unbounded_send((section_receiver, buf, sections_handle)) {
             Ok(_) => {}
@@ -950,7 +950,7 @@ pub(crate) async fn write_vals_no_zoom<
 
         let ftx = setup_chrom();
 
-        let fut = process_chrom(ftx, chrom_id, options, pool.clone(), data, chrom, length);
+        let fut = process_chrom(ftx, chrom_id, options, runtime.clone(), data, chrom, length);
 
         let curr_key = key;
         key += 1;
@@ -961,7 +961,7 @@ pub(crate) async fn write_vals_no_zoom<
     };
 
     let (write_fut, write_fut_handle) = write_fut.remote_handle();
-    pool.spawn_ok(write_fut);
+    runtime.spawn(write_fut);
     loop {
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
@@ -1018,18 +1018,12 @@ pub(crate) async fn write_zoom_vals<
     Values: ChromValues,
     V: ChromData<Values = Values>,
     Fut: Future<Output = Result<(), ProcessChromError<Values::Error>>> + Send + 'static,
-    G: Fn(
-        Vec<(u32, ChromProcessingInputSectionChannel)>,
-        u32,
-        BBIWriteOptions,
-        ThreadPool,
-        Values,
-    ) -> Fut,
+    G: Fn(Vec<(u32, ChromProcessingInputSectionChannel)>, u32, BBIWriteOptions, Handle, Values) -> Fut,
 >(
     mut vals_iter: V,
     options: BBIWriteOptions,
     process_chrom_zoom: G,
-    mut pool: ThreadPool,
+    runtime: Handle,
     chrom_ids: &HashMap<String, u32>,
     average_size: u32,
     zoom_counts: BTreeMap<u64, u64>,
@@ -1102,7 +1096,7 @@ pub(crate) async fn write_zoom_vals<
 
             for size in resolutions.iter().copied() {
                 let (ftx, handle, buf, section_receiver) =
-                    future_channel(options.channel_size, &mut pool);
+                    future_channel(options.channel_size, &runtime);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
                     data_write_future: Box::new(handle),
@@ -1116,9 +1110,9 @@ pub(crate) async fn write_zoom_vals<
         };
 
         let (f_remote, f_handle) =
-            process_chrom_zoom(zooms_channels, chrom_id, options, pool.clone(), data)
+            process_chrom_zoom(zooms_channels, chrom_id, options, runtime.clone(), data)
                 .remote_handle();
-        pool.spawn_ok(f_remote);
+        runtime.spawn(f_remote);
 
         let curr_key = key;
         key += 1;
@@ -1263,7 +1257,7 @@ async fn write_data<W: Write, SourceError: Send>(
 
 pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
     channel_size: usize,
-    pool: &ThreadPool,
+    runtime: &Handle,
 ) -> (
     futures_mpsc::Sender<
         Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
@@ -1278,7 +1272,7 @@ pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
 
     let (section_sender, section_receiver) = unbounded();
     let (sections_remote, sections_handle) = write_data(file, section_sender, frx).remote_handle();
-    pool.spawn_ok(sections_remote);
+    runtime.spawn(sections_remote);
     (ftx, sections_handle, buf, section_receiver)
 }
 

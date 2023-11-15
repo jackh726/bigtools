@@ -16,6 +16,7 @@ use bigtools::utils::reopen::ReopenableFile;
 use bigtools::Value;
 use bigtools::{BBIReadError, BigWigRead, BigWigWrite};
 use bigtools::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
+use tokio::runtime;
 
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
@@ -391,14 +392,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     match output {
         output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
             let outb = BigWigWrite::create_file(output);
-            let pool = futures::executor::ThreadPoolBuilder::new()
-                .pool_size(nthreads)
-                .create()
-                .expect("Unable to create thread pool.");
+            let runtime = if nthreads == 1 {
+                runtime::Builder::new_current_thread().build().unwrap()
+            } else {
+                runtime::Builder::new_multi_thread()
+                    .worker_threads(nthreads - 1)
+                    .build()
+                    .unwrap()
+            };
             let all_values = ChromGroupReadImpl {
                 iter: Box::new(iter),
             };
-            outb.write(chrom_map, all_values, pool)?;
+            outb.write(chrom_map, all_values, runtime)?;
         }
         output if output.ends_with(".bedGraph") => {
             // TODO: convert to multi-threaded

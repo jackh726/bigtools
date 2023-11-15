@@ -1,6 +1,7 @@
 use std::error::Error;
 
 use bigtools::bedchromdata::BedParserStreamingIterator;
+use tokio::runtime;
 
 #[test]
 fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
@@ -27,10 +28,10 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         group.next().unwrap().unwrap()
     };
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(6)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(6)
+        .build()
+        .expect("Unable to create runtime.");
 
     let infile = File::open(bed)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -49,7 +50,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr19".to_string(), 58617616);
 
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
-    outb.write(chrom_map, chsi, pool).unwrap();
+    outb.write(chrom_map, chsi, runtime).unwrap();
 
     let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 

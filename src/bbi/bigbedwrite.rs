@@ -3,12 +3,12 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
-use futures::executor::{block_on, ThreadPool};
 use futures::future::FutureExt;
 use futures::sink::SinkExt;
-use futures::task::SpawnExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
+use tokio::runtime::{Handle, Runtime};
+use tokio::task;
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
@@ -44,8 +44,10 @@ impl BigBedWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-        pool: ThreadPool,
+        runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
+        let runtime_handle = runtime.handle();
+
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -76,16 +78,19 @@ impl BigBedWrite {
         file.write_u64::<NativeEndian>(0)?;
 
         let pre_data = file.tell()?;
-        // Write data to file and return
+
+        let local = task::LocalSet::new();
+        let output = runtime.block_on(local.run_until(bbiwrite::write_vals(
+            vals,
+            file,
+            self.options,
+            BigBedWrite::process_chrom,
+            runtime_handle.clone(),
+            chrom_sizes.clone(),
+        )));
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
-            block_on(bbiwrite::write_vals(
-                vals,
-                file,
-                self.options,
-                BigBedWrite::process_chrom,
-                pool,
-                chrom_sizes.clone(),
-            ))?;
+            output?;
+
         let data_size = file.tell()? - pre_data;
         let mut current_offset = pre_data;
         let sections_iter = raw_sections_iter.map(|mut section| {
@@ -144,7 +149,7 @@ impl BigBedWrite {
         mut ftx: ChromProcessingInputSectionChannel,
         chrom_id: u32,
         options: BBIWriteOptions,
-        pool: ThreadPool,
+        runtime: Handle,
         mut group: I,
         chrom: String,
         chrom_length: u32,
@@ -389,12 +394,9 @@ impl BigBedWrite {
                                 }
                                 if !zoom_item.records.is_empty() {
                                     let items = std::mem::take(&mut zoom_item.records);
-                                    let handle = pool
-                                        .spawn_with_handle(encode_zoom_section(
-                                            options.compress,
-                                            items,
-                                        ))
-                                        .expect("Couldn't spawn.");
+                                    let handle = runtime
+                                        .spawn(encode_zoom_section(options.compress, items))
+                                        .map(|f| f.unwrap());
                                     zoom_item
                                         .channel
                                         .send(handle.boxed())
@@ -454,9 +456,9 @@ impl BigBedWrite {
                         // Write section if full
                         if zoom_item.records.len() == options.items_per_slot as usize {
                             let items = std::mem::take(&mut zoom_item.records);
-                            let handle = pool
-                                .spawn_with_handle(encode_zoom_section(options.compress, items))
-                                .expect("Couldn't spawn.");
+                            let handle = runtime
+                                .spawn(encode_zoom_section(options.compress, items))
+                                .map(|f| f.unwrap());
                             zoom_item
                                 .channel
                                 .send(handle.boxed())
@@ -475,9 +477,9 @@ impl BigBedWrite {
                     &mut state_val.items,
                     Vec::with_capacity(options.items_per_slot as usize),
                 );
-                let handle = pool
-                    .spawn_with_handle(encode_section(options.compress, items, chrom_id))
-                    .expect("Couldn't spawn.");
+                let handle = runtime
+                    .spawn(encode_section(options.compress, items, chrom_id))
+                    .map(|f| f.unwrap());
                 ftx.send(handle.boxed()).await.expect("Couldn't send");
             }
         }

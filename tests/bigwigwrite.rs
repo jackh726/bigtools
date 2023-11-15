@@ -10,6 +10,7 @@ use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::chromvalues::ChromValues;
 use bigtools::{BigWigRead, BigWigWrite};
+use tokio::runtime;
 
 #[test]
 fn test() -> Result<(), Box<dyn Error>> {
@@ -26,10 +27,10 @@ fn test() -> Result<(), Box<dyn Error>> {
         group.next().unwrap().unwrap()
     };
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(6)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(6)
+        .build()
+        .expect("Unable to create runtime.");
 
     let infile = File::open(single_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -40,7 +41,7 @@ fn test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr17".to_string(), 83257441);
 
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
-    outb.write(chrom_map, chsi, pool).unwrap();
+    outb.write(chrom_map, chsi, runtime).unwrap();
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
@@ -73,10 +74,10 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
         group.next().unwrap().unwrap()
     };
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(6)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(6)
+        .build()
+        .expect("Unable to create runtime.");
 
     let tempfile = tempfile::NamedTempFile::new()?;
 
@@ -93,7 +94,7 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
             Ok(chsi)
         },
         chrom_map,
-        pool,
+        runtime,
     )
     .unwrap();
 
@@ -121,10 +122,10 @@ fn test_multi_chrom() -> io::Result<()> {
     let mut multi_chrom_bedgraph = dir.clone();
     multi_chrom_bedgraph.push("multi_chrom.bedGraph");
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(6)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(6)
+        .build()
+        .expect("Unable to create runtime.");
 
     let infile = File::open(multi_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
@@ -140,7 +141,7 @@ fn test_multi_chrom() -> io::Result<()> {
     chrom_map.insert("chr6".to_string(), 170805979);
 
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
-    outb.write(chrom_map, chsi, pool.clone()).unwrap();
+    outb.write(chrom_map, chsi, runtime).unwrap();
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 

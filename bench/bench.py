@@ -12,7 +12,7 @@ from monitorps import monitor
 timeregex = re.compile(r'(\d.*)user (\d.*)system (\d.*)elapsed (\d.*)%CPU \((\d*)avgtext\+(\d*)avgdata (\d*)maxresident\)k')
 ucsctoolspath = None
 bigtoolspath = None
-reps = 3
+reps = 1
 
 def download(url, name):
     filename = name.replace('.gz', '')
@@ -182,27 +182,27 @@ def bedgraphtobigwig(comp):
         'bigtools_6thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p yes', '--single-pass']],
         'bigtools_8thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF518WII.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p yes', '--single-pass']],
     }
-    compare(comp, 'bedgraphtobigwig_small', benchmarks)
+    #compare(comp, 'bedgraphtobigwig_small', benchmarks)
     benchmarks = {
         'ucsc':                                 [['{}/bedGraphToBigWig'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_ucsc.bigWig']],
-        'bigtools_1thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no']],
-        'bigtools_2thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p no']],
-        'bigtools_4thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p no']],
-        'bigtools_6thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p no']],
-        'bigtools_8thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p no']],
-        'bigtools_2thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p yes']],
+        #'bigtools_1thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no']],
+        #'bigtools_2thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p no']],
+        #'bigtools_4thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p no']],
+        #'bigtools_6thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p no']],
+        #'bigtools_8thread_multipass_serial':    [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p no']],
+        #'bigtools_2thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p yes']],
         'bigtools_4thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p yes']],
-        'bigtools_6thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p yes']],
-        'bigtools_8thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p yes']],
-        'bigtools_1thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no', '--single-pass']],
-        'bigtools_2thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p no', '--single-pass']],
-        'bigtools_4thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p no', '--single-pass']],
-        'bigtools_6thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p no', '--single-pass']],
-        'bigtools_8thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p no', '--single-pass']],
-        'bigtools_2thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p yes', '--single-pass']],
-        'bigtools_4thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p yes', '--single-pass']],
-        'bigtools_6thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p yes', '--single-pass']],
-        'bigtools_8thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p yes', '--single-pass']],
+        #'bigtools_6thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p yes']],
+        #'bigtools_8thread_multipass_parallel':  [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p yes']],
+        #'bigtools_1thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 1', '-p no', '--single-pass']],
+        #'bigtools_2thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p no', '--single-pass']],
+        #'bigtools_4thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p no', '--single-pass']],
+        #'bigtools_6thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p no', '--single-pass']],
+        #'bigtools_8thread_singlepass_serial':   [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p no', '--single-pass']],
+        #'bigtools_2thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 2', '-p yes', '--single-pass']],
+        #'bigtools_4thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 4', '-p yes', '--single-pass']],
+        #'bigtools_6thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 6', '-p yes', '--single-pass']],
+        #'bigtools_8thread_singlepass_parallel': [['{}/bedgraphtobigwig'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bedGraph', './workdir/hg38.chrom.sizes', './workdir/test_out_bigtools.bigWig', '-t 8', '-p yes', '--single-pass']],
     }
     compare(comp, 'bedgraphtobigwig_medium', benchmarks)
 
@@ -228,9 +228,9 @@ def bigwigtobedgraph(comp):
         'ucsc':             [['{}/bigWigToBedGraph'.format(ucsctoolspath), './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_ucsc.bedGraph']],
         'bigtools_1thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 1']],
         'bigtools_2thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 2']],
-        'bigtools_4thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 4']],
+        #'bigtools_4thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 4']],
         'bigtools_6thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 6']],
-        'bigtools_8thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 8']],
+        #'bigtools_8thread': [['{}/bigwigtobedgraph'.format(bigtoolspath),  './workdir/ENCFF841DHZ.bigWig', './workdir/test_out_bigtools.bedGraph', '-t 8']],
     }
     compare(comp, 'bigwigtobedgraph', benchmarks)
 

@@ -10,6 +10,7 @@ use clap::Parser;
 
 use bigtools::bed::bedparser::BedParser;
 use bigtools::{BigBedWrite, InputSortType};
+use tokio::runtime;
 
 #[derive(Parser)]
 #[command(about = "Converts a bed to a bigBed.", long_about = None)]
@@ -93,10 +94,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
-    let pool = futures::executor::ThreadPoolBuilder::new()
-        .pool_size(nthreads)
-        .create()
-        .expect("Unable to create thread pool.");
+    let runtime = if nthreads == 1 {
+        runtime::Builder::new_current_thread().build().unwrap()
+    } else {
+        runtime::Builder::new_multi_thread()
+            .worker_threads(nthreads - 1)
+            .build()
+            .unwrap()
+    };
 
     let infile = File::open(bedpath)?;
     let mut vals_iter = BedParser::from_bed_file(infile);
@@ -114,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-    outb.write(chrom_map, chsi, pool)?;
+    outb.write(chrom_map, chsi, runtime)?;
 
     Ok(())
 }

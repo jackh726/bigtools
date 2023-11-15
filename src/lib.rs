@@ -24,7 +24,7 @@ Writing new bigWigs and bigBeds is a tad more difficult. To begin, a
 [`BigWigWrite::create_file`] or [`BigBedWrite::create_file`].
 
 Generally, bigWig and bigBed writing is done per chromosome, with compression
-and io being done on an async ThreadPool.
+and io being done on an async Runtime.
 
 The source for data to be written to bigWigs and bigBeds come from the
 [`ChromData`] trait. It's effectively like a powerful `Iterator` of
@@ -45,7 +45,7 @@ underlying details aren't necessary unless implementing a new data source.
 Given some implementation of [`ChromData`] (like [`BedParserStreamingIterator`][crate::bbi::bedchromdata::BedParserStreamingIterator]),
 a bigWig can be created using [`BigWigWrite::write`] or a bigBed with
 [`BigBedWrite::write`]. Both take a map of chromosome sizes, the aforementioned
-data, and a `ThreadPool` to spawn processing on.
+data, and a `Runtime` to spawn processing on.
 */
 
 mod bbi;
