@@ -153,8 +153,8 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .unwrap();
         }
         drop(chunk_data_sender);
-        let mut threads = Vec::with_capacity(nthreads - 1);
-        for _ in 0..(nthreads - 1) {
+        let mut threads = Vec::with_capacity(nthreads);
+        for _ in 0..(nthreads) {
             let inbigwig_ = inbigwig.reopen()?;
             let chunk_data_receiver_ = chunk_data_receiver.clone();
             let do_process_chrom = move || {

@@ -168,7 +168,7 @@ impl BigWigWrite {
             );
             runtime.spawn(fut).map(|f| f.unwrap())
         };
-        self.write_internal(chrom_sizes, vals, runtime.handle().clone(), process_chrom)
+        self.write_internal(chrom_sizes, vals, runtime, process_chrom)
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values, but will read through values on the current thread.
@@ -181,7 +181,6 @@ impl BigWigWrite {
         vals: V,
         runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
-        let runtime = runtime.handle().clone();
         self.write_internal(chrom_sizes, vals, runtime, BigWigWrite::process_chrom)
     }
 
@@ -203,7 +202,7 @@ impl BigWigWrite {
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
-        runtime: Handle,
+        runtime: Runtime,
         process_chrom: G,
     ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
@@ -211,13 +210,15 @@ impl BigWigWrite {
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
+        let runtime_handle = runtime.handle().clone();
+
         let local = task::LocalSet::new();
         let output = runtime.block_on(local.run_until(bbiwrite::write_vals(
             vals,
             file,
             self.options,
             process_chrom,
-            runtime.clone(),
+            runtime_handle.clone(),
             chrom_sizes.clone(),
         )));
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =

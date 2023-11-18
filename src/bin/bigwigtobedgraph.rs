@@ -41,7 +41,7 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
         runtime::Builder::new_current_thread().build().unwrap()
     } else {
         runtime::Builder::new_multi_thread()
-            .worker_threads(nthreads - 1)
+            .worker_threads(nthreads)
             .build()
             .unwrap()
     };

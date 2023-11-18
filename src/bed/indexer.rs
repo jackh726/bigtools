@@ -126,7 +126,6 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
     deduped_chroms.sort();
     deduped_chroms.dedup_by_key(|index| index.1.clone());
     if chroms.len() != deduped_chroms.len() {
-        dbg!(&chroms, &deduped_chroms);
         return Ok(None);
     }
 

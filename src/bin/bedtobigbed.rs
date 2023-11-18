@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         runtime::Builder::new_current_thread().build().unwrap()
     } else {
         runtime::Builder::new_multi_thread()
-            .worker_threads(nthreads - 1)
+            .worker_threads(nthreads)
             .build()
             .unwrap()
     };
