@@ -15,36 +15,55 @@ use bigtools::{BBIReadError, BigWigRead, ChromInfo};
 use tokio::runtime;
 use ufmt::uwrite;
 
-pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
-    bigwig: BigWigRead<R>,
-    mut out_file: File,
-    nthreads: usize,
+pub fn write_bg_singlethreaded<R: SeekableRead + Send + 'static>(
+    mut bigwig: BigWigRead<R>,
+    out_file: File,
     chrom: Option<String>,
     start: Option<u32>,
     end: Option<u32>,
 ) -> Result<(), BBIReadError> {
-    /*
-    // This is the simple single-threaded approach
-    let mut chroms: Vec<ChromInfo> = bigwig.chroms();
+    let start = chrom.as_ref().and_then(|_| start);
+    let end = chrom.as_ref().and_then(|_| end);
+
+    let mut chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
     chroms.sort_by(|a, b| a.name.cmp(&b.name));
     let mut writer = io::BufWriter::new(out_file);
     for chrom in chroms {
-        let mut values = bigwig.get_interval(&chrom.name, 0, chrom.length)?;
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(chrom.length);
+        let mut values = bigwig.get_interval(&chrom.name, start, end)?;
         while let Some(raw_val) = values.next() {
             let val = raw_val?;
-            writer.write_fmt(format_args!("{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.value))?;
+
+            let mut buf = String::with_capacity(50); // Estimate
+            uwrite!(
+                &mut buf,
+                "{}\t{}\t{}\t{}\n",
+                chrom.name,
+                val.start,
+                val.end,
+                ryu::Buffer::new().format(val.value)
+            )
+            .unwrap();
+            writer.write(buf.as_bytes())?;
         }
     }
-    */
 
-    let runtime = if nthreads == 1 {
-        runtime::Builder::new_current_thread().build().unwrap()
-    } else {
-        runtime::Builder::new_multi_thread()
-            .worker_threads(nthreads)
-            .build()
-            .unwrap()
-    };
+    Ok(())
+}
+
+pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
+    bigwig: BigWigRead<R>,
+    mut out_file: File,
+    chrom: Option<String>,
+    start: Option<u32>,
+    end: Option<u32>,
+    runtime: &runtime::Handle,
+) -> Result<(), BBIReadError> {
+    dbg!();
+
+    let start = chrom.as_ref().and_then(|_| start);
+    let end = chrom.as_ref().and_then(|_| end);
 
     let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig
         .chroms()
@@ -60,21 +79,11 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
                 mut bigwig: BigWigRead<R>,
                 chrom: ChromInfo,
                 mut writer: io::BufWriter<TempFileBufferWriter<File>>,
-                start: Option<u32>,
-                end: Option<u32>,
+                start: u32,
+                end: u32,
             ) -> Result<(), BBIReadError> {
-                for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
+                for raw_val in bigwig.get_interval(&chrom.name, start, end)? {
                     let val = raw_val?;
-                    if let Some(start) = start {
-                        if val.start <= start {
-                            continue;
-                        }
-                    }
-                    if let Some(end) = end {
-                        if val.start > end {
-                            continue;
-                        }
-                    }
                     let mut buf = String::with_capacity(50); // Estimate
 
                     // Using ryu for f32 to string conversion has a ~15% speedup
@@ -91,6 +100,8 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
                 }
                 Ok(())
             }
+            let start = start.unwrap_or(0);
+            let end = end.unwrap_or(chrom.length);
             let handle = runtime
                 .spawn(file_future(bigwig, chrom, writer, start, end))
                 .map(|f| f.unwrap());
@@ -101,7 +112,10 @@ pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     for res in chrom_files {
         let (f, mut buf) = res.unwrap();
         buf.switch(out_file);
-        runtime.block_on(f).unwrap();
+        f.await.unwrap();
+        while !buf.is_real_file_ready() {
+            tokio::task::yield_now().await;
+        }
         out_file = buf.await_real_file();
     }
 
@@ -215,16 +229,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             write_bg_from_bed(bigwig, bedgraph, overlap_bed)?;
         }
         None => {
-            write_bg(
-                bigwig,
-                bedgraph,
-                nthreads,
-                matches.chrom,
-                matches.start,
-                matches.end,
-            )?;
+            if nthreads == 1 {
+                write_bg_singlethreaded(
+                    bigwig,
+                    bedgraph,
+                    matches.chrom,
+                    matches.start,
+                    matches.end,
+                )?;
+            } else {
+                let runtime = runtime::Builder::new_multi_thread()
+                    .worker_threads(nthreads)
+                    .build()
+                    .unwrap();
+
+                runtime.block_on(write_bg(
+                    bigwig,
+                    bedgraph,
+                    matches.chrom,
+                    matches.start,
+                    matches.end,
+                    runtime.handle(),
+                ))?;
+            }
         }
     }
+
+    dbg!();
 
     Ok(())
 }

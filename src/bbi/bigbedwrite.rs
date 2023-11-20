@@ -8,7 +8,6 @@ use futures::sink::SinkExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
-use tokio::task;
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
@@ -46,8 +45,6 @@ impl BigBedWrite {
         vals: V,
         runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
-        let runtime_handle = runtime.handle();
-
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -79,15 +76,14 @@ impl BigBedWrite {
 
         let pre_data = file.tell()?;
 
-        let local = task::LocalSet::new();
-        let output = runtime.block_on(local.run_until(bbiwrite::write_vals(
+        let output = bbiwrite::write_vals(
             vals,
             file,
             self.options,
             BigBedWrite::process_chrom,
-            runtime_handle.clone(),
+            runtime,
             chrom_sizes.clone(),
-        )));
+        );
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
             output?;
 

@@ -55,6 +55,13 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         }
     }
 
+    pub fn is_real_file_ready(&self) -> bool {
+        let &(ref lock, _) = &*self.closed;
+        let closed = lock.lock().unwrap();
+
+        closed.is_some()
+    }
+
     pub fn await_real_file(self) -> R {
         let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock().unwrap();

@@ -50,7 +50,6 @@ use futures::sink::SinkExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
-use tokio::task;
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
@@ -210,17 +209,14 @@ impl BigWigWrite {
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
-        let runtime_handle = runtime.handle().clone();
-
-        let local = task::LocalSet::new();
-        let output = runtime.block_on(local.run_until(bbiwrite::write_vals(
+        let output = bbiwrite::write_vals(
             vals,
             file,
             self.options,
             process_chrom,
-            runtime_handle.clone(),
+            runtime,
             chrom_sizes.clone(),
-        )));
+        );
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
             output?;
 
@@ -269,14 +265,14 @@ impl BigWigWrite {
         chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
     ) -> Result<(), ProcessChromError<Values::Error>> {
-        let runtime_handle = runtime.handle();
-
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
         let vals = make_vals()?;
+
+        let runtime_handle = runtime.handle();
 
         let process_chrom = |ftx: ChromProcessingInputSectionChannel,
                              chrom_id: u32,
@@ -289,25 +285,24 @@ impl BigWigWrite {
                 ftx,
                 chrom_id,
                 options,
-                runtime_handle.clone(),
+                runtime,
                 chrom_values,
                 chrom,
                 chrom_length,
             );
             let (fut, handle) = fut.remote_handle();
-            runtime.spawn(fut);
+            runtime_handle.spawn(fut);
             handle
         };
 
-        let local = task::LocalSet::new();
-        let output = runtime.block_on(local.run_until(bbiwrite::write_vals_no_zoom(
+        let output = bbiwrite::write_vals_no_zoom(
             vals,
             file,
             self.options,
             process_chrom,
-            runtime_handle.clone(),
+            &runtime,
             chrom_sizes.clone(),
-        )));
+        );
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             output?;
 
@@ -323,18 +318,17 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
-        let local = task::LocalSet::new();
-        let output = runtime.block_on(local.run_until(bbiwrite::write_zoom_vals(
+        let output = bbiwrite::write_zoom_vals(
             vals,
             self.options,
             BigWigWrite::process_chrom_zoom,
-            runtime_handle.clone(),
+            &runtime,
             &chrom_ids,
             (summary.bases_covered as f64 / summary.total_items as f64) as u32,
             zoom_counts,
             file,
             data_size,
-        )));
+        );
         let (mut file, zoom_entries, zoom_uncompress_buf_size) = output?;
         uncompress_buf_size = uncompress_buf_size.max(zoom_uncompress_buf_size);
         let num_zooms = zoom_entries.len() as u16;
