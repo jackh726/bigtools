@@ -284,6 +284,11 @@ struct Cli {
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
     nthreads: usize,
+
+    /// Can be `bigwig` or `bedgraph` (case-insensitive). If not specified,
+    /// will be inferred from the output file ending.
+    #[arg(long)]
+    output_type: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -389,8 +394,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (iter, chrom_map) =
         get_merged_vals(bigwigs, 10, matches.threshold, matches.adjust, matches.clip)?;
 
-    match output {
-        output if output.ends_with(".bw") || output.ends_with(".bigWig") => {
+    enum OutputType {
+        BigWig,
+        BedGraph,
+    }
+
+    let output_type = match (matches.output_type, &output) {
+        (None, output)
+            if output.to_lowercase().ends_with(".bw")
+                || output.to_lowercase().ends_with(".bigWig") =>
+        {
+            OutputType::BigWig
+        }
+        (None, output) if output.to_lowercase().ends_with(".bedGraph") => OutputType::BedGraph,
+        (Some(output_type), _) if output_type.to_lowercase() == "bigwig" => OutputType::BigWig,
+        (Some(output_type), _) if output_type.to_lowercase() == "bedgraph" => OutputType::BedGraph,
+        _ => {
+            eprintln!("Unable to determine output file format. \
+                The output file must either in with `.bw` or `.bigWig` for bigwigs or `.bedGraph` for bedGraphs; or \
+                `--output-type` must be set to either `bigwig` or `bedgraph`.");
+            return Ok(());
+        }
+    };
+    match output_type {
+        OutputType::BigWig => {
             let outb = BigWigWrite::create_file(output);
             let runtime = if nthreads == 1 {
                 runtime::Builder::new_current_thread().build().unwrap()
@@ -405,7 +432,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             outb.write(chrom_map, all_values, runtime)?;
         }
-        output if output.ends_with(".bedGraph") => {
+        OutputType::BedGraph => {
             // TODO: convert to multi-threaded
             use std::io::Write;
 
@@ -422,10 +449,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     ))?;
                 }
             }
-        }
-        _ => {
-            eprintln!("Invalid output file. Must end with .bw or .bigWig for bigwig or .bedGraph for bedGraph");
-            return Ok(());
         }
     }
 

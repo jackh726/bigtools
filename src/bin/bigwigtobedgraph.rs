@@ -27,7 +27,7 @@ pub fn write_bg_singlethreaded<R: SeekableRead + Send + 'static>(
 
     let mut chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
     chroms.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut writer = io::BufWriter::new(out_file);
+    let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     for chrom in chroms {
         let start = start.unwrap_or(0);
         let end = end.unwrap_or(chrom.length);
