@@ -1,9 +1,10 @@
 use std::fs::File;
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::Endianness;
 use bytes::{Buf, BytesMut};
+use libdeflater::Decompressor;
 use thiserror::Error;
 
 use crate::bbi::{
@@ -15,9 +16,15 @@ use crate::utils::reopen::{ReopenableFile, SeekableRead};
 use crate::{BigBedRead, BigWigRead};
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct Block {
-    pub offset: u64,
-    pub size: u64,
+pub struct Block {
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+}
+
+impl Block {
+    pub fn size(&self) -> u64 {
+        self.size
+    }
 }
 
 /// Header info for a bbi file
@@ -97,7 +104,7 @@ pub(crate) enum BBIFileReadInfoError {
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum CirTreeSearchError {
+pub enum CirTreeSearchError {
     #[error("The passed chromosome ({}) was incorrect.", .0)]
     InvalidChromosome(String),
     #[error("Invalid magic (likely a bug).")]
@@ -152,92 +159,29 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
+/// What kind of cir tree in a bbi file
+pub enum CirTreeIndexType {
+    /// The index for the full data
+    FullData,
+    /// The index for zoom data of a given reduction level
+    Zoom(u32),
+}
+
+/// Represents a cir tree index in a bbi file. Composed of a public
+/// `CirTreeIndexType`, and a private location in the bbi file.
+/// This can be passed to `search_cir_tree`.
+pub struct CirTreeIndex(pub CirTreeIndexType, pub(crate) u64);
+
 pub(crate) trait BBIReadInternal: BBIRead {
-    type Read: SeekableRead;
+    type Read: BBIFileRead;
 
     /// Gets a reader to the underlying file
     fn reader(&mut self) -> &mut Self::Read;
 
-    /// This assumes the file is at the cir tree start
-    fn search_cir_tree(
-        &mut self,
-        at: u64,
-        chrom_name: &str,
-        start: u32,
-        end: u32,
-    ) -> Result<Vec<Block>, CirTreeSearchError> {
-        // TODO: Move anything relying on self out to separate method
-        let chrom_ix = {
-            let chrom_info = &self.info().chrom_info;
-            let chrom = chrom_info.iter().find(|&x| x.name == chrom_name);
-            match chrom {
-                Some(c) => c.id,
-                None => {
-                    return Err(CirTreeSearchError::InvalidChromosome(
-                        chrom_name.to_string(),
-                    ));
-                }
-            }
-        };
-
-        let endianness = self.info().header.endianness;
-        let mut file = self.reader();
-        file.seek(SeekFrom::Start(at))?;
-        let mut header_data = BytesMut::zeroed(48);
-        file.read_exact(&mut header_data)?;
-
-        match endianness {
-            Endianness::Big => {
-                let magic = header_data.get_u32();
-                if magic != CIR_TREE_MAGIC {
-                    return Err(CirTreeSearchError::UnknownMagic);
-                }
-
-                let _blocksize = header_data.get_u32();
-                let _item_count = header_data.get_u64();
-                let _start_chrom_idx = header_data.get_u32();
-                let _start_base = header_data.get_u32();
-                let _end_chrom_idx = header_data.get_u32();
-                let _end_base = header_data.get_u32();
-                let _end_file_offset = header_data.get_u64();
-                let _item_per_slot = header_data.get_u32();
-                let _reserved = header_data.get_u32();
-            }
-            Endianness::Little => {
-                let magic = header_data.get_u32_le();
-                if magic != CIR_TREE_MAGIC {
-                    return Err(CirTreeSearchError::UnknownMagic);
-                }
-
-                let _blocksize = header_data.get_u32_le();
-                let _item_count = header_data.get_u64_le();
-                let _start_chrom_idx = header_data.get_u32_le();
-                let _start_base = header_data.get_u32_le();
-                let _end_chrom_idx = header_data.get_u32_le();
-                let _end_base = header_data.get_u32_le();
-                let _end_file_offset = header_data.get_u64_le();
-                let _item_per_slot = header_data.get_u32_le();
-                let _reserved = header_data.get_u32_le();
-            }
-        };
-
-        // TODO: could do some optimization here to check if our interval overlaps with any data
-
-        let mut blocks: Vec<Block> = vec![];
-        search_overlapping_blocks(&mut file, endianness, chrom_ix, start, end, &mut blocks)?;
-        Ok(blocks)
-    }
-
-    fn get_overlapping_blocks(
-        &mut self,
-        chrom_name: &str,
-        start: u32,
-        end: u32,
-    ) -> Result<Vec<Block>, CirTreeSearchError> {
-        let full_index_offset = self.info().header.full_index_offset;
-        self.search_cir_tree(full_index_offset, chrom_name, start, end)
-    }
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo);
 }
+
+pub struct ReductionLevelNotFound;
 
 /// Generic methods for reading a bbi file
 pub trait BBIRead {
@@ -245,6 +189,100 @@ pub trait BBIRead {
     fn info(&self) -> &BBIFileInfo;
 
     fn chroms(&self) -> &[ChromInfo];
+
+    fn full_data_cir_tree(&self) -> CirTreeIndex {
+        CirTreeIndex(
+            CirTreeIndexType::FullData,
+            self.info().header.full_index_offset,
+        )
+    }
+
+    fn zoom_cir_tree(&self, reduction_level: u32) -> Result<CirTreeIndex, ReductionLevelNotFound> {
+        let zoom_header = match self
+            .info()
+            .zoom_headers
+            .iter()
+            .find(|h| h.reduction_level == reduction_level)
+        {
+            Some(h) => h,
+            None => {
+                return Err(ReductionLevelNotFound);
+            }
+        };
+
+        Ok(CirTreeIndex(
+            CirTreeIndexType::Zoom(reduction_level),
+            zoom_header.index_offset,
+        ))
+    }
+}
+
+fn search_cir_tree<R: Read + Seek>(
+    info: &BBIFileInfo,
+    file: &mut R,
+    at: CirTreeIndex,
+    chrom_name: &str,
+    start: u32,
+    end: u32,
+) -> Result<Vec<Block>, CirTreeSearchError> {
+    let chrom_ix = {
+        let chrom = info.chrom_info.iter().find(|&x| x.name == chrom_name);
+        match chrom {
+            Some(c) => c.id,
+            None => {
+                return Err(CirTreeSearchError::InvalidChromosome(
+                    chrom_name.to_string(),
+                ));
+            }
+        }
+    };
+
+    let endianness = info.header.endianness;
+
+    file.seek(SeekFrom::Start(at.1))?;
+    let mut header_data = BytesMut::zeroed(48);
+    file.read_exact(&mut header_data)?;
+
+    match endianness {
+        Endianness::Big => {
+            let magic = header_data.get_u32();
+            if magic != CIR_TREE_MAGIC {
+                return Err(CirTreeSearchError::UnknownMagic);
+            }
+
+            let _blocksize = header_data.get_u32();
+            let _item_count = header_data.get_u64();
+            let _start_chrom_idx = header_data.get_u32();
+            let _start_base = header_data.get_u32();
+            let _end_chrom_idx = header_data.get_u32();
+            let _end_base = header_data.get_u32();
+            let _end_file_offset = header_data.get_u64();
+            let _item_per_slot = header_data.get_u32();
+            let _reserved = header_data.get_u32();
+        }
+        Endianness::Little => {
+            let magic = header_data.get_u32_le();
+            if magic != CIR_TREE_MAGIC {
+                return Err(CirTreeSearchError::UnknownMagic);
+            }
+
+            let _blocksize = header_data.get_u32_le();
+            let _item_count = header_data.get_u64_le();
+            let _start_chrom_idx = header_data.get_u32_le();
+            let _start_base = header_data.get_u32_le();
+            let _end_chrom_idx = header_data.get_u32_le();
+            let _end_base = header_data.get_u32_le();
+            let _end_file_offset = header_data.get_u64_le();
+            let _item_per_slot = header_data.get_u32_le();
+            let _reserved = header_data.get_u32_le();
+        }
+    };
+
+    // TODO: could do some optimization here to check if our interval overlaps with any data
+
+    let mut blocks: Vec<Block> = vec![];
+    search_overlapping_blocks(file, endianness, chrom_ix, start, end, &mut blocks)?;
+    Ok(blocks)
 }
 
 pub enum GenericBBIRead<R> {
@@ -305,10 +343,7 @@ impl<R> GenericBBIRead<R> {
     }
 }
 
-impl<R> GenericBBIRead<R>
-where
-    R: SeekableRead,
-{
+impl<R: BBIFileRead> GenericBBIRead<R> {
     /// Opens a generic bbi file for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, GenericBBIFileOpenError> {
         let info = read_info(&mut read)?;
@@ -334,9 +369,49 @@ impl GenericBBIRead<ReopenableFile> {
     }
 }
 
-pub(crate) fn read_info<R: SeekableRead>(
-    mut file: &mut R,
-) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+pub trait BBIFileRead {
+    type Reader: Read + Seek;
+
+    fn search_cir_tree(
+        &mut self,
+        info: &BBIFileInfo,
+        at: CirTreeIndex,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<Block>, CirTreeSearchError>;
+
+    fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>>;
+
+    fn raw_reader(&mut self) -> &mut Self::Reader;
+}
+
+impl<S: SeekableRead> BBIFileRead for S {
+    type Reader = Self;
+
+    fn search_cir_tree(
+        &mut self,
+        info: &BBIFileInfo,
+        at: CirTreeIndex,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<Block>, CirTreeSearchError> {
+        search_cir_tree(info, self, at, chrom_name, start, end)
+    }
+
+    fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>> {
+        read_block_data(info, self, block)
+    }
+
+    fn raw_reader(&mut self) -> &mut Self::Reader {
+        self
+    }
+}
+
+pub(crate) fn read_info<R: BBIFileRead>(file: &mut R) -> Result<BBIFileInfo, BBIFileReadInfoError> {
+    let mut file = file.raw_reader();
+
     let mut header_data = BytesMut::zeroed(64);
     file.read_exact(&mut header_data)?;
 
@@ -429,7 +504,7 @@ pub(crate) fn read_info<R: SeekableRead>(
         uncompress_buf_size,
     };
 
-    let zoom_headers = read_zoom_headers(&mut file, &header)?;
+    let zoom_headers = read_zoom_headers(file, &header)?;
 
     // TODO: could instead store this as an Option and only read when needed
     file.seek(SeekFrom::Start(header.chromosome_tree_offset))?;
@@ -807,24 +882,17 @@ pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
 }
 
 /// Gets the data (uncompressed, if applicable) from a given block
-pub(crate) fn get_block_data<B: BBIReadInternal>(
-    bbifile: &mut B,
+fn read_block_data<R: SeekableRead>(
+    info: &BBIFileInfo,
+    read: &mut R,
     block: &Block,
-    known_offset: u64,
-) -> io::Result<Cursor<Vec<u8>>> {
-    use libdeflater::Decompressor;
+) -> io::Result<Vec<u8>> {
+    let uncompress_buf_size = info.header.uncompress_buf_size as usize;
 
-    let uncompress_buf_size = bbifile.info().header.uncompress_buf_size as usize;
-    let file = bbifile.reader();
-
-    // TODO: Could minimize this by chunking block reads
-    // FIXME: this relies on the current state of "store a BufReader as a reader"
-    if known_offset != block.offset {
-        file.seek(SeekFrom::Start(block.offset))?;
-    }
+    read.seek(SeekFrom::Start(block.offset))?;
 
     let mut raw_data = vec![0u8; block.size as usize];
-    file.read_exact(&mut raw_data)?;
+    read.read_exact(&mut raw_data)?;
     let block_data: Vec<u8> = if uncompress_buf_size > 0 {
         let mut decompressor = Decompressor::new();
         let mut outbuf = vec![0; uncompress_buf_size];
@@ -837,7 +905,7 @@ pub(crate) fn get_block_data<B: BBIReadInternal>(
         raw_data
     };
 
-    Ok(Cursor::new(block_data))
+    Ok(block_data)
 }
 
 pub(crate) fn get_zoom_block_values<B: BBIReadInternal>(
@@ -848,16 +916,18 @@ pub(crate) fn get_zoom_block_values<B: BBIReadInternal>(
     start: u32,
     end: u32,
 ) -> Result<Box<dyn Iterator<Item = ZoomRecord> + Send>, BBIReadError> {
-    let mut data_mut = get_block_data(bbifile, &block, *known_offset)?;
-    let len = data_mut.get_mut().len();
+    let (read, info) = bbifile.reader_and_info();
+    let data = read.get_block_data(info, &block)?;
+    let mut bytes = BytesMut::with_capacity(data.len());
+    bytes.extend_from_slice(&data);
+
+    let len = bytes.len();
     assert_eq!(len % (4 * 8), 0);
     let itemcount = len / (4 * 8);
     let mut records = Vec::with_capacity(itemcount);
 
     let endianness = bbifile.info().header.endianness;
 
-    let mut bytes = BytesMut::zeroed(itemcount * (4 * 8));
-    data_mut.read_exact(&mut bytes)?;
     match endianness {
         Endianness::Big => {
             for _ in 0..itemcount {

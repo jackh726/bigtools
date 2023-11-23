@@ -1,23 +1,24 @@
 use std::borrow::BorrowMut;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::vec::Vec;
 
-use byteordered::ByteOrdered;
+use bytes::{Buf, BytesMut};
+use itertools::Itertools;
 use thiserror::Error;
 
 use crate::bbi::{BBIFile, BedEntry, ZoomRecord};
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
-    ChromInfo, ZoomIntervalIter,
+    read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
+    ZoomIntervalIter,
 };
-use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{BBIReadInternal, ZoomIntervalError};
+use crate::utils::reopen::{Reopen, ReopenableFile};
+use crate::{BBIFileRead, BBIReadInternal, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
+    R: BBIFileRead,
     B: BorrowMut<BigBedRead<R>>,
 {
     r: std::marker::PhantomData<R>,
@@ -33,7 +34,7 @@ where
 impl<I, R, B> Iterator for IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
+    R: BBIFileRead,
     B: BorrowMut<BigBedRead<R>>,
 {
     type Item = Result<BedEntry, BBIReadError>;
@@ -119,11 +120,15 @@ impl<R> BBIRead for BigBedRead<R> {
     }
 }
 
-impl<R: SeekableRead> BBIReadInternal for BigBedRead<R> {
+impl<R: BBIFileRead> BBIReadInternal for BigBedRead<R> {
     type Read = R;
 
     fn reader(&mut self) -> &mut R {
         &mut self.read
+    }
+
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo) {
+        (&mut self.read, &self.info)
     }
 }
 
@@ -154,13 +159,10 @@ impl BigBedRead<ReopenableFile> {
     }
 }
 
-impl<R> BigBedRead<R>
-where
-    R: SeekableRead,
-{
+impl<R: BBIFileRead> BigBedRead<R> {
     /// Opens a new `BigBedRead` for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, BigBedReadOpenError> {
-        let info = read_info(&mut read)?;
+        let info = read_info(&mut read.raw_reader())?;
         match info.filetype {
             BBIFile::BigBed => {}
             _ => return Err(BigBedReadOpenError::NotABigBed),
@@ -172,7 +174,7 @@ where
     /// Reads the autosql from this bigBed
     pub fn autosql(&mut self) -> Result<String, BBIReadError> {
         let auto_sql_offset = self.info.header.auto_sql_offset;
-        let reader = self.reader();
+        let reader = self.reader().raw_reader();
         let mut reader = BufReader::new(reader);
         reader.seek(SeekFrom::Start(auto_sql_offset))?;
         let mut buffer = Vec::new();
@@ -192,7 +194,13 @@ where
         start: u32,
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + 'a, BBIReadError> {
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let blocks = self.read.search_cir_tree(
+            &self.info,
+            self.full_data_cir_tree(),
+            chrom_name,
+            start,
+            end,
+        )?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -222,7 +230,10 @@ where
         start: u32,
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>>, BBIReadError> {
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let cir_tree = self.full_data_cir_tree();
+        let blocks = self
+            .read
+            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -253,21 +264,15 @@ where
         reduction_level: u32,
     ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
-        let chrom = self.info.chrom_id(chrom_name)?;
-        let zoom_header = match self
-            .info
-            .zoom_headers
-            .iter()
-            .find(|h| h.reduction_level == reduction_level)
-        {
-            Some(h) => h,
-            None => {
-                return Err(ZoomIntervalError::ReductionLevelNotFound);
-            }
-        };
+        let cir_tree_index = self
+            .zoom_cir_tree(reduction_level)
+            .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
 
-        let index_offset = zoom_header.index_offset;
-        let blocks = self.search_cir_tree(index_offset, chrom_name, start, end)?;
+        let chrom = self.info.chrom_id(chrom_name)?;
+
+        let blocks =
+            self.read
+                .search_cir_tree(&self.info, cir_tree_index, chrom_name, start, end)?;
         Ok(ZoomIntervalIter::new(
             self,
             blocks.into_iter(),
@@ -279,7 +284,7 @@ where
 }
 
 // TODO: remove expected_chrom
-fn get_block_entries<R: SeekableRead>(
+fn get_block_entries<R: BBIFileRead>(
     bigbed: &mut BigBedRead<R>,
     block: Block,
     known_offset: &mut u64,
@@ -287,14 +292,21 @@ fn get_block_entries<R: SeekableRead>(
     start: u32,
     end: u32,
 ) -> Result<std::vec::IntoIter<BedEntry>, BBIReadError> {
-    let block_data_mut = get_block_data(bigbed, &block, *known_offset)?;
-    let mut block_data_mut = ByteOrdered::runtime(block_data_mut, bigbed.info.header.endianness);
+    let data = bigbed.read.get_block_data(&bigbed.info, &block)?;
+    let mut bytes = BytesMut::with_capacity(data.len());
+    bytes.extend_from_slice(&data);
     let mut entries: Vec<BedEntry> = Vec::new();
 
-    let mut read_entry = || -> Result<BedEntry, BBIReadError> {
-        let chrom_id = block_data_mut.read_u32()?;
-        let chrom_start = block_data_mut.read_u32()?;
-        let chrom_end = block_data_mut.read_u32()?;
+    let mut read_entry = || -> Result<Option<BedEntry>, BBIReadError> {
+        if bytes.len() < 12 {
+            return Ok(None);
+        }
+        let (chrom_id, chrom_start, chrom_end) = match bigbed.info.header.endianness {
+            byteordered::Endianness::Big => (bytes.get_u32(), bytes.get_u32(), bytes.get_u32()),
+            byteordered::Endianness::Little => {
+                (bytes.get_u32_le(), bytes.get_u32_le(), bytes.get_u32_le())
+            }
+        };
         if chrom_start == 0 && chrom_end == 0 {
             return Err(BBIReadError::InvalidFile(
                 "Chrom start and end both equal 0.".to_owned(),
@@ -305,24 +317,23 @@ fn get_block_entries<R: SeekableRead>(
             chrom_id, expected_chrom,
             "BUG: bigBed had multiple chroms in a section"
         );
-        let s: Vec<u8> = block_data_mut
-            .by_ref()
-            .bytes()
-            .take_while(|c| {
-                if let Ok(c) = c {
-                    return *c != b'\0';
-                }
-                false
-            })
-            .collect::<Result<Vec<u8>, _>>()?;
+        let nul = bytes.iter().find_position(|b| **b == b'\0');
+        let s = match nul {
+            Some((pos, _)) => {
+                let b = bytes.split_to(pos);
+                bytes.get_u8();
+                b.to_vec()
+            }
+            None => bytes.to_vec(),
+        };
         let rest = String::from_utf8(s).unwrap();
-        Ok(BedEntry {
+        Ok(Some(BedEntry {
             start: chrom_start,
             end: chrom_end,
             rest,
-        })
+        }))
     };
-    while let Ok(entry) = read_entry() {
+    while let Some(entry) = read_entry()? {
         if entry.end >= start && entry.start <= end {
             entries.push(entry);
         }

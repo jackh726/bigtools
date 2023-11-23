@@ -41,19 +41,20 @@ assert_eq!(first_interval.value, 0.06792);
 */
 use std::borrow::BorrowMut;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
+use bytes::{Buf, BytesMut};
 use thiserror::Error;
 
 use crate::bbi::{BBIFile, Summary, Value, ZoomRecord};
 use crate::bbiread::{
-    get_block_data, read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block,
-    ChromInfo, ZoomIntervalIter,
+    read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
+    ZoomIntervalIter,
 };
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{BBIReadInternal, ZoomIntervalError};
+use crate::{BBIFileRead, BBIReadInternal, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -173,6 +174,10 @@ impl<R: SeekableRead> BBIReadInternal for BigWigRead<R> {
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }
+
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo) {
+        (&mut self.read, &self.info)
+    }
 }
 
 impl<R> BigWigRead<R> {
@@ -273,7 +278,13 @@ where
         end: u32,
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let blocks = self.read.search_cir_tree(
+            &self.info,
+            self.full_data_cir_tree(),
+            chrom_name,
+            start,
+            end,
+        )?;
         Ok(IntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -296,7 +307,10 @@ where
         end: u32,
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let cir_tree = self.full_data_cir_tree();
+        let blocks = self
+            .read
+            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
         Ok(IntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -319,20 +333,15 @@ where
         reduction_level: u32,
     ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
+        let cir_tree_index = self
+            .zoom_cir_tree(reduction_level)
+            .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
+
         let chrom = self.info.chrom_id(chrom_name)?;
-        let zoom_header = match self
-            .info
-            .zoom_headers
-            .iter()
-            .find(|h| h.reduction_level == reduction_level)
-        {
-            Some(h) => h,
-            None => return Err(ZoomIntervalError::ReductionLevelNotFound),
-        };
 
-        let index_offset = zoom_header.index_offset;
-
-        let blocks = self.search_cir_tree(index_offset, chrom_name, start, end)?;
+        let blocks =
+            self.read
+                .search_cir_tree(&self.info, cir_tree_index, chrom_name, start, end)?;
 
         Ok(ZoomIntervalIter::new(
             self,
@@ -352,7 +361,13 @@ where
         end: u32,
     ) -> Result<Vec<f32>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.get_overlapping_blocks(chrom_name, start, end)?;
+        let blocks = self.read.search_cir_tree(
+            &self.info,
+            self.full_data_cir_tree(),
+            chrom_name,
+            start,
+            end,
+        )?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.reader().tell()?;
@@ -382,13 +397,11 @@ fn get_block_values<R: SeekableRead>(
     start: u32,
     end: u32,
 ) -> Result<Option<std::vec::IntoIter<Value>>, BBIReadError> {
-    let mut block_data_mut = get_block_data(bigwig, &block, *known_offset)?;
+    let data = bigwig.read.get_block_data(&bigwig.info, &block)?;
+    let mut bytes = BytesMut::with_capacity(data.len());
+    bytes.extend_from_slice(&data);
 
-    use bytes::Buf;
-    use bytes::BytesMut;
-
-    let mut bytes_header = BytesMut::zeroed(24);
-    block_data_mut.read_exact(&mut bytes_header)?;
+    let mut bytes_header = bytes.split_to(24);
 
     let (chrom_id, chrom_start, item_step, item_span, section_type, item_count) =
         match bigwig.info.header.endianness {
@@ -438,9 +451,7 @@ fn get_block_values<R: SeekableRead>(
 
     match section_type {
         1 => {
-            let mut bytes = vec![0u8; (item_count as usize) * 12];
-            block_data_mut.read_exact(&mut bytes)?;
-            assert!(bytes.len() == (item_count as usize) * 12);
+            assert!(bytes.len() >= (item_count as usize) * 12);
             for i in 0..(item_count as usize) {
                 let istart = i * 12;
                 let block_item_data: &[u8; 12] = bytes[istart..istart + 12].try_into().unwrap();
@@ -502,8 +513,6 @@ fn get_block_values<R: SeekableRead>(
             }
         }
         2 => {
-            let mut bytes = BytesMut::zeroed((item_count as usize) * 8);
-            block_data_mut.read_exact(&mut bytes)?;
             for _ in 0..item_count {
                 // variable step
                 let (chrom_start, value) = match bigwig.info.header.endianness {
@@ -533,8 +542,6 @@ fn get_block_values<R: SeekableRead>(
         }
         3 => {
             let mut curr_start = chrom_start;
-            let mut bytes = BytesMut::zeroed((item_count as usize) * 4);
-            block_data_mut.read_exact(&mut bytes)?;
             for _ in 0..item_count {
                 // fixed step
                 let value = match bigwig.info.header.endianness {
