@@ -1292,7 +1292,9 @@ pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
 
 #[cfg(all(test, feature = "read"))]
 mod tests {
-    use byteordered::{ByteOrdered, Endianness};
+    use byteordered::Endianness;
+
+    use crate::search_cir_tree_inner;
 
     use super::*;
     use std::io::Cursor;
@@ -1331,32 +1333,11 @@ mod tests {
         drop(cursor);
 
         let mut cursor = Cursor::new(&mut data);
-        let bufreader = BufReader::new(&mut cursor);
-        let mut file = ByteOrdered::runtime(bufreader, Endianness::native());
+        let mut file = BufReader::new(&mut cursor);
 
-        let magic = file.read_u32()?;
-        if magic != CIR_TREE_MAGIC {
-            panic!("Invalid file format: CIR_TREE_MAGIC does not match.");
-        }
-        let _blocksize = file.read_u32()?;
-        let _item_count = file.read_u64()?;
-        let _start_chrom_idx = file.read_u32()?;
-        let _start_base = file.read_u32()?;
-        let _end_chrom_idx = file.read_u32()?;
-        let _end_base = file.read_u32()?;
-        let _end_file_offset = file.read_u64()?;
-        let _item_per_slot = file.read_u32()?;
-        let _reserved = file.read_u32()?;
-
-        let mut blocks = vec![];
-        crate::bbiread::search_overlapping_blocks(
-            &mut file,
-            Endianness::native(),
-            0,
-            0,
-            MAX_BASES,
-            &mut blocks,
-        )?;
+        let blocks =
+            search_cir_tree_inner(Endianness::native(), &mut file, 0, 0, 0, MAX_BASES, false)
+                .unwrap();
 
         let mut chrom = 0;
         let mut start = 0;
