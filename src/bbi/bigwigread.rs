@@ -53,8 +53,9 @@ use crate::bbiread::{
     read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
     ZoomIntervalIter,
 };
+use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{BBIFileRead, BBIReadInternal, ZoomIntervalError};
+use crate::{BBIFileRead, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -158,7 +159,7 @@ impl<R: Reopen> Reopen for BigWigRead<R> {
     }
 }
 
-impl<R> BBIRead for BigWigRead<R> {
+impl<R: BBIFileRead> BBIRead for BigWigRead<R> {
     fn info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -168,15 +169,15 @@ impl<R> BBIRead for BigWigRead<R> {
     }
 }
 
-impl<R: SeekableRead> BBIReadInternal for BigWigRead<R> {
+impl<R: BBIFileRead> BBIReadInternal for BigWigRead<R> {
     type Read = R;
 
     fn reader(&mut self) -> &mut R {
         &mut self.read
     }
 
-    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo) {
-        (&mut self.read, &self.info)
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &mut BBIFileInfo) {
+        (&mut self.read, &mut self.info)
     }
 }
 
@@ -278,13 +279,10 @@ where
         end: u32,
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.read.search_cir_tree(
-            &self.info,
-            self.full_data_cir_tree(),
-            chrom_name,
-            start,
-            end,
-        )?;
+        let cir_tree = self.full_data_cir_tree()?;
+        let blocks = self
+            .read
+            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
         Ok(IntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -307,7 +305,7 @@ where
         end: u32,
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let cir_tree = self.full_data_cir_tree();
+        let cir_tree = self.full_data_cir_tree()?;
         let blocks = self
             .read
             .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
@@ -333,9 +331,7 @@ where
         reduction_level: u32,
     ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
-        let cir_tree_index = self
-            .zoom_cir_tree(reduction_level)
-            .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
+        let cir_tree_index = self.zoom_cir_tree(reduction_level)?;
 
         let chrom = self.info.chrom_id(chrom_name)?;
 
@@ -361,13 +357,10 @@ where
         end: u32,
     ) -> Result<Vec<f32>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let blocks = self.read.search_cir_tree(
-            &self.info,
-            self.full_data_cir_tree(),
-            chrom_name,
-            start,
-            end,
-        )?;
+        let cir_tree = self.full_data_cir_tree()?;
+        let blocks = self
+            .read
+            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
         let mut known_offset = self.reader().tell()?;

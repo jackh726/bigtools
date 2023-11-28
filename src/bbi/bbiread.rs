@@ -6,6 +6,7 @@ use std::vec::Vec;
 
 use byteordered::Endianness;
 use bytes::{Buf, BytesMut};
+use itertools::Either;
 use libdeflater::Decompressor;
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
@@ -17,6 +18,8 @@ use crate::bbi::{
 use crate::bed::bedparser::BedValueError;
 use crate::utils::reopen::{ReopenableFile, SeekableRead};
 use crate::{BigBedRead, BigWigRead, DEFAULT_BLOCK_SIZE};
+
+use self::internal::BBIReadInternal;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Block {
@@ -45,6 +48,7 @@ pub struct BBIHeader {
     pub(crate) chromosome_tree_offset: u64,
     pub(crate) full_data_offset: u64,
     pub(crate) full_index_offset: u64,
+    pub(crate) full_index_tree_offset: Option<u64>,
     pub(crate) auto_sql_offset: u64,
     pub(crate) total_summary_offset: u64,
     pub(crate) uncompress_buf_size: u32,
@@ -110,8 +114,6 @@ pub(crate) enum BBIFileReadInfoError {
 pub enum CirTreeSearchError {
     #[error("The passed chromosome ({}) was incorrect.", .0)]
     InvalidChromosome(String),
-    #[error("Invalid magic (likely a bug).")]
-    UnknownMagic,
     #[error("Error occurred: {}", .0)]
     IoError(#[from] io::Error),
 }
@@ -135,8 +137,16 @@ impl From<CirTreeSearchError> for BBIReadError {
     fn from(value: CirTreeSearchError) -> Self {
         match value {
             CirTreeSearchError::InvalidChromosome(chrom) => BBIReadError::InvalidChromosome(chrom),
-            CirTreeSearchError::UnknownMagic => BBIReadError::UnknownMagic,
             CirTreeSearchError::IoError(e) => BBIReadError::IoError(e),
+        }
+    }
+}
+
+impl From<internal::FullDataCirTreeError> for BBIReadError {
+    fn from(value: internal::FullDataCirTreeError) -> Self {
+        match value {
+            internal::FullDataCirTreeError::UnknownMagic => BBIReadError::UnknownMagic,
+            internal::FullDataCirTreeError::IoError(e) => BBIReadError::IoError(e),
         }
     }
 }
@@ -162,6 +172,22 @@ impl From<CirTreeSearchError> for ZoomIntervalError {
     }
 }
 
+impl From<internal::ZoomDataCirTreeError> for ZoomIntervalError {
+    fn from(value: internal::ZoomDataCirTreeError) -> Self {
+        match value {
+            internal::ZoomDataCirTreeError::UnknownMagic => {
+                ZoomIntervalError::BBIReadError(BBIReadError::UnknownMagic)
+            }
+            internal::ZoomDataCirTreeError::ReductionLevelNotFound => {
+                ZoomIntervalError::ReductionLevelNotFound
+            }
+            internal::ZoomDataCirTreeError::IoError(e) => {
+                ZoomIntervalError::BBIReadError(BBIReadError::IoError(e))
+            }
+        }
+    }
+}
+
 /// What kind of cir tree in a bbi file
 pub enum CirTreeIndexType {
     /// The index for the full data
@@ -175,49 +201,97 @@ pub enum CirTreeIndexType {
 /// This can be passed to `search_cir_tree`.
 pub struct CirTreeIndex(pub CirTreeIndexType, pub(crate) u64);
 
-pub(crate) trait BBIReadInternal: BBIRead {
-    type Read: BBIFileRead;
+pub(crate) mod internal {
+    use super::*;
 
-    /// Gets a reader to the underlying file
-    fn reader(&mut self) -> &mut Self::Read;
+    pub enum FullDataCirTreeError {
+        UnknownMagic,
+        IoError(io::Error),
+    }
 
-    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo);
+    pub enum ZoomDataCirTreeError {
+        UnknownMagic,
+        ReductionLevelNotFound,
+        IoError(io::Error),
+    }
+
+    pub trait BBIReadInternal {
+        type Read: BBIFileRead;
+
+        /// Gets a reader to the underlying file
+        fn reader(&mut self) -> &mut Self::Read;
+
+        fn reader_and_info(&mut self) -> (&mut Self::Read, &mut BBIFileInfo);
+
+        fn full_data_cir_tree(&mut self) -> Result<CirTreeIndex, FullDataCirTreeError> {
+            let (reader, info) = self.reader_and_info();
+            let index_offset = info.header.full_index_offset;
+            if info.header.full_index_tree_offset.is_none() {
+                let endianness = info.header.endianness;
+
+                reader
+                    .raw_reader()
+                    .seek(SeekFrom::Start(index_offset))
+                    .map_err(|e| FullDataCirTreeError::IoError(e))?;
+
+                read_cir_tree_header(endianness, reader.raw_reader()).map_err(|e| match e {
+                    Either::Left(_) => FullDataCirTreeError::UnknownMagic,
+                    Either::Right(e) => FullDataCirTreeError::IoError(e),
+                })?;
+
+                info.header.full_index_tree_offset = Some(index_offset + 48);
+            }
+            Ok(CirTreeIndex(CirTreeIndexType::FullData, index_offset + 48))
+        }
+
+        fn zoom_cir_tree(
+            &mut self,
+            reduction_level: u32,
+        ) -> Result<CirTreeIndex, ZoomDataCirTreeError> {
+            let (reader, info) = self.reader_and_info();
+            let zoom_header = match info
+                .zoom_headers
+                .iter_mut()
+                .find(|h| h.reduction_level == reduction_level)
+            {
+                Some(h) => h,
+                None => {
+                    return Err(ZoomDataCirTreeError::ReductionLevelNotFound);
+                }
+            };
+
+            if zoom_header.index_tree_offset.is_none() {
+                let endianness = info.header.endianness;
+
+                reader
+                    .raw_reader()
+                    .seek(SeekFrom::Start(zoom_header.index_offset))
+                    .map_err(|e| ZoomDataCirTreeError::IoError(e))?;
+
+                read_cir_tree_header(endianness, reader.raw_reader()).map_err(|e| match e {
+                    Either::Left(_) => ZoomDataCirTreeError::UnknownMagic,
+                    Either::Right(e) => ZoomDataCirTreeError::IoError(e),
+                })?;
+
+                zoom_header.index_tree_offset = Some(zoom_header.index_offset + 48);
+            }
+
+            Ok(CirTreeIndex(
+                CirTreeIndexType::Zoom(reduction_level),
+                zoom_header.index_offset + 48,
+            ))
+        }
+    }
 }
 
 pub struct ReductionLevelNotFound;
 
 /// Generic methods for reading a bbi file
-pub trait BBIRead {
+pub trait BBIRead: BBIReadInternal {
     /// Get basic info about the bbi file
     fn info(&self) -> &BBIFileInfo;
 
     fn chroms(&self) -> &[ChromInfo];
-
-    fn full_data_cir_tree(&self) -> CirTreeIndex {
-        CirTreeIndex(
-            CirTreeIndexType::FullData,
-            self.info().header.full_index_offset,
-        )
-    }
-
-    fn zoom_cir_tree(&self, reduction_level: u32) -> Result<CirTreeIndex, ReductionLevelNotFound> {
-        let zoom_header = match self
-            .info()
-            .zoom_headers
-            .iter()
-            .find(|h| h.reduction_level == reduction_level)
-        {
-            Some(h) => h,
-            None => {
-                return Err(ReductionLevelNotFound);
-            }
-        };
-
-        Ok(CirTreeIndex(
-            CirTreeIndexType::Zoom(reduction_level),
-            zoom_header.index_offset,
-        ))
-    }
 }
 
 fn search_cir_tree<R: Read + Seek>(
@@ -244,26 +318,27 @@ fn search_cir_tree<R: Read + Seek>(
 
     file.seek(SeekFrom::Start(at.1))?;
 
-    search_cir_tree_inner(endianness, file, at.1, chrom_ix, start, end, false)
+    Ok(search_cir_tree_inner(
+        endianness, file, at.1, chrom_ix, start, end, false,
+    )?)
 }
 
-pub(crate) fn search_cir_tree_inner<R: Read + Seek>(
+#[derive(Debug)]
+pub(crate) struct UnknownMagic;
+
+pub(crate) fn read_cir_tree_header<R: Read + Seek>(
     endianness: Endianness,
     file: &mut R,
-    at: u64,
-    chrom_ix: u32,
-    start: u32,
-    end: u32,
-    return_nodes: bool,
-) -> Result<Vec<Block>, CirTreeSearchError> {
+) -> Result<(), Either<UnknownMagic, io::Error>> {
     let mut header_data = BytesMut::zeroed(48);
-    file.read_exact(&mut header_data)?;
+    file.read_exact(&mut header_data)
+        .map_err(|e| Either::Right(e))?;
 
     match endianness {
         Endianness::Big => {
             let magic = header_data.get_u32();
             if magic != CIR_TREE_MAGIC {
-                return Err(CirTreeSearchError::UnknownMagic);
+                return Err(Either::Left(UnknownMagic));
             }
 
             let _blocksize = header_data.get_u32();
@@ -279,7 +354,7 @@ pub(crate) fn search_cir_tree_inner<R: Read + Seek>(
         Endianness::Little => {
             let magic = header_data.get_u32_le();
             if magic != CIR_TREE_MAGIC {
-                return Err(CirTreeSearchError::UnknownMagic);
+                return Err(Either::Left(UnknownMagic));
             }
 
             let _blocksize = header_data.get_u32_le();
@@ -293,9 +368,20 @@ pub(crate) fn search_cir_tree_inner<R: Read + Seek>(
             let _reserved = header_data.get_u32_le();
         }
     };
+    Ok(())
+}
 
-    // TODO: could do some optimization here to check if our interval overlaps with any data
-
+pub(crate) fn search_cir_tree_inner<R: Read + Seek>(
+    endianness: Endianness,
+    file: &mut R,
+    at: u64,
+    chrom_ix: u32,
+    start: u32,
+    end: u32,
+    return_nodes: bool,
+) -> io::Result<Vec<Block>> {
+    // We currently don't check that the passed interval overlaps with *any* data.
+    // We could, but would have to store this data when we check the header.
     let mut blocks = vec![];
 
     let iter = search_overlapping_blocks(file, endianness, chrom_ix, start, end, return_nodes, at);
@@ -313,7 +399,7 @@ pub enum GenericBBIRead<R> {
     BigBed(BigBedRead<R>),
 }
 
-impl<R> BBIRead for GenericBBIRead<R> {
+impl<R: SeekableRead> BBIRead for GenericBBIRead<R> {
     fn info(&self) -> &BBIFileInfo {
         match self {
             GenericBBIRead::BigWig(b) => b.info(),
@@ -329,6 +415,23 @@ impl<R> BBIRead for GenericBBIRead<R> {
     }
 }
 
+impl<R: SeekableRead> BBIReadInternal for GenericBBIRead<R> {
+    type Read = R;
+
+    fn reader(&mut self) -> &mut Self::Read {
+        match self {
+            GenericBBIRead::BigWig(b) => b.reader(),
+            GenericBBIRead::BigBed(b) => b.reader(),
+        }
+    }
+
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &mut BBIFileInfo) {
+        match self {
+            GenericBBIRead::BigWig(b) => b.reader_and_info(),
+            GenericBBIRead::BigBed(b) => b.reader_and_info(),
+        }
+    }
+}
 /// Possible errors encountered when opening a bigBed file to read
 #[derive(Error, Debug)]
 pub enum GenericBBIFileOpenError {
@@ -520,6 +623,7 @@ pub(crate) fn read_info<R: BBIFileRead>(file: &mut R) -> Result<BBIFileInfo, BBI
         chromosome_tree_offset,
         full_data_offset,
         full_index_offset,
+        full_index_tree_offset: None,
         field_count,
         defined_field_count,
         auto_sql_offset,
@@ -604,6 +708,7 @@ fn read_zoom_headers<R: SeekableRead>(
                     reduction_level,
                     data_offset,
                     index_offset,
+                    index_tree_offset: None,
                 });
             }
         }
@@ -618,6 +723,7 @@ fn read_zoom_headers<R: SeekableRead>(
                     reduction_level,
                     data_offset,
                     index_offset,
+                    index_tree_offset: None,
                 });
             }
         }
@@ -1077,7 +1183,7 @@ fn read_block_data<R: SeekableRead>(
     Ok(block_data)
 }
 
-pub(crate) fn get_zoom_block_values<B: BBIReadInternal>(
+pub(crate) fn get_zoom_block_values<B: BBIRead>(
     bbifile: &mut B,
     block: Block,
     known_offset: &mut u64,
@@ -1193,7 +1299,7 @@ where
 impl<'a, I, B> Iterator for ZoomIntervalIter<'a, I, B>
 where
     I: Iterator<Item = Block> + Send,
-    B: BBIReadInternal,
+    B: BBIRead,
 {
     type Item = Result<ZoomRecord, BBIReadError>;
 

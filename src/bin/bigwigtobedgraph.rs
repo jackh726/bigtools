@@ -60,8 +60,6 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     end: Option<u32>,
     runtime: &runtime::Handle,
 ) -> Result<(), BBIReadError> {
-    dbg!();
-
     let start = chrom.as_ref().and_then(|_| start);
     let end = chrom.as_ref().and_then(|_| end);
 

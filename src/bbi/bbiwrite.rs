@@ -531,6 +531,7 @@ pub(crate) fn write_zooms(
             reduction_level: zoom.resolution,
             data_offset: zoom_data_offset,
             index_offset: zoom_index_offset,
+            index_tree_offset: None,
         });
 
         zoom_count += 1;
@@ -1210,6 +1211,7 @@ pub(crate) fn write_zoom_vals<
         reduction_level: first_zoom.0,
         data_offset: first_zoom_data_offset,
         index_offset: first_zoom_index_offset,
+        index_tree_offset: None,
     });
 
     while let Some(mut zoom) = zooms_map_iter.next() {
@@ -1235,6 +1237,7 @@ pub(crate) fn write_zoom_vals<
             reduction_level: first_zoom.0,
             data_offset: zoom_data_offset,
             index_offset: zoom_index_offset,
+            index_tree_offset: None,
         });
     }
 
@@ -1294,7 +1297,7 @@ pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
 mod tests {
     use byteordered::Endianness;
 
-    use crate::search_cir_tree_inner;
+    use crate::{read_cir_tree_header, search_cir_tree_inner};
 
     use super::*;
     use std::io::Cursor;
@@ -1334,6 +1337,8 @@ mod tests {
 
         let mut cursor = Cursor::new(&mut data);
         let mut file = BufReader::new(&mut cursor);
+
+        read_cir_tree_header(Endianness::native(), &mut file).unwrap();
 
         let blocks =
             search_cir_tree_inner(Endianness::native(), &mut file, 0, 0, 0, MAX_BASES, false)

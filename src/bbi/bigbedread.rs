@@ -12,8 +12,9 @@ use crate::bbiread::{
     read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
     ZoomIntervalIter,
 };
+use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile};
-use crate::{BBIFileRead, BBIReadInternal, ZoomIntervalError};
+use crate::{BBIFileRead, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -110,7 +111,7 @@ impl<R: Reopen> Reopen for BigBedRead<R> {
     }
 }
 
-impl<R> BBIRead for BigBedRead<R> {
+impl<R: BBIFileRead> BBIRead for BigBedRead<R> {
     fn info(&self) -> &BBIFileInfo {
         &self.info
     }
@@ -127,8 +128,8 @@ impl<R: BBIFileRead> BBIReadInternal for BigBedRead<R> {
         &mut self.read
     }
 
-    fn reader_and_info(&mut self) -> (&mut Self::Read, &BBIFileInfo) {
-        (&mut self.read, &self.info)
+    fn reader_and_info(&mut self) -> (&mut Self::Read, &mut BBIFileInfo) {
+        (&mut self.read, &mut self.info)
     }
 }
 
@@ -194,13 +195,10 @@ impl<R: BBIFileRead> BigBedRead<R> {
         start: u32,
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + 'a, BBIReadError> {
-        let blocks = self.read.search_cir_tree(
-            &self.info,
-            self.full_data_cir_tree(),
-            chrom_name,
-            start,
-            end,
-        )?;
+        let cir_tree = self.full_data_cir_tree()?;
+        let blocks = self
+            .read
+            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -230,7 +228,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         start: u32,
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>>, BBIReadError> {
-        let cir_tree = self.full_data_cir_tree();
+        let cir_tree = self.full_data_cir_tree()?;
         let blocks = self
             .read
             .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
