@@ -5,7 +5,7 @@ use crate::bbiread::BBIReadError;
 use crate::bed::bedparser::{parse_bed, BedValueError};
 use crate::utils::file::reopen::SeekableRead;
 use crate::utils::file::streaming_linereader::StreamingLineReader;
-use crate::BedEntry;
+use crate::{BBIFileRead, BedEntry};
 
 use thiserror::Error;
 
@@ -33,7 +33,7 @@ pub enum StatsError {
     InvalidNameCol(String),
 }
 
-pub fn stats_for_bed_item<R: SeekableRead>(
+pub fn stats_for_bed_item<R: BBIFileRead>(
     name: Name,
     chrom: &str,
     entry: BedEntry,

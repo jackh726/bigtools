@@ -6,13 +6,13 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 
 use bigtools::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
 use bigtools::utils::file_view::FileView;
-use bigtools::utils::reopen::{Reopen, SeekableRead};
+use bigtools::utils::reopen::{Reopen, ReopenableFile};
 use bigtools::utils::split_file_into_chunks_by_size;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
 
 use bigtools::utils::misc::{stats_for_bed_item, Name};
-use bigtools::BigWigRead;
+use bigtools::{BBIFileRead, BigWigRead, CachedBBIFileRead};
 use crossbeam_channel::TryRecvError;
 
 #[derive(Parser)]
@@ -71,7 +71,13 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let bedinpath = matches.bedin;
     let bedoutpath = matches.output;
 
-    let mut inbigwig = BigWigRead::open_file(&bigwigpath)?;
+    let reopen = ReopenableFile {
+        path: bigwigpath.to_string(),
+        file: File::open(bigwigpath)?,
+    };
+    let cached_reopen = CachedBBIFileRead::new(reopen);
+    let mut inbigwig = BigWigRead::open(cached_reopen)?;
+
     let outbed = File::create(bedoutpath)?;
     let mut bedoutwriter: BufWriter<File> = BufWriter::new(outbed);
 
@@ -101,7 +107,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     if parallel {
         let chunks = split_file_into_chunks_by_size(File::open(&bedinpath)?, nthreads as u64)?;
 
-        fn process_chunk<R: Reopen + SeekableRead>(
+        fn process_chunk<R: Reopen + BBIFileRead>(
             start: u64,
             end: u64,
             bedinpath: String,

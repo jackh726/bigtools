@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::vec::Vec;
@@ -15,12 +16,12 @@ use crate::bbi::{
     CIR_TREE_MAGIC,
 };
 use crate::bed::bedparser::BedValueError;
-use crate::utils::reopen::{ReopenableFile, SeekableRead};
+use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{BigBedRead, BigWigRead};
 
 use self::internal::BBIReadInternal;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Block {
     pub(crate) offset: u64,
     pub(crate) size: u64,
@@ -293,7 +294,7 @@ pub trait BBIRead: BBIReadInternal {
     fn chroms(&self) -> &[ChromInfo];
 }
 
-pub(crate) fn search_cir_tree<R: Read + Seek>(
+pub(crate) fn search_cir_tree<R: BBIFileRead>(
     info: &BBIFileInfo,
     file: &mut R,
     at: CirTreeIndex,
@@ -542,6 +543,90 @@ impl<S: SeekableRead> BBIFileRead for S {
 
     fn raw_reader(&mut self) -> &mut Self::Reader {
         self
+    }
+}
+
+pub struct CachedBBIFileRead<S: SeekableRead> {
+    read: S,
+    cir_tree_node_map: HashMap<u64, Either<Vec<CirTreeNodeLeaf>, Vec<CirTreeNodeNonLeaf>>>,
+    block_data: HashMap<Block, Vec<u8>>,
+}
+
+impl<S: SeekableRead> CachedBBIFileRead<S> {
+    pub fn new(read: S) -> Self {
+        CachedBBIFileRead {
+            read,
+            cir_tree_node_map: HashMap::new(),
+            block_data: HashMap::new(),
+        }
+    }
+}
+
+impl<S: SeekableRead> BBIFileRead for CachedBBIFileRead<S> {
+    type Reader = S;
+
+    fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>> {
+        match self.block_data.entry(block.clone()) {
+            Entry::Occupied(data) => Ok(data.get().clone()),
+            Entry::Vacant(e) => {
+                let data = read_block_data(info, &mut self.read, block)?;
+                e.insert(data.clone());
+                Ok(data)
+            }
+        }
+    }
+
+    fn blocks_for_cir_tree_node(
+        &mut self,
+        endianness: Endianness,
+        node_offset: u64,
+        chrom_ix: u32,
+        start: u32,
+        end: u32,
+    ) -> io::Result<(SmallVec<[u64; 4]>, SmallVec<[Block; 4]>)> {
+        match self.cir_tree_node_map.entry(node_offset) {
+            Entry::Occupied(node) => {
+                let iter = match node.get() {
+                    Either::Left(v) => CirTreeNodeIterator::Leaf(v.clone().into_iter()),
+                    Either::Right(v) => CirTreeNodeIterator::NonLeaf(v.clone().into_iter()),
+                };
+                Ok(nodes_overlapping(iter, chrom_ix, start, end))
+            }
+            Entry::Vacant(e) => {
+                let iter = match read_node(&mut self.read, node_offset, endianness) {
+                    Ok(d) => d,
+                    Err(e) => return Err(e),
+                };
+                let iter = match iter {
+                    CirTreeNodeIterator::Leaf(v) => {
+                        let v: Vec<_> = v.collect();
+                        e.insert(Either::Left(v.clone()));
+                        CirTreeNodeIterator::Leaf(v.into_iter())
+                    }
+                    CirTreeNodeIterator::NonLeaf(v) => {
+                        let v: Vec<_> = v.collect();
+                        e.insert(Either::Right(v.clone()));
+                        CirTreeNodeIterator::NonLeaf(v.into_iter())
+                    }
+                };
+
+                Ok(nodes_overlapping(iter, chrom_ix, start, end))
+            }
+        }
+    }
+
+    fn raw_reader(&mut self) -> &mut Self::Reader {
+        &mut self.read
+    }
+}
+
+impl<R: Reopen + SeekableRead> Reopen for CachedBBIFileRead<R> {
+    fn reopen(&self) -> io::Result<Self> {
+        Ok(Self {
+            read: self.read.reopen()?,
+            cir_tree_node_map: self.cir_tree_node_map.clone(),
+            block_data: self.block_data.clone(),
+        })
     }
 }
 
@@ -1088,9 +1173,12 @@ impl<'a, R: BBIFileRead> Iterator for CirTreeBlockSearchIter<'a, R> {
     }
 }
 
-pub(crate) enum CirTreeNodeIterator {
-    Leaf(CirTreeLeafItemIterator),
-    NonLeaf(CirTreeNonLeafItemsIterator),
+pub(crate) enum CirTreeNodeIterator<
+    L: Iterator<Item = CirTreeNodeLeaf> = CirTreeLeafItemIterator,
+    N: Iterator<Item = CirTreeNodeNonLeaf> = CirTreeNonLeafItemsIterator,
+> {
+    Leaf(L),
+    NonLeaf(N),
 }
 
 pub(crate) fn read_node<R: SeekableRead>(
@@ -1134,8 +1222,11 @@ pub(crate) fn read_node<R: SeekableRead>(
     Ok(iter)
 }
 
-fn nodes_overlapping(
-    iter: CirTreeNodeIterator,
+fn nodes_overlapping<
+    L: Iterator<Item = CirTreeNodeLeaf>,
+    N: Iterator<Item = CirTreeNodeNonLeaf>,
+>(
+    iter: CirTreeNodeIterator<L, N>,
     chrom_ix: u32,
     start: u32,
     end: u32,

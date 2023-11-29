@@ -196,14 +196,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + 'a, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -234,14 +227,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>>, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -278,14 +264,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
 
         let chrom = self.info.chrom_id(chrom_name)?;
 
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         Ok(ZoomIntervalIter::new(
             self,
             blocks.into_iter(),

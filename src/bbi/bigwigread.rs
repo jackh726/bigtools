@@ -54,13 +54,13 @@ use crate::bbiread::{
     ZoomIntervalIter,
 };
 use crate::internal::BBIReadInternal;
-use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
+use crate::utils::reopen::{Reopen, ReopenableFile};
 use crate::{search_cir_tree, BBIFileRead, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
+    R: BBIFileRead,
     B: BorrowMut<BigWigRead<R>>,
 {
     r: std::marker::PhantomData<R>,
@@ -76,7 +76,7 @@ where
 impl<I, R, B> Iterator for IntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    R: SeekableRead,
+    R: BBIFileRead,
     B: BorrowMut<BigWigRead<R>>,
 {
     type Item = Result<Value, BBIReadError>;
@@ -210,7 +210,7 @@ impl BigWigRead<ReopenableFile> {
 
 impl<R> BigWigRead<R>
 where
-    R: SeekableRead,
+    R: BBIFileRead,
 {
     /// Opens a new `BigWigRead` with for a given type that implements both `Read` and `Seek`
     pub fn open(mut read: R) -> Result<Self, BigWigReadOpenError> {
@@ -243,7 +243,7 @@ where
         let endianness = self.info.header.endianness;
         let summary_offset = self.info.header.total_summary_offset;
         let data_offset = self.info.header.full_data_offset;
-        let reader = self.reader();
+        let reader = self.reader().raw_reader();
         let mut reader = ByteOrdered::runtime(reader, endianness);
         let (bases_covered, min_val, max_val, sum, sum_squares) = if summary_offset != 0 {
             reader.seek(SeekFrom::Start(summary_offset))?;
@@ -280,14 +280,7 @@ where
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + 'a, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         Ok(IntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -311,14 +304,7 @@ where
     ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         Ok(IntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -345,14 +331,7 @@ where
 
         let chrom = self.info.chrom_id(chrom_name)?;
 
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
 
         Ok(ZoomIntervalIter::new(
             self,
@@ -373,17 +352,10 @@ where
     ) -> Result<Vec<f32>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.info,
-            self.read.raw_reader(),
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         let mut values = vec![std::f32::NAN; (end - start) as usize];
         use crate::utils::tell::Tell;
-        let mut known_offset = self.reader().tell()?;
+        let mut known_offset = self.reader().raw_reader().tell()?;
         for block in blocks {
             let block_values = get_block_values(self, block, &mut known_offset, chrom, start, end)?;
             let block_values = match block_values {
@@ -402,7 +374,7 @@ where
     }
 }
 
-fn get_block_values<R: SeekableRead>(
+fn get_block_values<R: BBIFileRead>(
     bigwig: &mut BigWigRead<R>,
     block: Block,
     known_offset: &mut u64,
