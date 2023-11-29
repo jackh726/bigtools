@@ -14,7 +14,7 @@ use crate::bbiread::{
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile};
-use crate::{BBIFileRead, ZoomIntervalError};
+use crate::{search_cir_tree, BBIFileRead, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -196,9 +196,14 @@ impl<R: BBIFileRead> BigBedRead<R> {
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + 'a, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = self
-            .read
-            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
+        let blocks = search_cir_tree(
+            &self.info,
+            self.read.raw_reader(),
+            cir_tree,
+            chrom_name,
+            start,
+            end,
+        )?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -229,9 +234,14 @@ impl<R: BBIFileRead> BigBedRead<R> {
         end: u32,
     ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>>, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
-        let blocks = self
-            .read
-            .search_cir_tree(&self.info, cir_tree, chrom_name, start, end)?;
+        let blocks = search_cir_tree(
+            &self.info,
+            self.read.raw_reader(),
+            cir_tree,
+            chrom_name,
+            start,
+            end,
+        )?;
         // TODO: this is only for asserting that the chrom is what we expect
         let chrom_ix = self
             .info()
@@ -262,15 +272,20 @@ impl<R: BBIFileRead> BigBedRead<R> {
         reduction_level: u32,
     ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
-        let cir_tree_index = self
+        let cir_tree = self
             .zoom_cir_tree(reduction_level)
             .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
 
         let chrom = self.info.chrom_id(chrom_name)?;
 
-        let blocks =
-            self.read
-                .search_cir_tree(&self.info, cir_tree_index, chrom_name, start, end)?;
+        let blocks = search_cir_tree(
+            &self.info,
+            self.read.raw_reader(),
+            cir_tree,
+            chrom_name,
+            start,
+            end,
+        )?;
         Ok(ZoomIntervalIter::new(
             self,
             blocks.into_iter(),

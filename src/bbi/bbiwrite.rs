@@ -1341,8 +1341,7 @@ mod tests {
         read_cir_tree_header(Endianness::native(), &mut file).unwrap();
 
         let blocks =
-            search_cir_tree_inner(Endianness::native(), &mut file, 0, 0, 0, MAX_BASES, false)
-                .unwrap();
+            search_cir_tree_inner(Endianness::native(), &mut file, 48, 0, 0, MAX_BASES).unwrap();
 
         let mut chrom = 0;
         let mut start = 0;

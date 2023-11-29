@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::iter;
 use std::vec::Vec;
 
 use byteordered::Endianness;
@@ -17,7 +16,7 @@ use crate::bbi::{
 };
 use crate::bed::bedparser::BedValueError;
 use crate::utils::reopen::{ReopenableFile, SeekableRead};
-use crate::{BigBedRead, BigWigRead, DEFAULT_BLOCK_SIZE};
+use crate::{BigBedRead, BigWigRead};
 
 use self::internal::BBIReadInternal;
 
@@ -294,7 +293,7 @@ pub trait BBIRead: BBIReadInternal {
     fn chroms(&self) -> &[ChromInfo];
 }
 
-fn search_cir_tree<R: Read + Seek>(
+pub(crate) fn search_cir_tree<R: Read + Seek>(
     info: &BBIFileInfo,
     file: &mut R,
     at: CirTreeIndex,
@@ -316,10 +315,8 @@ fn search_cir_tree<R: Read + Seek>(
 
     let endianness = info.header.endianness;
 
-    file.seek(SeekFrom::Start(at.1))?;
-
     Ok(search_cir_tree_inner(
-        endianness, file, at.1, chrom_ix, start, end, false,
+        endianness, file, at.1, chrom_ix, start, end,
     )?)
 }
 
@@ -371,24 +368,32 @@ pub(crate) fn read_cir_tree_header<R: Read + Seek>(
     Ok(())
 }
 
-pub(crate) fn search_cir_tree_inner<R: Read + Seek>(
+pub(crate) fn search_cir_tree_inner<R: BBIFileRead>(
     endianness: Endianness,
     file: &mut R,
     at: u64,
     chrom_ix: u32,
     start: u32,
     end: u32,
-    return_nodes: bool,
 ) -> io::Result<Vec<Block>> {
     // We currently don't check that the passed interval overlaps with *any* data.
     // We could, but would have to store this data when we check the header.
     let mut blocks = vec![];
 
-    let iter = search_overlapping_blocks(file, endianness, chrom_ix, start, end, return_nodes, at);
+    let mut remaining_childblocks = VecDeque::with_capacity(2048);
+    remaining_childblocks.push_front(at);
+    let iter = CirTreeBlockSearchIter {
+        remaining_childblocks,
+        file,
+        endianness,
+        chrom_ix,
+        start,
+        end,
+    };
 
     for i in iter {
         let i = i?;
-        blocks.extend(i.0);
+        blocks.extend(i);
     }
 
     Ok(blocks)
@@ -498,16 +503,16 @@ impl GenericBBIRead<ReopenableFile> {
 pub trait BBIFileRead {
     type Reader: Read + Seek;
 
-    fn search_cir_tree(
+    fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>>;
+
+    fn blocks_for_cir_tree_node(
         &mut self,
-        info: &BBIFileInfo,
-        at: CirTreeIndex,
-        chrom_name: &str,
+        endianness: Endianness,
+        node_offset: u64,
+        chrom_ix: u32,
         start: u32,
         end: u32,
-    ) -> Result<Vec<Block>, CirTreeSearchError>;
-
-    fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>>;
+    ) -> io::Result<(SmallVec<[u64; 4]>, SmallVec<[Block; 4]>)>;
 
     fn raw_reader(&mut self) -> &mut Self::Reader;
 }
@@ -515,19 +520,24 @@ pub trait BBIFileRead {
 impl<S: SeekableRead> BBIFileRead for S {
     type Reader = Self;
 
-    fn search_cir_tree(
-        &mut self,
-        info: &BBIFileInfo,
-        at: CirTreeIndex,
-        chrom_name: &str,
-        start: u32,
-        end: u32,
-    ) -> Result<Vec<Block>, CirTreeSearchError> {
-        search_cir_tree(info, self, at, chrom_name, start, end)
-    }
-
     fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>> {
         read_block_data(info, self, block)
+    }
+
+    fn blocks_for_cir_tree_node(
+        &mut self,
+        endianness: Endianness,
+        node_offset: u64,
+        chrom_ix: u32,
+        start: u32,
+        end: u32,
+    ) -> io::Result<(SmallVec<[u64; 4]>, SmallVec<[Block; 4]>)> {
+        let iter = match read_node(self, node_offset, endianness) {
+            Ok(d) => d,
+            Err(e) => return Err(e),
+        };
+
+        Ok(nodes_overlapping(iter, chrom_ix, start, end))
     }
 
     fn raw_reader(&mut self) -> &mut Self::Reader {
@@ -839,7 +849,7 @@ fn overlaps(
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct CirTreeNodeLeaf {
+pub(crate) struct CirTreeNodeLeaf {
     start_chrom_ix: u32,
     start_base: u32,
     end_chrom_ix: u32,
@@ -849,7 +859,7 @@ pub struct CirTreeNodeLeaf {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct CirTreeNodeNonLeaf {
+pub(crate) struct CirTreeNodeNonLeaf {
     start_chrom_ix: u32,
     start_base: u32,
     end_chrom_ix: u32,
@@ -857,38 +867,28 @@ pub struct CirTreeNodeNonLeaf {
     node_offset: u64,
 }
 
-#[derive(Debug)]
-pub enum CirTreeNodeKind {
-    Leaf(Vec<CirTreeNodeLeaf>),
-    NonLeaf(Vec<CirTreeNodeNonLeaf>),
-}
-
-#[derive(Debug)]
-pub struct CirTreeNode {
-    offset: u64,
-    kind: CirTreeNodeKind,
-}
-
-fn cir_tree_leaf_items<R: SeekableRead>(
-    file: &mut R,
+pub(crate) struct CirTreeLeafItemIterator {
     endianness: Endianness,
+    i: usize,
     count: usize,
-) -> io::Result<impl Iterator<Item = CirTreeNodeLeaf>> {
-    let mut bytes = vec![0u8; count * 32];
-    file.read_exact(&mut bytes)?;
+    bytes: Vec<u8>,
+}
 
-    let mut j = 0;
-    Ok(iter::from_fn(move || {
-        let i = j;
-        if i >= count {
+impl Iterator for CirTreeLeafItemIterator {
+    type Item = CirTreeNodeLeaf;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = &self.bytes;
+        let i = self.i;
+        if i >= self.count {
             return None;
         }
-        j += 1;
+        self.i += 1;
 
         let istart = i * 32;
         let bytes: &[u8; 32] = &bytes[istart..istart + 32].try_into().unwrap();
         let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset, data_size) =
-            match endianness {
+            match self.endianness {
                 Endianness::Big => {
                     let start_chrom_ix =
                         u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
@@ -949,28 +949,47 @@ fn cir_tree_leaf_items<R: SeekableRead>(
             data_offset,
             data_size,
         })
-    }))
+    }
 }
-
-fn cir_tree_non_leaf_items<R: SeekableRead>(
+fn cir_tree_leaf_items<R: SeekableRead>(
     file: &mut R,
     endianness: Endianness,
     count: usize,
-) -> io::Result<impl Iterator<Item = CirTreeNodeNonLeaf>> {
-    let mut bytes = vec![0u8; (count as usize) * 32];
+) -> io::Result<CirTreeLeafItemIterator> {
+    let mut bytes = vec![0u8; count * 32];
     file.read_exact(&mut bytes)?;
 
-    let mut j = 0;
-    Ok(iter::from_fn(move || {
-        let i = j;
-        if i >= count {
+    Ok(CirTreeLeafItemIterator {
+        endianness,
+        i: 0,
+        count,
+        bytes,
+    })
+}
+
+pub(crate) struct CirTreeNonLeafItemsIterator {
+    endianness: Endianness,
+    i: usize,
+    count: usize,
+    bytes: Vec<u8>,
+}
+
+impl Iterator for CirTreeNonLeafItemsIterator {
+    type Item = CirTreeNodeNonLeaf;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = &self.bytes;
+        let i = self.i;
+        if i >= self.count {
             return None;
         }
-        j += 1;
+        self.i += 1;
 
         let istart = i * 24;
         let bytes: &[u8; 24] = &bytes[istart..istart + 24].try_into().unwrap();
-        let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset) = match endianness {
+        let (start_chrom_ix, start_base, end_chrom_ix, end_base, data_offset) = match self
+            .endianness
+        {
             Endianness::Big => {
                 let start_chrom_ix = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                 let start_base = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
@@ -1016,32 +1035,25 @@ fn cir_tree_non_leaf_items<R: SeekableRead>(
             end_base,
             node_offset: data_offset,
         })
-    }))
-}
-
-pub(crate) fn search_overlapping_blocks<R: SeekableRead>(
-    file: &mut R,
-    endianness: Endianness,
-    chrom_ix: u32,
-    start: u32,
-    end: u32,
-    return_nodes: bool,
-    index_location: u64,
-) -> impl Iterator<Item = io::Result<(SmallVec<[Block; 4]>, Option<CirTreeNode>)>> + '_ {
-    let mut remaining_childblocks = VecDeque::with_capacity(2048);
-    remaining_childblocks.push_front(index_location + 48);
-    CirTreeBlockSearchIter {
-        remaining_childblocks,
-        file,
-        endianness,
-        chrom_ix,
-        start,
-        end,
-        return_nodes,
     }
 }
+fn cir_tree_non_leaf_items<R: SeekableRead>(
+    file: &mut R,
+    endianness: Endianness,
+    count: usize,
+) -> io::Result<CirTreeNonLeafItemsIterator> {
+    let mut bytes = vec![0u8; (count as usize) * 32];
+    file.read_exact(&mut bytes)?;
 
-pub(crate) struct CirTreeBlockSearchIter<'a, R: SeekableRead> {
+    Ok(CirTreeNonLeafItemsIterator {
+        endianness,
+        i: 0,
+        count,
+        bytes,
+    })
+}
+
+pub(crate) struct CirTreeBlockSearchIter<'a, R: BBIFileRead> {
     remaining_childblocks: VecDeque<u64>,
 
     file: &'a mut R,
@@ -1049,12 +1061,10 @@ pub(crate) struct CirTreeBlockSearchIter<'a, R: SeekableRead> {
     chrom_ix: u32,
     start: u32,
     end: u32,
-
-    return_nodes: bool,
 }
 
-impl<'a, R: SeekableRead> Iterator for CirTreeBlockSearchIter<'a, R> {
-    type Item = io::Result<(SmallVec<[Block; 4]>, Option<CirTreeNode>)>;
+impl<'a, R: BBIFileRead> Iterator for CirTreeBlockSearchIter<'a, R> {
+    type Item = io::Result<SmallVec<[Block; 4]>>;
     fn next(&mut self) -> Option<Self::Item> {
         let file = &mut *self.file;
         let endianness = self.endianness;
@@ -1062,34 +1072,77 @@ impl<'a, R: SeekableRead> Iterator for CirTreeBlockSearchIter<'a, R> {
         let start = self.start;
         let end = self.end;
 
-        let current_offset = self.remaining_childblocks.pop_front()?;
+        let node_offset = self.remaining_childblocks.pop_front()?;
 
-        let mut blocks = smallvec![];
-
-        let mut header_data = BytesMut::zeroed(4);
-        match file.read_exact(&mut header_data) {
-            Err(e) => return Some(Err(e)),
-            Ok(_) => {}
-        }
-
-        let isleaf: u8 = header_data.get_u8();
-        assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
-        let _reserved = header_data.get_u8();
-
-        let count = match endianness {
-            Endianness::Big => header_data.get_u16(),
-            Endianness::Little => header_data.get_u16_le(),
-        };
-
-        let node = if isleaf == 1 {
-            let iter = match cir_tree_leaf_items(file, endianness, count as usize) {
-                Ok(v) => v,
+        let (new_childblocks, blocks) =
+            match file.blocks_for_cir_tree_node(endianness, node_offset, chrom_ix, start, end) {
+                Ok(d) => d,
                 Err(e) => return Some(Err(e)),
             };
 
-            let mut nodes = self
-                .return_nodes
-                .then(|| Vec::with_capacity(count as usize));
+        for child in new_childblocks.into_iter().rev() {
+            self.remaining_childblocks.push_front(child);
+        }
+
+        Some(Ok(blocks))
+    }
+}
+
+pub(crate) enum CirTreeNodeIterator {
+    Leaf(CirTreeLeafItemIterator),
+    NonLeaf(CirTreeNonLeafItemsIterator),
+}
+
+pub(crate) fn read_node<R: SeekableRead>(
+    file: &mut R,
+    node_offset: u64,
+    endianness: Endianness,
+) -> io::Result<CirTreeNodeIterator> {
+    match file.seek(SeekFrom::Start(node_offset)) {
+        Err(e) => return Err(e),
+        Ok(_) => {}
+    };
+
+    let mut header_data = BytesMut::zeroed(4);
+    match file.read_exact(&mut header_data) {
+        Err(e) => return Err(e),
+        Ok(_) => {}
+    }
+
+    let isleaf: u8 = header_data.get_u8();
+    assert!(isleaf == 1 || isleaf == 0, "Unexpected isleaf: {}", isleaf);
+    let _reserved = header_data.get_u8();
+
+    let count = match endianness {
+        Endianness::Big => header_data.get_u16(),
+        Endianness::Little => header_data.get_u16_le(),
+    };
+
+    let iter = if isleaf == 1 {
+        let iter = match cir_tree_leaf_items(file, endianness, count as usize) {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
+        CirTreeNodeIterator::Leaf(iter)
+    } else {
+        let iter = match cir_tree_non_leaf_items(file, endianness, count as usize) {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
+        CirTreeNodeIterator::NonLeaf(iter)
+    };
+    Ok(iter)
+}
+
+fn nodes_overlapping(
+    iter: CirTreeNodeIterator,
+    chrom_ix: u32,
+    start: u32,
+    end: u32,
+) -> (SmallVec<[u64; 4]>, SmallVec<[Block; 4]>) {
+    match iter {
+        CirTreeNodeIterator::Leaf(iter) => {
+            let mut blocks: SmallVec<[_; 4]> = smallvec![];
             for child in iter {
                 let block_overlaps = overlaps(
                     chrom_ix,
@@ -1106,22 +1159,11 @@ impl<'a, R: SeekableRead> Iterator for CirTreeBlockSearchIter<'a, R> {
                         size: child.data_size,
                     });
                 }
-                nodes.as_mut().map(|n| n.push(child));
             }
-            nodes.map(|n| CirTreeNode {
-                offset: current_offset,
-                kind: CirTreeNodeKind::Leaf(n),
-            })
-        } else {
-            let iter = match cir_tree_non_leaf_items(file, endianness, count as usize) {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e)),
-            };
-
-            let mut nodes = self
-                .return_nodes
-                .then(|| Vec::with_capacity(count as usize));
-            let mut new_childblocks: SmallVec<[u64; DEFAULT_BLOCK_SIZE as usize]> = smallvec![];
+            (smallvec![], blocks)
+        }
+        CirTreeNodeIterator::NonLeaf(iter) => {
+            let mut new_childblocks: SmallVec<[_; 4]> = smallvec![];
             for child in iter {
                 let block_overlaps = overlaps(
                     chrom_ix,
@@ -1135,27 +1177,12 @@ impl<'a, R: SeekableRead> Iterator for CirTreeBlockSearchIter<'a, R> {
                 if block_overlaps {
                     new_childblocks.push(child.node_offset);
                 }
-                nodes.as_mut().map(|n| n.push(child));
             }
-            for child in new_childblocks.into_iter().rev() {
-                self.remaining_childblocks.push_front(child);
-            }
-            nodes.map(|n| CirTreeNode {
-                offset: current_offset,
-                kind: CirTreeNodeKind::NonLeaf(n),
-            })
-        };
-
-        if let Some(b) = self.remaining_childblocks.front() {
-            match self.file.seek(SeekFrom::Start(*b)) {
-                Err(e) => return Some(Err(e)),
-                Ok(_) => {}
-            };
+            (new_childblocks, smallvec![])
         }
-
-        Some(Ok((blocks, node)))
     }
 }
+
 /// Gets the data (uncompressed, if applicable) from a given block
 fn read_block_data<R: SeekableRead>(
     info: &BBIFileInfo,
