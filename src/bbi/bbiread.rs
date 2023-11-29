@@ -566,14 +566,15 @@ impl<S: SeekableRead> BBIFileRead for CachedBBIFileRead<S> {
     type Reader = S;
 
     fn get_block_data(&mut self, info: &BBIFileInfo, block: &Block) -> io::Result<Vec<u8>> {
-        match self.block_data.entry(block.clone()) {
-            Entry::Occupied(data) => Ok(data.get().clone()),
-            Entry::Vacant(e) => {
-                let data = read_block_data(info, &mut self.read, block)?;
-                e.insert(data.clone());
-                Ok(data)
-            }
+        if let Some(data) = self.block_data.get(block) {
+            return Ok(data.clone());
         }
+        if self.block_data.len() >= 5000 {
+            self.block_data.clear();
+        }
+        let data = read_block_data(info, &mut self.read, block)?;
+        self.block_data.insert(*block, data.clone());
+        Ok(data)
     }
 
     fn blocks_for_cir_tree_node(
