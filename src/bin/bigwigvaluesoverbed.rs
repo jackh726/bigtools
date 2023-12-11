@@ -5,17 +5,16 @@ use std::path::Path;
 
 use clap::Parser;
 
-use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
-use bigtools::BBIReadError;
 use bigtools::BigWigRead;
+use bigtools::{BBIFileRead, BBIReadError};
 
 struct Options {
     withnames: bool,
     delimiter: String,
 }
 
-fn write<R: SeekableRead + 'static>(
+fn write<R: BBIFileRead>(
     bedinpath: &Path,
     mut bigwigin: BigWigRead<R>,
     out: File,
@@ -146,13 +145,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let inbigwig = BigWigRead::open(f)?;
             write(bedin, inbigwig, out, options)?;
         } else {
-            let inbigwig = BigWigRead::open_file(&bigwigpath)?;
+            let inbigwig = BigWigRead::open_file(&bigwigpath)?.cached();
             write(bedin, inbigwig, out, options)?;
         }
     }
     #[cfg(not(feature = "remote"))]
     {
-        let inbigwig = BigWigRead::open_file(bigwigpath)?;
+        let inbigwig = BigWigRead::open_file(bigwigpath)?.cached();
         write(&bedin, inbigwig, out, options)?;
     }
 

@@ -54,8 +54,8 @@ use crate::bbiread::{
     ZoomIntervalIter,
 };
 use crate::internal::BBIReadInternal;
-use crate::utils::reopen::{Reopen, ReopenableFile};
-use crate::{search_cir_tree, BBIFileRead, ZoomIntervalError};
+use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
+use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -205,6 +205,21 @@ impl BigWigRead<ReopenableFile> {
             eprintln!("Error when opening: {}", path);
         }
         b
+    }
+}
+
+impl<R> BigWigRead<R>
+where
+    R: SeekableRead,
+{
+    /// Converts this `BigWigRead`` to where the `BBIFileRead` caches index
+    /// access and block data
+    pub fn cached(self) -> BigWigRead<CachedBBIFileRead<R>> {
+        let read = CachedBBIFileRead::new(self.read);
+        BigWigRead {
+            read,
+            info: self.info,
+        }
     }
 }
 

@@ -12,7 +12,7 @@ use bigtools::utils::streaming_linereader::StreamingLineReader;
 use clap::Parser;
 
 use bigtools::utils::misc::{stats_for_bed_item, Name};
-use bigtools::{BBIFileRead, BigWigRead, CachedBBIFileRead};
+use bigtools::{BBIFileRead, BigWigRead};
 use crossbeam_channel::TryRecvError;
 
 #[derive(Parser)]
@@ -75,8 +75,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         path: bigwigpath.to_string(),
         file: File::open(bigwigpath)?,
     };
-    let cached_reopen = CachedBBIFileRead::new(reopen);
-    let mut inbigwig = BigWigRead::open(cached_reopen)?;
+    let mut inbigwig = BigWigRead::open(reopen)?.cached();
 
     let outbed = File::create(bedoutpath)?;
     let mut bedoutwriter: BufWriter<File> = BufWriter::new(outbed);
