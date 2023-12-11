@@ -80,14 +80,6 @@ required-features = ["cli"]
 name = "bigwigvaluesoverbed"
 required-features = ["cli"]
 
-[[bin]]
-name = "test"
-required-features = ["remote", "cli"]
-
-[[bin]]
-name = "verify"
-required-features = ["cli"]
-
 [features]
 default = ["remote", "read", "write", "cli"]
 remote = ["attohttpc", "tempfile"]
