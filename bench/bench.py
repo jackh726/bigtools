@@ -140,10 +140,10 @@ def bigwigmerge_bedgraph(comp):
     benchmarks = {
         'ucsc': [['{}/bigWigMerge'.format(ucsctoolspath), './workdir/ENCFF937MNZ.bigWig', './workdir/ENCFF447DHW.bigWig', '/dev/null']],
         'bigtools_1thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 1']],
-        'bigtools_2thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 2']],
-        'bigtools_4thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 4']],
-        'bigtools_6thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 6']],
-        'bigtools_8thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 8']],
+        #'bigtools_2thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 2']],
+        #'bigtools_4thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 4']],
+        #'bigtools_6thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 6']],
+        #'bigtools_8thread': [['{}/bigwigmerge'.format(bigtoolspath), '/dev/null', '-b ./workdir/ENCFF937MNZ.bigWig', '-b ./workdir/ENCFF447DHW.bigWig', '--output-type', 'bedgraph', '-t 8']],
     }
     compare(comp, 'bigwigmerge_bedgraph', benchmarks)
 
