@@ -1047,7 +1047,7 @@ pub(crate) fn write_zoom_vals<
         Option<TempFileBufferWriter<BufWriter<File>>>,
     );
 
-    pub struct TempZoomInfo<SourceError> {
+    pub(crate) struct TempZoomInfo<SourceError> {
         pub resolution: u32,
         pub data_write_future: Box<
             dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>>
