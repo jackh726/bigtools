@@ -3,7 +3,6 @@ use std::io::BufRead;
 use crate::bbi::BigWigRead;
 use crate::bbiread::BBIReadError;
 use crate::bed::bedparser::{parse_bed, BedValueError};
-use crate::utils::file::reopen::SeekableRead;
 use crate::utils::file::streaming_linereader::StreamingLineReader;
 use crate::{BBIFileRead, BedEntry};
 
@@ -101,7 +100,7 @@ pub enum BigWigAverageOverBedError {
     BedValueError(#[from] BedValueError),
 }
 
-pub fn bigwig_average_over_bed<R: SeekableRead + 'static>(
+pub fn bigwig_average_over_bed<R: BBIFileRead>(
     bed: impl BufRead,
     mut bigwig: BigWigRead<R>,
     name: Name,
