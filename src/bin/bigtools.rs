@@ -1,13 +1,37 @@
 use std::collections::HashSet;
+use std::env;
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
 use bigtools::{BBIRead, GenericBBIRead};
-use clap::{Arg, Command};
+use clap::Parser;
 
 use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
-use bigtools::{BigBedRead, BigBedReadOpenError};
+use bigtools::BigBedRead;
+
+#[derive(Parser)]
+#[command(about = "BigTools", long_about = None, multicall = true)]
+enum Cli {
+    Intersect {
+        /// Each entry in this bed is compared against `b` for overlaps.
+        a: String,
+
+        /// Each entry in `a` will be compared against this bigBed for overlaps.
+        b: String,
+    },
+    ChromIntersect {
+        /// The file to take data from (currently supports: bed)
+        a: String,
+
+        /// The file to take reference chromosomes from (currently supports: bigWig or bigBed)
+        b: String,
+
+        /// The name of the output file (or - for stdout). Outputted in same format as `a`.
+        out: String,
+    },
+}
 
 struct IntersectOptions {}
 
@@ -137,78 +161,22 @@ fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<(
     Ok(())
 }
 
-fn main() -> Result<(), BigBedReadOpenError> {
-    let matches = Command::new("BigTools")
-        .subcommand(
-            Command::new("intersect")
-                .about("Intersect all entries of a bed with a bigBed")
-                .arg(
-                    Arg::new("a")
-                        .short('a')
-                        .help("Each entry in this bed is compared against b for overlaps.")
-                        .num_args(1)
-                        .required(true),
-                )
-                .arg(
-                    Arg::new("b")
-                        .short('b')
-                        .help("Each entry in a will be compared against this bigBed for overlaps.")
-                        .num_args(1)
-                        .required(true),
-                ),
-        )
-        .subcommand(
-            Command::new("chromintersect")
-                .about("Create a new file of the same type, containing only data from `a` with chromosomes from `b`")
-                .arg(
-                    Arg::new("a")
-                        .short('a')
-                        .help("The file to take data from (currently supports: bed)")
-                        .num_args(1)
-                        .required(true),
-                )
-                .arg(
-                    Arg::new("b")
-                        .short('b')
-                        .help("The file to take reference chromosomes from (currently supports: bigWig or bigBed)")
-                        .num_args(1)
-                        .required(true),
-                )
-                .arg(
-                    Arg::new("out")
-                        .short('o')
-                        .help("The name of the output file (or - for stdout). Outputted in same format as `a`")
-                        .num_args(1)
-                        .required(true),
-                ),
-        )
-        .get_matches();
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = env::args_os();
+    let matches = Cli::parse_from(args);
 
-    match matches.subcommand() {
-        Some(("intersect", matches)) => {
+    match matches {
+        Cli::Intersect { a, b } => {
             eprintln!("---BigTools intersect---");
 
-            let apath = matches.get_one::<String>("a").unwrap().to_owned();
-            let bpath = matches.get_one::<String>("b").unwrap().to_owned();
+            let b = BigBedRead::open_file(&b)?;
 
-            let b = BigBedRead::open_file(&bpath)?;
-
-            intersect(apath, b, IntersectOptions {})?;
+            intersect(a, b, IntersectOptions {})?;
         }
-        Some(("chromintersect", matches)) => {
+        Cli::ChromIntersect { a, b, out } => {
             eprintln!("---BigTools chromintersect---");
 
-            let apath = matches.get_one::<String>("a").unwrap().to_owned();
-            let bpath = matches.get_one::<String>("b").unwrap().to_owned();
-            let outpath = matches.get_one::<String>("out").unwrap().to_owned();
-
-            chromintersect(apath, bpath, outpath)?;
-        }
-        None => {
-            eprintln!("No command. Use bigtools -help to see help.");
-        }
-        Some((subcommand, _)) => {
-            panic!("BUG: unhandled subcommand: {}", subcommand);
+            chromintersect(a, b, out)?;
         }
     }
     Ok(())
