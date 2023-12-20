@@ -5,15 +5,14 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 
 use bigtools::{BBIRead, GenericBBIRead};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use bigtools::utils::reopen::SeekableRead;
 use bigtools::utils::streaming_linereader::StreamingLineReader;
 use bigtools::BigBedRead;
 
-#[derive(Parser)]
-#[command(about = "BigTools", long_about = None, multicall = true)]
-enum Cli {
+#[derive(Debug, Subcommand)]
+enum SubCommands {
     Intersect {
         /// Each entry in this bed is compared against `b` for overlaps.
         a: String,
@@ -31,6 +30,17 @@ enum Cli {
         /// The name of the output file (or - for stdout). Outputted in same format as `a`.
         out: String,
     },
+}
+
+#[derive(Debug, Parser)]
+#[command(about = "BigTools", long_about = None, multicall = true)]
+enum CliCommands {
+    Bigtools {
+        #[command(subcommand)]
+        command: SubCommands,
+    },
+    #[command(flatten)]
+    SubCommands(SubCommands),
 }
 
 struct IntersectOptions {}
@@ -163,19 +173,20 @@ fn chromintersect(apath: String, bpath: String, outpath: String) -> io::Result<(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args_os();
-    let matches = Cli::parse_from(args);
-
-    match matches {
-        Cli::Intersect { a, b } => {
-            eprintln!("---BigTools intersect---");
-
+    let mut args: Vec<_> = args.collect();
+    args[0] = args[0].to_ascii_lowercase();
+    let cli = CliCommands::parse_from(args);
+    let command = match cli {
+        CliCommands::Bigtools { command } => command,
+        CliCommands::SubCommands(command) => command,
+    };
+    match command {
+        SubCommands::Intersect { a, b } => {
             let b = BigBedRead::open_file(&b)?;
 
             intersect(a, b, IntersectOptions {})?;
         }
-        Cli::ChromIntersect { a, b, out } => {
-            eprintln!("---BigTools chromintersect---");
-
+        SubCommands::ChromIntersect { a, b, out } => {
             chromintersect(a, b, out)?;
         }
     }
