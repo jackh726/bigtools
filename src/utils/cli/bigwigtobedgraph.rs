@@ -111,7 +111,7 @@ pub fn write_bg_singlethreaded<R: SeekableRead + Send + 'static>(
     let end = chrom.as_ref().and_then(|_| end);
 
     let mut chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
-    chroms.sort_by(|a, b| a.name.cmp(&b.name));
+    chroms.sort_by(|a, b| alphanumeric_sort::compare_str(&a.name, &b.name));
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     for chrom in chroms {
         let start = start.unwrap_or(0);
@@ -148,10 +148,10 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     let start = chrom.as_ref().and_then(|_| start);
     let end = chrom.as_ref().and_then(|_| end);
 
-    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = bigwig
-        .chroms()
+    let mut chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
+    chroms.sort_by(|a, b| alphanumeric_sort::compare_str(&a.name, &b.name));
+    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = chroms
         .into_iter()
-        .cloned()
         .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
         .map(|chrom| {
             let bigwig = bigwig.reopen()?;
