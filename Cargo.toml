@@ -45,6 +45,10 @@ name = "bigtools"
 path = "src/lib.rs"
 
 [[bin]]
+name = "bigtools"
+required-features = ["cli"]
+
+[[bin]]
 name = "bedgraphtobigwig"
 required-features = ["cli"]
 
@@ -54,10 +58,6 @@ required-features = ["cli"]
 
 [[bin]]
 name = "bigbedtobed"
-required-features = ["cli"]
-
-[[bin]]
-name = "bigtools"
 required-features = ["cli"]
 
 [[bin]]

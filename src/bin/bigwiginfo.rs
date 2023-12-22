@@ -1,42 +1,17 @@
-use clap::{Arg, Command};
+use bigtools::utils::cli::bigwiginfo::{bigwiginfo, BigWigInfoArgs};
+use bigtools::utils::cli::compat_args;
+use clap::Parser;
 
-use bigtools::{BigWigRead, BigWigReadOpenError};
+use std::error::Error;
 
-fn main() -> Result<(), BigWigReadOpenError> {
-    let matches = Command::new("BigWigInfo")
-        .arg(
-            Arg::new("bigwig")
-                .help("the bigwig to get info for")
-                .index(1)
-                .required(true),
-        )
-        .get_matches();
+#[derive(Parser)]
+struct Cli {
+    #[command(flatten)]
+    args: BigWigInfoArgs,
+}
 
-    let bigwigpath = matches.get_one::<String>("bigwig").unwrap();
+fn main() -> Result<(), Box<dyn Error>> {
+    let matches = Cli::parse_from(compat_args(std::env::args_os()));
 
-    #[cfg(feature = "remote")]
-    {
-        if bigwigpath.starts_with("http") {
-            use bigtools::utils::remote_file::RemoteFile;
-            let f = RemoteFile::new(bigwigpath);
-            let mut bigwig = BigWigRead::open(f)?;
-            println!("Header: {:#?}", bigwig.info().header);
-            println!("Summary: {:#?}", bigwig.get_summary());
-            println!("Zooms: {:#?}", bigwig.info().zoom_headers);
-        } else {
-            let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-            println!("Header: {:#?}", bigwig.info().header);
-            println!("Summary: {:#?}", bigwig.get_summary());
-            println!("Zooms: {:#?}", bigwig.info().zoom_headers);
-        }
-    }
-    #[cfg(not(feature = "remote"))]
-    {
-        let mut bigwig = BigWigRead::open_file(bigwigpath)?;
-        println!("Header: {:#?}", bigwig.info().header);
-        println!("Summary: {:#?}", bigwig.get_summary());
-        println!("Zooms: {:#?}", bigwig.info().zoom_headers);
-    }
-
-    Ok(())
+    bigwiginfo(matches.args)
 }

@@ -1,8 +1,19 @@
+use std::{ffi::OsString, str::FromStr};
+
 use crate::bbiwrite::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 
-use clap::Parser;
+use clap::Args;
 
-#[derive(Parser)]
+pub mod bedgraphtobigwig;
+pub mod bedtobigbed;
+pub mod bigbedtobed;
+pub mod bigwigaverageoverbed;
+pub mod bigwiginfo;
+pub mod bigwigmerge;
+pub mod bigwigtobedgraph;
+pub mod bigwigvaluesoverbed;
+
+#[derive(Debug, Args)]
 pub struct BBIWriteArgs {
     /// Set the number of threads to use. This tool will typically use ~225% CPU on a HDD. SDDs may be higher. (IO bound)
     #[arg(short = 't', long)]
@@ -40,9 +51,7 @@ pub struct BBIWriteArgs {
     pub items_per_slot: u32,
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! compat_replace {
+macro_rules! compat_replace_mut {
     (
         $a:expr;
         replace:
@@ -57,11 +66,11 @@ macro_rules! compat_replace {
         match $a.to_str() {
             $(
                 Some(b) if b.starts_with($find) => {
-                    return OsString::from_str(&b.replace($find, $replace)).unwrap();
+                    *($a) = OsString::from_str(&b.replace($find, $replace)).unwrap()
                 }
             )*
             $(
-                Some(b) if b.starts_with($ignore) => return OsString::from_str("").unwrap(),
+                Some(b) if b.starts_with($ignore) => *($a) = OsString::from_str("").unwrap(),
             )*
             $(
                 Some(b) if b.starts_with($unimplemented) => {
@@ -73,6 +82,198 @@ macro_rules! compat_replace {
             )*
             _ => {}
         }
-        $a
     }}
+}
+
+pub fn compat_args(
+    mut args: impl ExactSizeIterator<Item = OsString>,
+) -> impl Iterator<Item = OsString> {
+    let first = args.next();
+    let second = args.next();
+    let (command, first, second) = if first
+        .as_ref()
+        .map(|f| f.to_string_lossy().to_lowercase().ends_with("bigtools"))
+        .unwrap_or(false)
+    {
+        if let Some(command) = second
+            .as_ref()
+            .and_then(|c| c.to_str())
+            .map(|c| c.to_lowercase())
+        {
+            (Some(command), first, second.map(|a| a.to_ascii_lowercase()))
+        } else {
+            (None, first, second)
+        }
+    } else {
+        (
+            first
+                .as_ref()
+                .and_then(|f| f.to_str())
+                .map(|f| f.to_lowercase()),
+            first.map(|a| a.to_ascii_lowercase()),
+            second,
+        )
+    };
+    let mut args = {
+        let mut args_vec = Vec::with_capacity(2 + args.len());
+        first.map(|a| args_vec.push(a));
+        second.map(|a| args_vec.push(a));
+        args_vec.extend(args);
+        args_vec
+    };
+    let iter: Box<dyn Iterator<Item = OsString>> = match command.as_deref() {
+        Some("bigwigmerge") => {
+            let has_input = args.iter().any(|a| {
+                a.to_str()
+                    .map_or(false, |a| a.starts_with("-b") || a.starts_with("-l"))
+            });
+            let mut args = if !has_input {
+                // If there are no -l or -b, then let's see if it looks like a kent bigWigMerge call
+                let in_list = args
+                    .iter()
+                    .any(|a| a.to_str().map_or(false, |a| a == "-inList"));
+                let mut old_args = args;
+                let mut args = Vec::with_capacity(old_args.len());
+                old_args.reverse();
+                while let Some(os_arg) = old_args.pop() {
+                    let arg = os_arg.to_string_lossy();
+                    if arg == "-inList" {
+                        continue;
+                    }
+                    if arg.starts_with("-") && !arg.contains("=") {
+                        args.push(os_arg);
+                        args.pop().map(|a| args.push(a));
+                        continue;
+                    }
+                    let more_args = 'more: {
+                        let mut args_iter = args.iter().rev().peekable();
+                        while let Some(arg) = args_iter.next() {
+                            let arg = arg.to_string_lossy();
+                            if arg.starts_with("-") && !arg.contains("=") {
+                                args_iter.next();
+                            } else {
+                                break 'more true;
+                            }
+                        }
+                        false
+                    };
+                    if !more_args {
+                        if in_list {
+                            args.push(OsString::from_str("-l").unwrap());
+                        } else {
+                            args.push(OsString::from_str("-b").unwrap());
+                        }
+                    }
+                    args.push(os_arg);
+                }
+                args
+            } else {
+                args
+            };
+
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-threshold", "--threshold";
+                        "-adjust", "--adjust";
+                        "-clip", "--clip"
+                    ignore:
+                        "-inList"
+                    unimplemented:
+                        "-max";
+                        "-udcDir"
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        Some("bedgraphtobigwig") => {
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-unc", "--uncompressed";
+                        "-blockSize", "--block-size";
+                        "-itemsPerSlot", "--items-per-slot"
+                    ignore:
+                    unimplemented:
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        Some("bedtobigbed") => {
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-unc", "--uncompressed";
+                        "-blockSize", "--block-size";
+                        "-itemsPerSlot", "--items-per-slot";
+                        "-as", "-autosql"
+                    ignore:
+                        "-tab";
+                        "-type"
+                    unimplemented:
+                        "-extraIndex";
+                        "-sizesIs2Bit";
+                        "-sizesIsChromAliasBb";
+                        "-sizesIsBb";
+                        "-allow1bOverlap";
+                        "-extraIndex";
+                        "-udcDir"
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        Some("bigbedtobed") => {
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-chrom", "--chrom";
+                        "-start", "--start";
+                        "-end", "--end";
+                        "-bed", "-overlap-bed"
+                    ignore:
+                    unimplemented:
+                        "-header";
+                        "-udcDir"
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        Some("bigwigaverageoverbed") => {
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-chrom", "--chrom";
+                        "-start", "--start";
+                        "-end", "--end"
+                    ignore:
+                    unimplemented:
+                        "-udcDir"
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        Some("bigwigtobedgraph") => {
+            args.iter_mut().for_each(|arg| {
+                compat_replace_mut!(arg;
+                    replace:
+                        "-chrom", "--chrom";
+                        "-start", "--start";
+                        "-end", "--end"
+                    ignore:
+                    unimplemented:
+                        "-udcDir"
+                )
+            });
+
+            Box::new(args.into_iter())
+        }
+        _ => Box::new(args.into_iter()),
+    };
+    let iter: Vec<_> = iter.collect();
+    iter.into_iter()
 }
