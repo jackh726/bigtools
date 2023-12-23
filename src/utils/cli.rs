@@ -85,6 +85,36 @@ macro_rules! compat_replace_mut {
     }}
 }
 
+fn compat_arg_mut(arg: &mut OsString) {
+    compat_replace_mut!(arg;
+        replace:
+            "-adjust", "--adjust";
+            "-as", "-autosql";
+            "-bed", "-overlap-bed";
+            "-blockSize", "--block-size";
+            "-chrom", "--chrom";
+            "-clip", "--clip";
+            "-end", "--end";
+            "-itemsPerSlot", "--items-per-slot";
+            "-start", "--start";
+            "-threshold", "--threshold";
+            "-unc", "--uncompressed"
+        ignore:
+            "-inList";
+            "-tab";
+            "-type"
+        unimplemented:
+            "-allow1bOverlap";
+            "-extraIndex";
+            "-header";
+            "-max";
+            "-sizesIs2Bit";
+            "-sizesIsChromAliasBb";
+            "-sizesIsBb";
+            "-udcDir"
+    )
+}
+
 pub fn compat_args(
     mut args: impl ExactSizeIterator<Item = OsString>,
 ) -> impl Iterator<Item = OsString> {
@@ -121,7 +151,7 @@ pub fn compat_args(
         args_vec.extend(args);
         args_vec
     };
-    let iter: Box<dyn Iterator<Item = OsString>> = match command.as_deref() {
+    match command.as_deref() {
         Some("bigwigmerge") => {
             let has_input = args.iter().any(|a| {
                 a.to_str()
@@ -171,109 +201,19 @@ pub fn compat_args(
                 args
             };
 
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-threshold", "--threshold";
-                        "-adjust", "--adjust";
-                        "-clip", "--clip"
-                    ignore:
-                        "-inList"
-                    unimplemented:
-                        "-max";
-                        "-udcDir"
-                )
-            });
+            args.iter_mut().for_each(compat_arg_mut);
 
-            Box::new(args.into_iter())
+            args.into_iter()
         }
-        Some("bedgraphtobigwig") => {
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-unc", "--uncompressed";
-                        "-blockSize", "--block-size";
-                        "-itemsPerSlot", "--items-per-slot"
-                    ignore:
-                    unimplemented:
-                )
-            });
+        Some("bedgraphtobigwig")
+        | Some("bedtobigbed")
+        | Some("bigbedtobed")
+        | Some("bigwigaverageoverbed")
+        | Some("bigwigtobedgraph") => {
+            args.iter_mut().for_each(compat_arg_mut);
 
-            Box::new(args.into_iter())
+            args.into_iter()
         }
-        Some("bedtobigbed") => {
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-unc", "--uncompressed";
-                        "-blockSize", "--block-size";
-                        "-itemsPerSlot", "--items-per-slot";
-                        "-as", "-autosql"
-                    ignore:
-                        "-tab";
-                        "-type"
-                    unimplemented:
-                        "-extraIndex";
-                        "-sizesIs2Bit";
-                        "-sizesIsChromAliasBb";
-                        "-sizesIsBb";
-                        "-allow1bOverlap";
-                        "-extraIndex";
-                        "-udcDir"
-                )
-            });
-
-            Box::new(args.into_iter())
-        }
-        Some("bigbedtobed") => {
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-chrom", "--chrom";
-                        "-start", "--start";
-                        "-end", "--end";
-                        "-bed", "-overlap-bed"
-                    ignore:
-                    unimplemented:
-                        "-header";
-                        "-udcDir"
-                )
-            });
-
-            Box::new(args.into_iter())
-        }
-        Some("bigwigaverageoverbed") => {
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-chrom", "--chrom";
-                        "-start", "--start";
-                        "-end", "--end"
-                    ignore:
-                    unimplemented:
-                        "-udcDir"
-                )
-            });
-
-            Box::new(args.into_iter())
-        }
-        Some("bigwigtobedgraph") => {
-            args.iter_mut().for_each(|arg| {
-                compat_replace_mut!(arg;
-                    replace:
-                        "-chrom", "--chrom";
-                        "-start", "--start";
-                        "-end", "--end"
-                    ignore:
-                    unimplemented:
-                        "-udcDir"
-                )
-            });
-
-            Box::new(args.into_iter())
-        }
-        _ => Box::new(args.into_iter()),
-    };
-    let iter: Vec<_> = iter.collect();
-    iter.into_iter()
+        _ => args.into_iter(),
+    }
 }

@@ -1,18 +1,18 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufWriter, self, BufReader, SeekFrom, Write, Seek};
+use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
 
-use crate::bed::bedparser::{BedFileStream, parse_bed, StreamingBedValues};
+use crate::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
 use crate::utils::file_view::FileView;
-use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{BigWigRead, BBIFileRead};
-use crate::utils::misc::{Name, stats_for_bed_item};
-use crate::utils::reopen::{ReopenableFile, Reopen};
+use crate::utils::misc::{stats_for_bed_item, Name};
+use crate::utils::reopen::{Reopen, ReopenableFile};
 use crate::utils::split_file_into_chunks_by_size;
+use crate::utils::streaming_linereader::StreamingLineReader;
+use crate::{BBIFileRead, BigWigRead};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -56,7 +56,9 @@ pub struct BigWigAverageOverBedArgs {
     nthreads: usize,
 }
 
-pub fn bigwigaverageoverbed(args: BigWigAverageOverBedArgs) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn bigwigaverageoverbed(
+    args: BigWigAverageOverBedArgs,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let bigwigpath = args.bigwig;
     let bedinpath = args.bedin;
     let bedoutpath = args.output;
