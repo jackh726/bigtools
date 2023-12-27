@@ -12,7 +12,7 @@ use crate::{
 
 use super::BBIWriteArgs;
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bedtobigbed",
     about = "Converts a bed to a bigBed.",

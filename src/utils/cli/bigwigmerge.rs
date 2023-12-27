@@ -15,7 +15,7 @@ use crate::{BBIReadError, BigWigRead, BigWigWrite};
 use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 use tokio::runtime;
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigmerge",
     about = "Merges multiple bigwigs.",

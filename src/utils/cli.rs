@@ -13,7 +13,7 @@ pub mod bigwigmerge;
 pub mod bigwigtobedgraph;
 pub mod bigwigvaluesoverbed;
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, PartialEq, Args)]
 pub struct BBIWriteArgs {
     /// Set the number of threads to use. This tool will typically use ~225% CPU on a HDD. SDDs may be higher. (IO bound)
     #[arg(short = 't', long)]
@@ -115,9 +115,7 @@ fn compat_arg_mut(arg: &mut OsString) {
     )
 }
 
-pub fn compat_args(
-    mut args: impl ExactSizeIterator<Item = OsString>,
-) -> impl Iterator<Item = OsString> {
+pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<Item = OsString> {
     let first = args.next();
     let second = args.next();
     let (command, first, second) = if first
@@ -145,7 +143,7 @@ pub fn compat_args(
         )
     };
     let mut args = {
-        let mut args_vec = Vec::with_capacity(2 + args.len());
+        let mut args_vec = Vec::with_capacity(2 + args.size_hint().0);
         first.map(|a| args_vec.push(a));
         second.map(|a| args_vec.push(a));
         args_vec.extend(args);

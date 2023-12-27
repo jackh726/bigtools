@@ -9,7 +9,7 @@ use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::BigWigRead;
 use crate::{BBIFileRead, BBIReadError};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigvaluesoverbed",
     about = "Converts a bed to a bigBed.",

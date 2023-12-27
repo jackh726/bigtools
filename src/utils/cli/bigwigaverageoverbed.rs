@@ -14,7 +14,7 @@ use crate::utils::split_file_into_chunks_by_size;
 use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::{BBIFileRead, BigWigRead};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigaverageoverbed",
     about = "Gets statistics of a bigWig over a bed.",

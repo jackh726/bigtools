@@ -4,7 +4,7 @@ use clap::Parser;
 
 use crate::{BBIFileRead, BigWigRead};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwiginfo",
     about = "Converts a bed to a bigBed.",

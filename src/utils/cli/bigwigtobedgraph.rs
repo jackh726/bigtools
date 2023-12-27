@@ -14,7 +14,7 @@ use crate::{BBIReadError, BigWigRead, ChromInfo};
 use tokio::runtime;
 use ufmt::uwrite;
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigtobedgraph",
     about = "Converts an input bigWig to a bedGraph.",

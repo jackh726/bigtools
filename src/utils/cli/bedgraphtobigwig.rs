@@ -11,7 +11,7 @@ use crate::{BigWigWrite, InputSortType};
 
 use super::BBIWriteArgs;
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bedgraphtobigwig",
     about = "Converts an input bedGraph to a bigWig.",

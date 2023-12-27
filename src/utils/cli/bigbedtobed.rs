@@ -12,7 +12,7 @@ use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use crate::{BBIReadError, BigBedRead, ChromInfo};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigbedtobed",
     about = "Converts an input bigBed to a bed.",
