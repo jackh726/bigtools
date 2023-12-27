@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::{ffi::OsString, str::FromStr};
 
 use crate::bbiwrite::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
@@ -93,12 +94,15 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-bed", "-overlap-bed";
             "-blockSize", "--block-size";
             "-chrom", "--chrom";
+            "-chroms", "--chroms";
             "-clip", "--clip";
             "-end", "--end";
             "-itemsPerSlot", "--items-per-slot";
+            "-minMax", "--minmax";
             "-start", "--start";
             "-threshold", "--threshold";
-            "-unc", "--uncompressed"
+            "-unc", "--uncompressed";
+            "-zooms", "--zooms"
         ignore:
             "-inList";
             "-tab";
@@ -127,6 +131,7 @@ pub fn compat_args(
     {
         if let Some(command) = second
             .as_ref()
+            .and_then(|f| Path::new(f).file_name())
             .and_then(|c| c.to_str())
             .map(|c| c.to_lowercase())
         {
@@ -138,7 +143,8 @@ pub fn compat_args(
         (
             first
                 .as_ref()
-                .and_then(|f| f.to_str())
+                .and_then(|f| Path::new(f).file_name())
+                .and_then(|s| s.to_str())
                 .map(|f| f.to_lowercase()),
             first.map(|a| a.to_ascii_lowercase()),
             second,
@@ -208,6 +214,7 @@ pub fn compat_args(
         Some("bedgraphtobigwig")
         | Some("bedtobigbed")
         | Some("bigbedtobed")
+        | Some("bigwiginfo")
         | Some("bigwigaverageoverbed")
         | Some("bigwigtobedgraph") => {
             args.iter_mut().for_each(compat_arg_mut);
