@@ -3,6 +3,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::vec::Vec;
 
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+use byteordered::ByteOrdered;
 use bytes::{Buf, BytesMut};
 use itertools::Itertools;
 use thiserror::Error;
@@ -14,7 +16,7 @@ use crate::bbiread::{
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalError};
+use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, Summary, ZoomIntervalError};
 
 struct IntervalIter<I, R, B>
 where
@@ -199,6 +201,53 @@ impl<R: BBIFileRead> BigBedRead<R> {
         let autosql = String::from_utf8(buffer)
             .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
         Ok(autosql)
+    }
+
+    pub fn item_count(&mut self) -> Result<u64, BBIReadError> {
+        let header = self.info.header;
+        let reader = self.reader().raw_reader();
+        let mut reader = BufReader::new(reader);
+        reader.seek(SeekFrom::Start(header.full_index_offset))?;
+        Ok(match header.endianness {
+            byteordered::Endianness::Big => reader.read_u64::<BigEndian>()?,
+            byteordered::Endianness::Little => reader.read_u64::<LittleEndian>()?,
+        })
+    }
+
+    /// Returns the summary data from bigBed
+    ///
+    /// Note: For version 1 of bigBeds, there is no total summary. In that
+    /// case, 0 is returned for all of the summary except total items. If this
+    /// matters to you, you can check the version using
+    /// `info().header.version > 1`.
+    pub fn get_summary(&mut self) -> io::Result<Summary> {
+        let endianness = self.info.header.endianness;
+        let summary_offset = self.info.header.total_summary_offset;
+        let data_offset = self.info.header.full_data_offset;
+        let reader = self.reader().raw_reader();
+        let mut reader = ByteOrdered::runtime(reader, endianness);
+        let (bases_covered, min_val, max_val, sum, sum_squares) = if summary_offset != 0 {
+            reader.seek(SeekFrom::Start(summary_offset))?;
+            (
+                reader.read_u64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+                reader.read_f64()?,
+            )
+        } else {
+            (0, 0.0, 0.0, 0.0, 0.0)
+        };
+        reader.seek(SeekFrom::Start(data_offset))?;
+        let total_items = reader.read_u64()?;
+        Ok(Summary {
+            total_items,
+            bases_covered,
+            min_val,
+            max_val,
+            sum,
+            sum_squares,
+        })
     }
 
     /// For a given chromosome, start, and end, returns an `Iterator` of the

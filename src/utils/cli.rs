@@ -7,6 +7,7 @@ use clap::Args;
 
 pub mod bedgraphtobigwig;
 pub mod bedtobigbed;
+pub mod bigbedinfo;
 pub mod bigbedtobed;
 pub mod bigwigaverageoverbed;
 pub mod bigwiginfo;
@@ -90,8 +91,8 @@ fn compat_arg_mut(arg: &mut OsString) {
     compat_replace_mut!(arg;
         replace:
             "-adjust", "--adjust";
-            "-as", "-autosql";
-            "-bed", "-overlap-bed";
+            "-as", "--autosql";
+            "-bed", "--overlap-bed";
             "-blockSize", "--block-size";
             "-chrom", "--chrom";
             "-chroms", "--chroms";
