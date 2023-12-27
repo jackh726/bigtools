@@ -5,6 +5,7 @@ use std::io::{self, BufReader, BufWriter, Write};
 
 use bigtools::utils::cli::bedgraphtobigwig::{bedgraphtobigwig, BedGraphToBigWigArgs};
 use bigtools::utils::cli::bedtobigbed::{bedtobigbed, BedToBigBedArgs};
+use bigtools::utils::cli::bigbedinfo::{bigbedinfo, BigBedInfoArgs};
 use bigtools::utils::cli::bigbedtobed::{bigbedtobed, BigBedToBedArgs};
 use bigtools::utils::cli::bigwigaverageoverbed::{bigwigaverageoverbed, BigWigAverageOverBedArgs};
 use bigtools::utils::cli::bigwiginfo::{bigwiginfo, BigWigInfoArgs};
@@ -60,6 +61,11 @@ enum SubCommands {
     BedToBigBed {
         #[command(flatten)]
         args: BedToBigBedArgs,
+    },
+    #[command(name = "bigbedinfo")]
+    BigBedInfo {
+        #[command(flatten)]
+        args: BigBedInfoArgs,
     },
     #[command(name = "bigbedtobed")]
     BigBedToBed {
@@ -251,6 +257,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => chromintersect(a, b, out),
         SubCommands::BedGraphToBigWig { args } => bedgraphtobigwig(args),
         SubCommands::BedToBigBed { args } => bedtobigbed(args),
+        SubCommands::BigBedInfo { args } => bigbedinfo(args),
         SubCommands::BigBedToBed { args } => bigbedtobed(args),
         SubCommands::BigWigAverageOverBed { args } => {
             match bigwigaverageoverbed(args) {

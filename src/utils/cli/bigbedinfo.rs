@@ -3,48 +3,44 @@ use std::error::Error;
 use byteordered::Endianness;
 use clap::Parser;
 
-use crate::{BBIFileRead, BigWigRead};
+use crate::{BBIFileRead, BigBedRead};
 
-#[derive(Clone, Debug, PartialEq, Parser)]
+#[derive(Debug, Parser)]
 #[command(
-    name = "bigwiginfo",
-    about = "Gets information about a bigWig.",
+    name = "bigbedinfo",
+    about = "Gets information about a bigBed.",
     long_about = None,
 )]
-pub struct BigWigInfoArgs {
-    /// The bigwig to get info for.
-    pub bigwig: String,
+pub struct BigBedInfoArgs {
+    /// The bigbed to get info for.
+    bigbed: String,
 
-    /// If set, will print out the list of chromosomes in the bigWig and their sizes.
+    /// If set, will print out the list of chromosomes in the bigBed and their sizes.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    pub chroms: bool,
+    chroms: bool,
 
     /// If set, will print out the list of all zoom levels.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    pub zooms: bool,
+    zooms: bool,
 
-    /// If set, will print out the minimum and maximum on a single line.
+    /// If set, will print out the autosql spec.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    pub minmax: bool,
+    autosql: bool,
 }
 
-pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {
-    let bigwigpath = &args.bigwig;
+pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
+    let bigbedpath = &args.bigbed;
 
     fn print_info<R: BBIFileRead>(
-        mut bigwig: BigWigRead<R>,
-        args: &BigWigInfoArgs,
+        mut bigbed: BigBedRead<R>,
+        args: &BigBedInfoArgs,
     ) -> Result<(), Box<dyn Error>> {
-        let summary = bigwig.get_summary()?;
-        if args.minmax {
-            println!("{:.6} {:.6}", summary.min_val, summary.max_val);
-            return Ok(());
-        }
-        let header = bigwig.info().header;
+        let header = bigbed.info().header;
         println!("version: {}", header.version);
+        println!("fieldCount: {}", header.field_count);
         println!(
             "isCompressed: {}",
             (header.uncompress_buf_size > 0)
@@ -57,20 +53,21 @@ pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {
                 .then(|| "1")
                 .unwrap_or("0")
         );
+        println!("itemCount: {}", bigbed.item_count()?);
         println!(
             "primaryDataSize: {}",
             num_with_commas(header.full_index_offset - header.full_data_offset)
         );
-        let first_zoom_start = bigwig.info().zoom_headers.first().map(|z| z.data_offset);
+        let first_zoom_start = bigbed.info().zoom_headers.first().map(|z| z.data_offset);
         if let Some(first_zoom_start) = first_zoom_start {
             println!(
                 "primaryIndexSize: {}",
                 num_with_commas(first_zoom_start - header.full_index_offset)
             );
         }
-        println!("zoomLevels: {}", bigwig.info().zoom_headers.len());
+        println!("zoomLevels: {}", bigbed.info().zoom_headers.len());
         if args.zooms {
-            for zoom in bigwig.info().zoom_headers.iter() {
+            for zoom in bigbed.info().zoom_headers.iter() {
                 println!(
                     "\t{}\t{}",
                     zoom.reduction_level,
@@ -78,38 +75,51 @@ pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {
                 );
             }
         }
-        println!("chromCount: {}", bigwig.info().chrom_info.len());
+        println!("chromCount: {}", bigbed.info().chrom_info.len());
         if args.chroms {
-            for chrom in bigwig.info().chrom_info.iter() {
+            for chrom in bigbed.info().chrom_info.iter() {
                 println!("\t{} {} {}", chrom.name, chrom.id, chrom.length);
             }
         }
+        if args.autosql {
+            let autosql = bigbed.autosql()?;
+            if autosql.len() == 0 {
+                println!("as:  n/a");
+            } else {
+                println!("as:");
+                print!("{}", autosql);
+            }
+        }
+        let summary = bigbed.get_summary()?;
         println!("basesCovered: {}", num_with_commas(summary.bases_covered));
-        println!("mean: {:.6}", summary.sum / summary.bases_covered as f64);
-        println!("min: {:.6}", summary.min_val);
-        println!("max: {:.6}", summary.max_val);
+        println!(
+            "meanDepth: {:.6}",
+            summary.sum / summary.bases_covered as f64
+        );
+        println!("minDepth: {:.6}", summary.min_val);
+        println!("maxDepth: {:.6}", summary.max_val);
         let var = (summary.sum_squares
             - (summary.sum * summary.sum) / summary.bases_covered as f64)
             / (summary.bases_covered as f64 - 1.0);
         let std = var.sqrt();
-        println!("std: {:.6}", std);
+        println!("std of depth: {:.6}", std);
 
         Ok(())
     }
 
     #[cfg(feature = "remote")]
     {
-        if bigwigpath.starts_with("http") {
+        if bigbedpath.starts_with("http") {
             use crate::utils::remote_file::RemoteFile;
-            let f = RemoteFile::new(bigwigpath);
-            let bigwig = BigWigRead::open(f)?;
-            print_info(bigwig, &args)?;
+            let f = RemoteFile::new(bigbedpath);
+            let bigbed = BigBedRead::open(f)?;
+            print_info(bigbed, &args)?;
             return Ok(());
         }
     }
 
-    let bigwig = BigWigRead::open_file(bigwigpath)?;
-    print_info(bigwig, &args)?;
+    let bigbed = BigBedRead::open_file(bigbedpath)?;
+    print_info(bigbed, &args)?;
 
     Ok(())
 }
