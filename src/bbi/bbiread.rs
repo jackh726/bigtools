@@ -771,7 +771,6 @@ pub(crate) fn read_info<R: BBIFileRead>(file: &mut R) -> Result<BBIFileInfo, BBI
     let mut chrom_info = Vec::with_capacity(item_count as usize);
     read_chrom_tree_block(&mut file, endianness, &mut chrom_info, key_size)
         .map_err(|_| BBIFileReadInfoError::InvalidChroms)?;
-    chrom_info.sort_by(|c1, c2| alphanumeric_sort::compare_str(&c1.name, &c2.name));
 
     let info = BBIFileInfo {
         filetype,

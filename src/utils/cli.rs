@@ -1,4 +1,5 @@
 use std::iter::empty;
+use std::path::Path;
 use std::{ffi::OsString, str::FromStr};
 
 use crate::bbiwrite::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
@@ -95,12 +96,15 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-bed", "-overlap-bed";
             "-blockSize", "--block-size";
             "-chrom", "--chrom";
+            "-chroms", "--chroms";
             "-clip", "--clip";
             "-end", "--end";
             "-itemsPerSlot", "--items-per-slot";
+            "-minMax", "--minmax";
             "-start", "--start";
             "-threshold", "--threshold";
-            "-unc", "--uncompressed"
+            "-unc", "--uncompressed";
+            "-zooms", "--zooms"
         ignore:
             "-inList";
             "-tab"
@@ -133,6 +137,7 @@ pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<It
         let second = second.map(|a| a.to_ascii_lowercase());
         if let Some(command) = second
             .as_ref()
+            .and_then(|f| Path::new(f).file_name())
             .and_then(|c| c.to_str())
             .map(|c| c.to_lowercase())
         {
@@ -147,6 +152,7 @@ pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<It
     } else {
         if let Some(command) = first
             .as_ref()
+            .and_then(|f| Path::new(f).file_name())
             .and_then(|f| f.to_str())
             .map(|f| f.to_lowercase())
         {
@@ -205,6 +211,7 @@ pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<It
         Some("bedgraphtobigwig")
         | Some("bedtobigbed")
         | Some("bigbedtobed")
+        | Some("bigwiginfo")
         | Some("bigwigaverageoverbed")
         | Some("bigwigtobedgraph") => {
             let mut args_vec = start;
