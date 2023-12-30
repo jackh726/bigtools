@@ -101,8 +101,7 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-unc", "--uncompressed"
         ignore:
             "-inList";
-            "-tab";
-            "-type"
+            "-tab"
         unimplemented:
             "-allow1bOverlap";
             "-extraIndex";
@@ -111,6 +110,7 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-sizesIs2Bit";
             "-sizesIsChromAliasBb";
             "-sizesIsBb";
+            "-type";
             "-udcDir"
     )
 }

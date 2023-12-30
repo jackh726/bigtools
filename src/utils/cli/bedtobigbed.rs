@@ -20,19 +20,19 @@ use super::BBIWriteArgs;
 )]
 pub struct BedToBigBedArgs {
     /// The bedGraph to convert to a bigbed.
-    bed: String,
+    pub bed: String,
 
     /// A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.
-    chromsizes: String,
+    pub chromsizes: String,
 
     /// The output bigwig path
-    output: String,
+    pub output: String,
 
     #[arg(short = 'a', long)]
-    autosql: Option<String>,
+    pub autosql: Option<String>,
 
     #[command(flatten)]
-    write_args: BBIWriteArgs,
+    pub write_args: BBIWriteArgs,
 }
 
 pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
