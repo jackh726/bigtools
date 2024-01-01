@@ -107,6 +107,7 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-extraIndex";
             "-header";
             "-max";
+            "-maxItems";
             "-sizesIs2Bit";
             "-sizesIsChromAliasBb";
             "-sizesIsBb";

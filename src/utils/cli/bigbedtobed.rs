@@ -20,30 +20,30 @@ use crate::{BBIReadError, BigBedRead, ChromInfo};
 )]
 pub struct BigBedToBedArgs {
     /// the bigbed to get convert to bed
-    big_bed: String,
+    pub big_bed: String,
 
     /// the path of the bed to output to
-    bed: String,
+    pub bed: String,
 
     /// If set, restrict output to given chromosome
     #[arg(long)]
-    chrom: Option<String>,
+    pub chrom: Option<String>,
 
     /// If set, restrict output to regions greater than or equal to it
     #[arg(long)]
-    start: Option<u32>,
+    pub start: Option<u32>,
 
     /// If set, restrict output to regions less than it
     #[arg(long)]
-    end: Option<u32>,
+    pub end: Option<u32>,
 
     /// If set, restrict output to regions overlapping the bed file
-    overlap_bed: Option<String>,
+    pub overlap_bed: Option<String>,
 
     /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
-    nthreads: usize,
+    pub nthreads: usize,
 }
 
 pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
