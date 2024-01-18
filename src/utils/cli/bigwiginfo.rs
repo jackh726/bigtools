@@ -12,7 +12,7 @@ use crate::{BBIFileRead, BigWigRead};
 )]
 pub struct BigWigInfoArgs {
     /// The bigwig to get info for.
-    bigwig: String,
+    pub bigwig: String,
 }
 
 pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {

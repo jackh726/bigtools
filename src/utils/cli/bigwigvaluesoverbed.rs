@@ -17,22 +17,22 @@ use crate::{BBIFileRead, BBIReadError};
 )]
 pub struct BigWigValuesOverBedArgs {
     /// The input bigwig file
-    bigwig: String,
+    pub bigwig: String,
 
     /// The input bed file
-    bedin: String,
+    pub bedin: String,
 
     /// The output bed file
-    output: String,
+    pub output: String,
 
     /// If set, the output file will print the name of each bed entry (or `chrom:start-end` if names are not unique) in the first column of each output line.
     #[arg(short = 'n', long)]
-    names: bool,
+    pub names: bool,
 
     /// Sets the delimiter to use for the output file. (Defaults to tab).
     #[arg(short = 'd', long)]
     #[arg(default_value = "\t")]
-    delimiter: String,
+    pub delimiter: String,
 }
 
 pub fn bigwigvaluesoverbed(args: BigWigValuesOverBedArgs) -> Result<(), Box<dyn Error>> {

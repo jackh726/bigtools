@@ -22,30 +22,30 @@ use ufmt::uwrite;
 )]
 pub struct BigWigToBedGraphArgs {
     /// the bigwig to get convert to bedgraph
-    bigwig: String,
+    pub bigwig: String,
 
     /// the path of the bedgraph to output to
-    bedgraph: String,
+    pub bedgraph: String,
 
     /// If set, restrict output to given chromosome
     #[arg(long)]
-    chrom: Option<String>,
+    pub chrom: Option<String>,
 
     /// If set, restrict output to regions greater than or equal to it
     #[arg(long)]
-    start: Option<u32>,
+    pub start: Option<u32>,
 
     /// If set, restrict output to regions less than it
     #[arg(long)]
-    end: Option<u32>,
+    pub end: Option<u32>,
 
     /// If set, restrict output to regions overlapping the bed file
-    overlap_bed: Option<String>,
+    pub overlap_bed: Option<String>,
 
     /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
-    nthreads: usize,
+    pub nthreads: usize,
 }
 
 pub fn bigwigtobedgraph(args: BigWigToBedGraphArgs) -> Result<(), Box<dyn Error>> {

@@ -22,38 +22,38 @@ use crate::{BBIFileRead, BigWigRead};
 )]
 pub struct BigWigAverageOverBedArgs {
     /// The input bigwig file
-    bigwig: String,
+    pub bigwig: String,
 
     /// The input bed file
-    bedin: String,
+    pub bedin: String,
 
     /// The output bed file
-    output: String,
+    pub output: String,
 
     /// Supports three types of options: `interval`, `none`, or a column number (one indexed).
     /// If `interval`, the name column in the output will be the interval in the form of `chrom:start-end`.
     /// If `none`, then all columns will be included in the output file.
     /// Otherwise, the one-indexed column will be used as the name. By default, column 4 is used as a name column.
     #[arg(short = 'n', long)]
-    namecol: Option<String>,
+    pub namecol: Option<String>,
 
     /// If set, restrict output to given chromosome
     #[arg(long)]
-    chrom: Option<String>,
+    pub chrom: Option<String>,
 
     /// If set, restrict output to regions greater than or equal to it
     #[arg(long)]
-    start: Option<u32>,
+    pub start: Option<u32>,
 
     /// If set, restrict output to regions less than it
     #[arg(long)]
-    end: Option<u32>,
+    pub end: Option<u32>,
 
     /// Set the number of threads to use. This tool will nearly always benefit from more cores.
     /// Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
-    nthreads: usize,
+    pub nthreads: usize,
 }
 
 pub fn bigwigaverageoverbed(

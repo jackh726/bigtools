@@ -23,28 +23,28 @@ use tokio::runtime;
 )]
 pub struct BigWigMergeArgs {
     /// the path of the merged output bigwig (if .bw or .bigWig) or bedGraph (if .bedGraph)
-    output: String,
+    pub output: String,
 
     /// the path of an input bigwig to merge
     #[arg(short = 'b')]
-    bigwig: Vec<String>,
+    pub bigwig: Vec<String>,
 
     /// a line-delimited list of bigwigs
     #[arg(short = 'l')]
-    list: Vec<String>,
+    pub list: Vec<String>,
 
     /// Don't output values at or below this threshold. Default is 0.0
     #[arg(long)]
     #[arg(default_value_t = 0.0)]
-    threshold: f32,
+    pub threshold: f32,
 
     /// Add adjustment to each value
     #[arg(long)]
-    adjust: Option<f32>,
+    pub adjust: Option<f32>,
 
     /// Values higher than this are clipped to this value
     #[arg(long)]
-    clip: Option<f32>,
+    pub clip: Option<f32>,
 
     /// Merged value is maximum from input files rather than sum
     #[arg(long)]

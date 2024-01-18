@@ -1,8 +1,10 @@
+use std::iter::empty;
 use std::{ffi::OsString, str::FromStr};
 
 use crate::bbiwrite::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 
 use clap::Args;
+use itertools::chain;
 
 pub mod bedgraphtobigwig;
 pub mod bedtobigbed;
@@ -104,13 +106,17 @@ fn compat_arg_mut(arg: &mut OsString) {
             "-tab"
         unimplemented:
             "-allow1bOverlap";
+            "-bedOut";
             "-extraIndex";
             "-header";
             "-max";
             "-maxItems";
+            "-minMax";
+            "-sampleAroundCenter";
             "-sizesIs2Bit";
             "-sizesIsChromAliasBb";
             "-sizesIsBb";
+            "-stats";
             "-type";
             "-udcDir"
     )
@@ -118,101 +124,100 @@ fn compat_arg_mut(arg: &mut OsString) {
 
 pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<Item = OsString> {
     let first = args.next();
-    let second = args.next();
-    let (command, first, second) = if first
+    let (command, args, start): (_, Vec<_>, Vec<_>) = if first
         .as_ref()
         .map(|f| f.to_string_lossy().to_lowercase().ends_with("bigtools"))
         .unwrap_or(false)
     {
+        let second = args.next();
+        let second = second.map(|a| a.to_ascii_lowercase());
         if let Some(command) = second
             .as_ref()
             .and_then(|c| c.to_str())
             .map(|c| c.to_lowercase())
         {
-            (Some(command), first, second.map(|a| a.to_ascii_lowercase()))
+            (
+                Some(command),
+                args.collect(),
+                empty().chain(first).chain(second).collect(),
+            )
         } else {
-            (None, first, second)
+            return chain!(first, second, args).collect::<Vec<_>>().into_iter();
         }
     } else {
-        (
-            first
-                .as_ref()
-                .and_then(|f| f.to_str())
-                .map(|f| f.to_lowercase()),
-            first.map(|a| a.to_ascii_lowercase()),
-            second,
-        )
+        if let Some(command) = first
+            .as_ref()
+            .and_then(|f| f.to_str())
+            .map(|f| f.to_lowercase())
+        {
+            let first = first.map(|a| a.to_ascii_lowercase());
+            (
+                Some(command),
+                args.collect(),
+                empty().chain(first).collect(),
+            )
+        } else {
+            return chain!(first, args).collect::<Vec<_>>().into_iter();
+        }
     };
-    let mut args = {
-        let mut args_vec = Vec::with_capacity(2 + args.size_hint().0);
-        first.map(|a| args_vec.push(a));
-        second.map(|a| args_vec.push(a));
-        args_vec.extend(args);
-        args_vec
-    };
-    match command.as_deref() {
+    let args = match command.as_deref() {
         Some("bigwigmerge") => {
             let has_input = args.iter().any(|a| {
                 a.to_str()
                     .map_or(false, |a| a.starts_with("-b") || a.starts_with("-l"))
             });
-            let mut args = if !has_input {
+            let args = if has_input {
+                args
+            } else {
                 // If there are no -l or -b, then let's see if it looks like a kent bigWigMerge call
                 let in_list = args
                     .iter()
                     .any(|a| a.to_str().map_or(false, |a| a == "-inList"));
                 let mut old_args = args;
-                let mut args = Vec::with_capacity(old_args.len());
+                let last = old_args.pop();
+                let mut args = Vec::with_capacity(old_args.len() + 1);
                 old_args.reverse();
                 while let Some(os_arg) = old_args.pop() {
                     let arg = os_arg.to_string_lossy();
                     if arg == "-inList" {
                         continue;
                     }
-                    if arg.starts_with("-") && !arg.contains("=") {
+                    if arg.starts_with("-") {
                         args.push(os_arg);
-                        args.pop().map(|a| args.push(a));
                         continue;
                     }
-                    let more_args = 'more: {
-                        let mut args_iter = args.iter().rev().peekable();
-                        while let Some(arg) = args_iter.next() {
-                            let arg = arg.to_string_lossy();
-                            if arg.starts_with("-") && !arg.contains("=") {
-                                args_iter.next();
-                            } else {
-                                break 'more true;
-                            }
-                        }
-                        false
-                    };
-                    if !more_args {
-                        if in_list {
-                            args.push(OsString::from_str("-l").unwrap());
-                        } else {
-                            args.push(OsString::from_str("-b").unwrap());
-                        }
+                    if in_list {
+                        args.push(OsString::from_str("-l").unwrap());
+                    } else {
+                        args.push(OsString::from_str("-b").unwrap());
                     }
                     args.push(os_arg);
                 }
-                args
-            } else {
+                last.map(|a| args.push(a));
                 args
             };
 
-            args.iter_mut().for_each(compat_arg_mut);
-
-            args.into_iter()
+            let mut args_vec = start;
+            args_vec.extend(args.into_iter());
+            args_vec.iter_mut().for_each(compat_arg_mut);
+            args_vec.into_iter()
         }
         Some("bedgraphtobigwig")
         | Some("bedtobigbed")
         | Some("bigbedtobed")
         | Some("bigwigaverageoverbed")
         | Some("bigwigtobedgraph") => {
-            args.iter_mut().for_each(compat_arg_mut);
-
-            args.into_iter()
+            let mut args_vec = start;
+            args_vec.extend(args);
+            args_vec.iter_mut().for_each(compat_arg_mut);
+            args_vec.into_iter()
         }
-        _ => args.into_iter(),
-    }
+        _ => {
+            let mut args_vec = start;
+            args_vec.extend(args);
+            args_vec.into_iter()
+        }
+    };
+
+    args
 }

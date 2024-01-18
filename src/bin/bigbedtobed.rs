@@ -13,12 +13,10 @@ mod test {
         CliCommands::command().debug_assert();
 
         let subcommand = |args: &str| {
-            dbg!(args);
             let args = args.split_whitespace();
             let cli = CliCommands::try_parse_from(compat_args(args.map(|a| a.into())))
                 .map_err(|e| e.print())
                 .unwrap();
-            dbg!(&cli);
             match cli {
                 CliCommands::SubCommands(subcommand) => subcommand,
                 CliCommands::Bigtools { .. } => panic!("Expected subcommand, parsed applet."),
