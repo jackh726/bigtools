@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::iter::Flatten;
 use std::pin::Pin;
 use std::vec;
@@ -26,7 +26,7 @@ use crate::bbi::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAG
 
 pub(crate) struct ZoomInfo {
     resolution: u32,
-    data: File,
+    data: TempFileBuffer<File>,
     sections: Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
 }
 
@@ -88,6 +88,7 @@ pub struct BBIWriteOptions {
     pub max_zooms: u32,
     pub input_sort_type: InputSortType,
     pub channel_size: usize,
+    pub inmemory: bool,
 }
 
 impl Default for BBIWriteOptions {
@@ -100,6 +101,7 @@ impl Default for BBIWriteOptions {
             max_zooms: 10,
             input_sort_type: InputSortType::ALL,
             channel_size: 100,
+            inmemory: false,
         }
     }
 }
@@ -498,8 +500,8 @@ pub(crate) fn write_zooms(
     let mut zoom_count = 0;
     let mut last_zoom_section_count = u64::max_value();
     for zoom in zooms {
-        let mut zoom_file = zoom.data;
-        let zoom_size = zoom_file.seek(SeekFrom::End(0))?;
+        let zoom_file = zoom.data;
+        let zoom_size = zoom_file.len()?;
         if zoom_size > (data_size / 2) {
             continue;
         }
@@ -519,9 +521,7 @@ pub(crate) fn write_zooms(
         }
         last_zoom_section_count = total_sections;
 
-        zoom_file.seek(SeekFrom::Start(0))?;
-        let mut buf_reader = BufReader::new(zoom_file);
-        io::copy(&mut buf_reader, &mut file)?;
+        zoom_file.expect_closed_write(&mut file)?;
         let zoom_index_offset = file.tell()?;
         //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.resolution, zoom_data_offset, zoom_index_offset);
         assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
@@ -730,7 +730,7 @@ pub(crate) fn write_vals<
             .map(|size| {
                 let section_iter = vec![];
                 let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                    TempFileBuffer::new();
+                    TempFileBuffer::new(options.inmemory);
                 let value = (section_iter, buf, Some(write));
                 (size, value)
             })
@@ -747,7 +747,7 @@ pub(crate) fn write_vals<
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
-            future_channel(options.channel_size, runtime.handle());
+            future_channel(options.channel_size, runtime.handle(), options.inmemory);
 
         let (zoom_infos, zooms_channels) = {
             let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
@@ -758,7 +758,7 @@ pub(crate) fn write_vals<
                     .take(options.max_zooms as usize);
             for size in zoom_sizes {
                 let (ftx, handle, buf, section_receiver) =
-                    future_channel(options.channel_size, runtime.handle());
+                    future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
                     data_write_future: Box::new(handle),
@@ -857,10 +857,9 @@ pub(crate) fn write_vals<
         .map(|(size, zoom)| {
             drop(zoom.2);
             let sections = zoom.0.into_iter().flatten();
-            let closed_file = zoom.1.await_temp_file();
             ZoomInfo {
                 resolution: size,
-                data: closed_file,
+                data: zoom.1,
                 sections,
             }
         })
@@ -925,7 +924,7 @@ pub(crate) fn write_vals_no_zoom<
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
-            future_channel(options.channel_size, runtime.handle());
+            future_channel(options.channel_size, runtime.handle(), options.inmemory);
 
         match send.unbounded_send((section_receiver, buf, sections_handle)) {
             Ok(_) => {}
@@ -1072,7 +1071,7 @@ pub(crate) fn write_zoom_vals<
         .take(options.max_zooms as usize)
         .map(|size| {
             let section_iter = vec![];
-            let (buf, write) = TempFileBuffer::new();
+            let (buf, write) = TempFileBuffer::new(options.inmemory);
             let value = (section_iter, buf, Some(write));
             (size.0 as u32, value)
         })
@@ -1106,7 +1105,7 @@ pub(crate) fn write_zoom_vals<
 
             for size in resolutions.iter().copied() {
                 let (ftx, handle, buf, section_receiver) =
-                    future_channel(options.channel_size, runtime.handle());
+                    future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
                     data_write_future: Box::new(handle),
@@ -1275,6 +1274,7 @@ async fn write_data<W: Write, SourceError: Send>(
 pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
     channel_size: usize,
     runtime: &Handle,
+    inmemory: bool,
 ) -> (
     futures_mpsc::Sender<
         Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
@@ -1284,7 +1284,7 @@ pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
     crossbeam_channel::Receiver<Section>,
 ) {
     let (ftx, frx) = channel(channel_size);
-    let (buf, write) = TempFileBuffer::new();
+    let (buf, write) = TempFileBuffer::new(inmemory);
     let file = BufWriter::new(write);
 
     let (section_sender, section_receiver) = unbounded();
@@ -1300,7 +1300,7 @@ mod tests {
     use crate::{read_cir_tree_header, search_cir_tree_inner};
 
     use super::*;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
 
     #[test]
     fn test_rtreeindex() -> io::Result<()> {

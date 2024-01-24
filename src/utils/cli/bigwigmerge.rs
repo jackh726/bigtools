@@ -15,6 +15,8 @@ use crate::{BBIReadError, BigWigRead, BigWigWrite};
 use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 use tokio::runtime;
 
+use super::BBIWriteArgs;
+
 #[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigmerge",
@@ -51,16 +53,13 @@ pub struct BigWigMergeArgs {
     #[arg(default_value_t = false)]
     max: bool,
 
-    /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms).
-    /// Note: for parts of the runtime, the actual usage may be nthreads+1
-    #[arg(short = 't', long)]
-    #[arg(default_value_t = 6)]
-    nthreads: usize,
-
     /// Can be `bigwig` or `bedgraph` (case-insensitive). If not specified,
     /// will be inferred from the output file ending.
     #[arg(long)]
     output_type: Option<String>,
+
+    #[command(flatten)]
+    write_args: BBIWriteArgs,
 }
 
 pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
@@ -97,7 +96,7 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let nthreads = args.nthreads;
+    let nthreads = args.write_args.nthreads;
 
     let (iter, chrom_map) = get_merged_vals(bigwigs, 10, args.threshold, args.adjust, args.clip)?;
 

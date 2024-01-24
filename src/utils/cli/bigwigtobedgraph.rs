@@ -154,7 +154,7 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
         .map(|chrom| {
             let bigwig = bigwig.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                TempFileBuffer::new();
+                TempFileBuffer::new(true);
             let writer = io::BufWriter::new(file);
             async fn file_future<R: Reopen + SeekableRead + 'static>(
                 mut bigwig: BigWigRead<R>,

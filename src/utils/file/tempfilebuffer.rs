@@ -8,6 +8,7 @@ use crossbeam_utils::atomic::AtomicCell;
 // In theory, we could have a `Memory` variant that temporarily buffers in memory until a given size.
 enum BufferState<R> {
     NotStarted,
+    InMemory(Vec<u8>),
     Temp(File),
     Real(R),
 }
@@ -25,11 +26,12 @@ pub struct TempFileBufferWriter<R> {
     closed: Arc<(Mutex<Option<BufferState<R>>>, Condvar)>,
     buffer_state: BufferState<R>,
     real_file: Arc<AtomicCell<Option<R>>>,
+    inmemory: bool,
 }
 
 impl<R> TempFileBuffer<R> {
-    /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to a temporary file
-    pub fn new() -> (TempFileBuffer<R>, TempFileBufferWriter<R>) {
+    /// Creates a new `TempFileBuffer`/`TempFileBufferWriter` pair where the writer is writing to a temporary file or in-memory
+    pub fn new(inmemory: bool) -> (TempFileBuffer<R>, TempFileBufferWriter<R>) {
         let closed = Arc::new((Mutex::new(None), Condvar::new()));
         let buffer_state = BufferState::NotStarted;
         let real_file = Arc::new(AtomicCell::new(None));
@@ -42,6 +44,7 @@ impl<R> TempFileBuffer<R> {
                 closed,
                 buffer_state,
                 real_file,
+                inmemory,
             },
         )
     }
@@ -62,6 +65,23 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         closed.is_some()
     }
 
+    pub fn len(&self) -> io::Result<u64> {
+        let &(ref lock, ref cvar) = &*self.closed;
+        let mut closed = lock.lock().unwrap();
+
+        while closed.is_none() {
+            closed = cvar.wait(closed).unwrap();
+        }
+        let closed = closed.as_mut();
+
+        match closed.unwrap() {
+            BufferState::Real(_) => panic!("Should not have switched already."),
+            BufferState::InMemory(data) => Ok(data.len() as u64),
+            BufferState::Temp(ref mut t) => t.seek(io::SeekFrom::Current(0)),
+            BufferState::NotStarted => panic!("No data was written."),
+        }
+    }
+
     pub fn await_real_file(self) -> R {
         let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock().unwrap();
@@ -74,6 +94,12 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
         let real_file = self.real_file.swap(None);
 
         match (real_file, closed) {
+            (Some(mut real_file), BufferState::InMemory(data)) => {
+                // Switch was called but no writes have happened
+                // Writer was dropped with data having been written
+                real_file.write_all(&data).unwrap();
+                real_file
+            }
             (Some(mut real_file), BufferState::Temp(mut closed_file)) => {
                 // Switch was called but no writes have happened
                 // Writer was dropped with temp file having been written
@@ -87,28 +113,11 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 // Writer was dropped with no tempfile being created (or written to)
                 real_file
             }
-            (None, BufferState::Temp(_)) => panic!("Should have switched already."),
+            (None, BufferState::InMemory(_) | BufferState::Temp(_)) => {
+                panic!("Should have switched already.")
+            }
             (None, BufferState::Real(real_file)) => real_file,
             (None, BufferState::NotStarted) => panic!("No data was written."),
-        }
-    }
-
-    pub fn await_temp_file(self) -> File {
-        let &(ref lock, ref cvar) = &*self.closed;
-        let mut closed = lock.lock().unwrap();
-
-        while closed.is_none() {
-            closed = cvar.wait(closed).unwrap();
-        }
-        let closed = closed.take().unwrap();
-
-        let real_file = self.real_file.swap(None);
-        assert!(real_file.is_none(), "Should not have switched already.");
-
-        match closed {
-            BufferState::Real(_) => panic!("Should not have switched already."),
-            BufferState::Temp(t) => t,
-            BufferState::NotStarted => panic!("No data was written."),
         }
     }
 
@@ -132,6 +141,9 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 closed_file.seek(io::SeekFrom::Start(0))?;
                 io::copy(&mut closed_file, &mut real)?;
             }
+            BufferState::InMemory(data) => {
+                real.write_all(&data)?;
+            }
             BufferState::Real(_) => panic!("Should only be writing to real file."),
             BufferState::NotStarted => panic!("No data was written."),
         }
@@ -149,8 +161,20 @@ impl<R: Write + Send + 'static> TempFileBufferWriter<R> {
                         self.buffer_state = BufferState::Real(new_file);
                     }
                     None => {
-                        self.buffer_state = BufferState::Temp(tempfile::tempfile()?);
+                        if self.inmemory {
+                            self.buffer_state =
+                                BufferState::InMemory(Vec::with_capacity(10 * 1_000));
+                        } else {
+                            self.buffer_state = BufferState::Temp(tempfile::tempfile()?);
+                        }
                     }
+                }
+            }
+            BufferState::InMemory(data) => {
+                let real_file = self.real_file.swap(None).take();
+                if let Some(mut new_file) = real_file {
+                    new_file.write_all(&data)?;
+                    self.buffer_state = BufferState::Real(new_file);
                 }
             }
             BufferState::Temp(ref mut file) => {
@@ -175,12 +199,7 @@ impl<R> Drop for TempFileBufferWriter<R> {
         let buffer_state = std::mem::replace(&mut self.buffer_state, BufferState::NotStarted);
         match buffer_state {
             BufferState::NotStarted => {}
-            BufferState::Temp(temp) => {
-                *closed = Some(BufferState::Temp(temp));
-            }
-            BufferState::Real(real) => {
-                *closed = Some(BufferState::Real(real));
-            }
+            state => *closed = Some(state),
         }
         cvar.notify_one();
         drop(closed);
@@ -193,6 +212,7 @@ impl<R: Write + Send + 'static> Write for TempFileBufferWriter<R> {
         loop {
             match self.buffer_state {
                 BufferState::NotStarted => unreachable!(),
+                BufferState::InMemory(ref mut data) => return data.write(buf),
                 BufferState::Temp(ref mut file) => return file.write(buf),
                 BufferState::Real(ref mut file) => return file.write(buf),
             }
@@ -201,6 +221,7 @@ impl<R: Write + Send + 'static> Write for TempFileBufferWriter<R> {
     fn flush(&mut self) -> io::Result<()> {
         match self.buffer_state {
             BufferState::NotStarted => Ok(()), // No data has been written, nothing to flush
+            BufferState::InMemory(_) => Ok(()), // All data is written immediately to vec
             BufferState::Temp(ref mut file) => file.flush(),
             BufferState::Real(ref mut file) => file.flush(),
         }
@@ -214,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_works() -> io::Result<()> {
-        let (mut buf, mut writer) = TempFileBuffer::new();
+        let (mut buf, mut writer) = TempFileBuffer::new(true);
 
         const NUM_BYTES: usize = 50;
         let _writethread = std::thread::spawn(move || {

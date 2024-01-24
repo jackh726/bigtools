@@ -60,6 +60,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
     outb.options.max_zooms = args.write_args.nzooms;
     outb.options.compress = !args.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
+    outb.options.inmemory = args.write_args.inmemory;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {

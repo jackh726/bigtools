@@ -53,6 +53,11 @@ pub struct BBIWriteArgs {
     #[arg(long)]
     #[arg(default_value_t = DEFAULT_ITEMS_PER_SLOT)]
     pub items_per_slot: u32,
+
+    /// Do not create temporary files for intermediate data.
+    #[arg(long)]
+    #[arg(default_value_t = false)]
+    pub inmemory: bool,
 }
 
 macro_rules! compat_replace_mut {

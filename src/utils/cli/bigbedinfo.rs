@@ -5,7 +5,7 @@ use clap::Parser;
 
 use crate::{BBIFileRead, BigBedRead};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser, PartialEq)]
 #[command(
     name = "bigbedinfo",
     about = "Gets information about a bigBed.",
@@ -13,22 +13,22 @@ use crate::{BBIFileRead, BigBedRead};
 )]
 pub struct BigBedInfoArgs {
     /// The bigbed to get info for.
-    bigbed: String,
+    pub bigbed: String,
 
     /// If set, will print out the list of chromosomes in the bigBed and their sizes.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    chroms: bool,
+    pub chroms: bool,
 
     /// If set, will print out the list of all zoom levels.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    zooms: bool,
+    pub zooms: bool,
 
     /// If set, will print out the autosql spec.
     #[arg(long)]
     #[arg(default_value_t = false)]
-    autosql: bool,
+    pub autosql: bool,
 }
 
 pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
