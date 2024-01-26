@@ -1,6 +1,6 @@
-/target
+**/target
 **/*.rs.bk
-__pycache__
+**/__pycache__
 
-/workdir
+**/workdir
 .vscode

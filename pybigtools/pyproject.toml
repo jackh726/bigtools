@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tools.maturin]
+bindings = "cffi"
+compatibility = "linux"
+
+[project]
+name = "pybigtools"
+dependencies = [
+    "numpy"
+]
