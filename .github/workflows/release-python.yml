@@ -9,6 +9,23 @@ permissions:
   contents: read
     
 jobs:
+  sdist:
+    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build sdist
+      uses: PyO3/maturin-action@v1
+      with:
+        command: sdist
+        args: --out dist --manifest-path pybigtools/Cargo.toml
+    - name: Upload sdist
+      uses: actions/upload-artifact@v3
+      with:
+        name: wheels
+        path: dist
+
   linux:
     if: startsWith(github.ref, 'refs/tags/pybigtools@v')
 
@@ -25,7 +42,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
@@ -51,7 +68,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
@@ -75,30 +92,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
          name: wheels
          path: dist
-    
-  sdist:
-    if: startsWith(github.ref, 'refs/tags/pybigtools@')
-
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Build sdist
-      uses: PyO3/maturin-action@v1
-      with:
-        command: sdist
-        args: --out dist --manifest-path py-oxbow/Cargo.toml
-    - name: Upload sdist
-      uses: actions/upload-artifact@v3
-      with:
-        name: wheels
-        path: dist
 
   publish:
       if: startsWith(github.ref, 'refs/tags/pybigtools@')
