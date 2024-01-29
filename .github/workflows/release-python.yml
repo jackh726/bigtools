@@ -1,4 +1,4 @@
-name: Publish Python Package to PyPI
+name: Build and publish Python package to PyPI
 
 on:
   release:
@@ -10,7 +10,7 @@ permissions:
     
 jobs:
   sdist:
-    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+    if: startsWith(github.ref, 'refs/tags/pybigtools@v')
 
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +52,7 @@ jobs:
           path: dist
     
   windows:
-    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+    if: startsWith(github.ref, 'refs/tags/pybigtools@v')
 
     runs-on: windows-latest
     strategy:
@@ -77,7 +77,7 @@ jobs:
           path: dist
     
   macos:
-    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+    if: startsWith(github.ref, 'refs/tags/pybigtools@v')
 
     runs-on: macos-latest
     strategy:
@@ -101,7 +101,7 @@ jobs:
          path: dist
 
   publish:
-      if: startsWith(github.ref, 'refs/tags/pybigtools@')
+      if: startsWith(github.ref, 'refs/tags/pybigtools@v')
       
       runs-on: ubuntu-latest
       permissions:
