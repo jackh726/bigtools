@@ -1,0 +1,120 @@
+name: Publish Python Package to PyPI
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+    
+jobs:
+  linux:
+    if: startsWith(github.ref, 'refs/tags/pybigtools@v')
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, x86, aarch64]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          sccache: 'true'
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: dist
+    
+  windows:
+    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x64, x86]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: dist
+    
+  macos:
+    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --manifest-path py-oxbow/Cargo.toml
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+         name: wheels
+         path: dist
+    
+  sdist:
+    if: startsWith(github.ref, 'refs/tags/pybigtools@')
+
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build sdist
+      uses: PyO3/maturin-action@v1
+      with:
+        command: sdist
+        args: --out dist --manifest-path py-oxbow/Cargo.toml
+    - name: Upload sdist
+      uses: actions/upload-artifact@v3
+      with:
+        name: wheels
+        path: dist
+
+  publish:
+      if: startsWith(github.ref, 'refs/tags/pybigtools@')
+      
+      runs-on: ubuntu-latest
+      permissions:
+        id-token: write
+  
+      needs: [linux, windows, macos, sdist]
+  
+      steps:
+        - uses: actions/download-artifact@v3
+          with:
+            name: wheels
+        - name: Publish to PyPI
+          uses: PyO3/maturin-action@v1
+          with:
+            command: upload
+            args: --skip-existing *
