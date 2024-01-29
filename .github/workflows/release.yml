@@ -17,6 +17,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             asset_name: bigtools-linux-gnu
             remote: true
+          - os: windows-msvc-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: bigtools-windows-msvc
+            remote: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: bigtools-apple-darwin
+            remote: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -30,6 +38,8 @@ jobs:
           files: |
             target/release/bedgraphtobigwig;
             target/release/bedtobigbed;
+            target/release/bigbedinfo;
+            target/release/bigbedtobed;
             target/release/bigtools;
             target/release/bigwigaverageoverbed;
             target/release/bigwiginfo;
@@ -37,9 +47,8 @@ jobs:
             target/release/bigwigtobedgraph;
             target/release/bigwigvaluesoverbed
           dest: ${{ matrix.asset_name }}.zip
-      - name: Asset upload
+      - name: Zip upload
         uses: shogo82148/actions-upload-release-asset@v1
         with:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ${{ github.workspace }}/${{ matrix.asset_name }}.zip
-

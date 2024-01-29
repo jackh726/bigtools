@@ -1,8 +1,10 @@
+# Note: this should be build from the parent directory
+
 FROM rust:buster as build
 
 RUN mkdir /bigtools
-COPY ./src /bigtools/src
-COPY ./Cargo.toml /bigtools
+COPY ./bigtools/src /bigtools/src
+COPY ./bigtools/Cargo.toml /bigtools
 COPY ./Cargo.lock /bigtools
 RUN cd /bigtools && cargo install --path .
 
