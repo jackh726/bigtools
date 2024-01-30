@@ -17,7 +17,7 @@ build:
         fi
   commands:
     # Install dependencies
-    - cd pybigtools/ && pip install pdoc3
+    - pip install pdoc3
     # Build the site
     - cd pybigtools/ && pdoc3 --html --force pybigtools
     # Copy generated files into Read the Docs directory
