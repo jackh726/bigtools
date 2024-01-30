@@ -72,9 +72,6 @@ struct BigWigRead {
 
 #[pymethods]
 impl BigWigRead {
-    /// intervals(chrom, start, end, /)
-    /// --
-    ///
     /// Returns the intervals of a given range on a chromosome. The result is an iterator of (int, int, float) in the format (start, end, value).
     /// The intervals may not be contiguous if the values in the bigwig are not.  
     ///
@@ -115,9 +112,6 @@ impl BigWigRead {
         }
     }
 
-    /// values(chrom, start, end, /)
-    /// --
-    ///
     /// Returns the values of a given range on a chromosome. The result is an iterator of floats, of length (end - start).  
     /// If a value does not exist in the bigwig for a specific base, it will be nan.  
     ///
@@ -374,9 +368,6 @@ impl BigWigRead {
         }
     }
 
-    /// chroms(chrom, /)
-    /// --
-    ///
     /// Returns the chromosomes in a bigwig, and their lengths.  
     ///
     /// The chroms argument can be either String or None.  
@@ -474,9 +465,6 @@ struct BigWigWrite {
 
 #[pymethods]
 impl BigWigWrite {
-    /// write(chroms, vals, /)
-    /// --
-    ///
     /// Writes the values passsed to the bigwig file.
     /// The underlying file will be closed automatically when the function completes (and no other operations will be able to be performed).  
     ///
@@ -614,9 +602,6 @@ struct BigBedRead {
 
 #[pymethods]
 impl BigBedRead {
-    /// entries(chrom, start, end, /)
-    /// --
-    ///
     /// Returns the entries of a given range on a chromosome. The result is an iterator of (int, int, String) in the format (start, end, rest).  
     /// The entries may not be contiguous if the values in the bigbed are not.  
     /// The chrom argument is the name of the chromosome.  
@@ -656,9 +641,6 @@ impl BigBedRead {
         }
     }
 
-    /// chroms(chrom, /)
-    /// --
-    ///
     /// Returns the chromosomes in a bigwig, and their lengths.  
     /// The chroms argument can be either String or None. If it is None, then all chroms will be returned. If it is a String, then the length of that chromosome will be returned.  
     ///  If the chromosome doesn't exist, nothing will be returned.  
@@ -751,9 +733,6 @@ struct BigBedWrite {
 
 #[pymethods]
 impl BigBedWrite {
-    /// write(chroms, vals, /)
-    /// --
-    ///
     /// Writes the values passsed to the bigwig file. The underlying file will be closed automatically when the function completes (and no other operations will be able to be performed).  
     /// The chroms argument should be a dictionary with keys as chromosome names and values as their length.  
     /// The vals argument should be an iterable with values (String, int, int, String) that represents each value to write in the format (chromosome, start, end, rest)  
@@ -866,9 +845,6 @@ impl BigBedWrite {
         Ok(())
     }
 
-    /// close()
-    /// --
-    ///
     /// Manually closed the file. No other operations will be allowed after it is closed. This is done automatically after write is performed.
     fn close(&mut self) -> PyResult<()> {
         self.bigbed.take();
@@ -924,9 +900,6 @@ impl BigWigAverageOverBedEntriesIterator {
     }
 }
 
-/// open(path_or_file_like, mode, /)
-/// --
-///
 /// This is the entrypoint for working with bigWigs or bigBeds.
 ///
 /// The first argument can take one of three values:
@@ -1109,9 +1082,6 @@ fn open_path_or_url(
     Ok(res)
 }
 
-/// bigWigAverageOverBed(bigWig, bed, names = None, /)
-/// --
-///
 /// Gets the average values from a bigWig over the entries of a bed file.
 ///
 /// Parameters:
