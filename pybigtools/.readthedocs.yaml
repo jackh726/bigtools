@@ -1,0 +1,25 @@
+version: 2
+
+build:
+  os: "ubuntu-20.04"
+  tools:
+    python: "3.10"
+  jobs:
+    post_checkout:
+      # Cancel building pull requests when they do not change pybigtools.
+      #
+      # If there are no changes (git diff exits with 0) we force the command to return with 183.
+      # This is a special exit code on Read the Docs that will cancel the build immediately.
+      - |
+        if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/master -- pybigtools/ .readthedocs.yaml;
+        then
+          exit 183;
+        fi
+  commands:
+    # Install dependencies
+    - pip install pdoc3
+    # Build the site
+    - cd pybigtools/ && pdoc3 --html --force pybigtools
+    # Copy generated files into Read the Docs directory
+    - mkdir --parents _readthedocs/html/
+    - cp --recursive pybigtools/html/* _readthedocs/html/
