@@ -15,9 +15,9 @@ build:
         exit 183;
       fi
     # Install dependencies
-    - pip install pdoc3
+    - pip install pdoc
     # Build the site
-    - cd pybigtools/ && pdoc3 --html --force pybigtools
+    - cd pybigtools/ && pdoc -o html pybigtools
     # Copy generated files into Read the Docs directory
     - mkdir --parents _readthedocs/html/
     - cp --recursive pybigtools/html/* _readthedocs/html/
