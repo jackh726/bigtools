@@ -2,6 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
 [![Documentation](https://docs.rs/bigtools/badge.svg)](https://docs.rs/bigtools)
+[![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
 
 Bigtools is a library and associated tools for reading and writing bigwig and bigbed files.
 
