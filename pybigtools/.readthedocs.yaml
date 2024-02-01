@@ -17,7 +17,7 @@ build:
     # Install dependencies
     - pip install pdoc
     # Build the site
-    - cd pybigtools/ && pdoc -o html pybigtools
+    - pdoc -o pybigtools/html pybigtools/pybigtools
     # Copy generated files into Read the Docs directory
     - mkdir --parents _readthedocs/html/
     - cp --recursive pybigtools/html/* _readthedocs/html/
