@@ -1,6 +1,6 @@
 [package]
 name = "bigtools"
-version = "0.3.1-dev"
+version = "0.4.0"
 authors = ["Jack Huey <jackh726@gmail.com>"]
 edition = "2021"
 license = "MIT"
@@ -49,6 +49,10 @@ name = "bedtobigbed"
 required-features = ["cli"]
 
 [[bin]]
+name = "bigbedinfo"
+required-features = ["cli"]
+
+[[bin]]
 name = "bigbedtobed"
 required-features = ["cli"]
 
@@ -75,6 +79,6 @@ required-features = ["cli"]
 [features]
 default = ["remote", "read", "write", "cli"]
 remote = ["attohttpc", "tempfile"]
-cli = ["clap", "ryu", "ufmt"]
+cli = ["clap", "ryu", "ufmt", "read", "write"]
 read = ["bytes"]
 write = ["crossbeam-channel", "tempfile", "futures", "serde", "itertools", "bincode"]

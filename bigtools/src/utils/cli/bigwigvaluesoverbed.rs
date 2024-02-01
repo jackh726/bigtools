@@ -72,7 +72,7 @@ pub fn bigwigvaluesoverbed(args: BigWigValuesOverBedArgs) -> Result<(), Box<dyn 
     }
     #[cfg(not(feature = "remote"))]
     {
-        let inbigwig = BigWigRead::open_file(bigwigpath)?.cached();
+        let inbigwig = BigWigRead::open_file(&bigwigpath)?.cached();
         write(&bedin, inbigwig, out, options)?;
     }
 
