@@ -1,7 +1,8 @@
 # Bigtools <a href="https://github.com/jackh726/bigtools"><img align="right" src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-logo.svg" height="38"></img></a>
 
 [![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
-[![Documentation](https://docs.rs/bigtools/badge.svg)](https://docs.rs/bigtools)
+[![Rust Docs](https://docs.rs/bigtools/badge.svg)](https://docs.rs/bigtools)
+[![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
 
 Bigtools is a library and associated tools for reading and writing bigwig and bigbed files.
 
@@ -24,6 +25,8 @@ Bigtools is written in Rust and published to `crates.io`, so binaries can be ins
 
 ## Library
 
+See the `bigtools` 🦀 [Documentation](https://docs.rs/bigtools).
+
 ### Example
 
 ```rust,norun
@@ -39,6 +42,10 @@ for interval in chr1 {
 ## Binaries
 
 TODO
+
+## Python wrapper
+
+See the `pybigtools` 🐍 [API Documentation](https://bigtools.readthedocs.io/en/latest).
 
 ## Benchmarks
 [Benchmarks]: #Benchmarks
