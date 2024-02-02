@@ -8,6 +8,7 @@ description = "A library and associated tools for reading and writing bigwigs an
 keywords = ["bigwig", "bio"]
 documentation = "https://docs.rs/bigtools"
 repository = "https://github.com/jackh726/bigtools"
+readme = "../README.md"
 
 [dependencies]
 byteorder = "1"

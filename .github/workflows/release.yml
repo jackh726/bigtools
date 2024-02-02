@@ -70,7 +70,6 @@ jobs:
           toolchain: stable
           override: true
       - name: Cargo publish
-        uses: katyo/publish-crates@v2
-        with:
-            path: './bigtools'
-            registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p bigtools --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --features cli --features remote
+        env:
+          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
