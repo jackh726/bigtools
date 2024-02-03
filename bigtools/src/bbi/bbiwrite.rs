@@ -204,15 +204,18 @@ pub(crate) fn write_chrom_tree(
     chrom_sizes: std::collections::HashMap<String, u32>,
     chrom_ids: &std::collections::HashMap<String, u32>,
 ) -> io::Result<()> {
-    let mut chroms: Vec<&String> = chrom_ids.keys().collect();
-    chroms.sort();
+    let mut chroms: Vec<(&String, &u32)> = chrom_ids.iter().collect();
+    chroms.sort_by_key(|v| *v.1);
     //println!("Used chroms {:?}", chroms);
 
     let item_count = chroms.len() as u64;
     // TODO: for now, always just use the length of chroms (if less than 256). This means we don't have to implement writing non-leaf nodes for now...
     // TODO: make this configurable
     let block_size = std::cmp::max(256, item_count) as u32;
-    let max_bytes = chroms.iter().map(|a| a.len() as u32).fold(0, u32::max);
+    let max_bytes = chroms
+        .iter()
+        .map(|a| a.0.as_bytes().len() as u32)
+        .fold(0, u32::max);
 
     file.write_u32::<NativeEndian>(CHROM_TREE_MAGIC)?;
     file.write_u32::<NativeEndian>(block_size)?;
@@ -226,15 +229,12 @@ pub(crate) fn write_chrom_tree(
     file.write_u8(1)?;
     file.write_u8(0)?;
     file.write_u16::<NativeEndian>(item_count as u16)?;
-    for chrom in chroms {
+    for (chrom, id) in chroms {
         let key_bytes = &mut vec![0u8; max_bytes as usize];
         let chrom_bytes = chrom.as_bytes();
         key_bytes[..chrom_bytes.len()].copy_from_slice(chrom_bytes);
         file.write_all(key_bytes)?;
-        let id = *chrom_ids
-            .get(chrom)
-            .expect("Internal error. (Chrom not found).");
-        file.write_u32::<NativeEndian>(id)?;
+        file.write_u32::<NativeEndian>(*id)?;
         let length = chrom_sizes.get(&chrom[..]);
         match length {
             None => panic!("Expected length for chrom: {}", chrom),
