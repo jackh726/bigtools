@@ -126,16 +126,54 @@ pub struct BedIteratorStream<V, I> {
     curr: Option<(String, V)>,
 }
 
-impl<V: Clone, E: Into<BedValueError>, I: Iterator<Item = Result<(String, V), E>>>
-    StreamingBedValues for BedIteratorStream<V, I>
+impl<
+        V: Clone,
+        E: Into<BedValueError>,
+        C: Into<String> + for<'a> PartialEq<&'a str>,
+        I: Iterator<Item = Result<(C, V), E>>,
+    > StreamingBedValues for BedIteratorStream<V, I>
 {
     type Value = V;
 
     fn next(&mut self) -> Option<Result<(&str, V), BedValueError>> {
         use std::ops::Deref;
-        self.curr = match self.iter.next()? {
-            Err(e) => return Some(Err(e.into())),
-            Ok(v) => Some(v),
+        self.curr = match (self.curr.take(), self.iter.next()?) {
+            (_, Err(e)) => return Some(Err(e.into())),
+            (Some(c), Ok(v)) => {
+                if v.0 == &c.0 {
+                    Some((c.0, v.1))
+                } else {
+                    Some((v.0.into(), v.1))
+                }
+            }
+            (None, Ok(v)) => Some((v.0.into(), v.1)),
+        };
+        self.curr.as_ref().map(|v| Ok((v.0.deref(), v.1.clone())))
+    }
+}
+
+// Wraps a bed-like Iterator
+pub struct BedInfallibleIteratorStream<V, I> {
+    iter: I,
+    curr: Option<(String, V)>,
+}
+
+impl<V: Clone, C: Into<String> + for<'a> PartialEq<&'a str>, I: Iterator<Item = (C, V)>>
+    StreamingBedValues for BedInfallibleIteratorStream<V, I>
+{
+    type Value = V;
+
+    fn next(&mut self) -> Option<Result<(&str, V), BedValueError>> {
+        use std::ops::Deref;
+        self.curr = match (self.curr.take(), self.iter.next()?) {
+            (Some(c), v) => {
+                if v.0 == &c.0 {
+                    Some((c.0, v.1))
+                } else {
+                    Some((v.0.into(), v.1))
+                }
+            }
+            (None, v) => Some((v.0.into(), v.1)),
         };
         self.curr.as_ref().map(|v| Ok((v.0.deref(), v.1.clone())))
     }
@@ -236,11 +274,23 @@ impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>>> {
     }
 }
 
-impl<V: Clone, E: Into<BedValueError>, I: Iterator<Item = Result<(String, V), E>>>
-    BedParser<BedIteratorStream<V, I>>
+impl<
+        V: Clone,
+        E: Into<BedValueError>,
+        C: Into<String> + for<'a> PartialEq<&'a str>,
+        I: Iterator<Item = Result<(C, V), E>>,
+    > BedParser<BedIteratorStream<V, I>>
 {
     pub fn wrap_iter(iter: I) -> Self {
         BedParser::new(BedIteratorStream { iter, curr: None })
+    }
+}
+
+impl<V: Clone, C: Into<String> + for<'a> PartialEq<&'a str>, I: Iterator<Item = (C, V)>>
+    BedParser<BedInfallibleIteratorStream<V, I>>
+{
+    pub fn wrap_infallible_iter(iter: I) -> Self {
+        BedParser::new(BedInfallibleIteratorStream { iter, curr: None })
     }
 }
 

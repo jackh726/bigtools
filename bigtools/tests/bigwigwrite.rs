@@ -172,21 +172,19 @@ fn test_iter() {
         .into_iter()
         .zip(starts.into_iter().zip(ends.into_iter()));
     let iter = iter.map(|(chrom, (start, end))| {
-        Ok::<(String, Value), std::io::Error>((
-            chrom.to_string(),
+        (
+            chrom,
             Value {
                 start,
                 end,
                 value: 0.0,
             },
-        ))
+        )
     });
 
-    let vals_iter = BedParserStreamingIterator::new(BedParser::wrap_iter(iter), true);
+    let vals_iter = BedParserStreamingIterator::new(BedParser::wrap_infallible_iter(iter), true);
 
-    let chrom_map = HashMap::from([
-        ("chrY".to_string(), 57_227_415)
-    ]);
+    let chrom_map = HashMap::from([("chrY".to_string(), 57_227_415)]);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -194,5 +192,6 @@ fn test_iter() {
 
     let tempfile = tempfile::NamedTempFile::new().unwrap();
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
-    outb.write_singlethreaded(chrom_map, vals_iter, runtime).unwrap();
+    outb.write_singlethreaded(chrom_map, vals_iter, runtime)
+        .unwrap();
 }
