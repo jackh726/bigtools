@@ -156,7 +156,7 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     let end = chrom.as_ref().and_then(|_| end);
 
     let chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
-    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>, String)>> = chroms
+    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = chroms
         .into_iter()
         .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
         .map(|chrom| {
@@ -191,16 +191,15 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
             }
             let start = start.unwrap_or(0);
             let end = end.unwrap_or(chrom.length);
-            let name = chrom.name.clone();
             let handle = runtime
                 .spawn(file_future(bigwig, chrom, writer, start, end))
                 .map(|f| f.unwrap());
-            Ok((handle, buf, name))
+            Ok((handle, buf))
         })
         .collect::<Vec<_>>();
 
     for res in chrom_files {
-        let (f, mut buf, name) = res?;
+        let (f, mut buf) = res?;
         buf.switch(out_file);
         f.await?;
         while !buf.is_real_file_ready() {

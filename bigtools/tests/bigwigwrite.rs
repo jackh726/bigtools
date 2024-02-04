@@ -9,7 +9,7 @@ use tempfile;
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
 use bigtools::utils::chromvalues::ChromValues;
-use bigtools::{BigWigRead, BigWigWrite};
+use bigtools::{BigWigRead, BigWigWrite, Value};
 use tokio::runtime;
 
 #[test]
@@ -158,4 +158,41 @@ fn test_multi_chrom() -> io::Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_iter() {
+    let chroms = vec![
+        "chrY", "chrY", "chrY", "chrY", "chrY", "chrY", "chrY", "chrY", "chrY", "chrY",
+    ];
+    let starts: Vec<u32> = vec![530, 538, 584, 713, 751, 860, 865, 873, 879, 902];
+    let ends: Vec<u32> = vec![538, 584, 713, 751, 860, 865, 873, 879, 902, 923];
+
+    let iter = chroms
+        .into_iter()
+        .zip(starts.into_iter().zip(ends.into_iter()));
+    let iter = iter.map(|(chrom, (start, end))| {
+        Ok::<(String, Value), std::io::Error>((
+            chrom.to_string(),
+            Value {
+                start,
+                end,
+                value: 0.0,
+            },
+        ))
+    });
+
+    let vals_iter = BedParserStreamingIterator::new(BedParser::wrap_iter(iter), true);
+
+    let chrom_map = HashMap::from([
+        ("chrY".to_string(), 57_227_415)
+    ]);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("Unable to create runtime.");
+
+    let tempfile = tempfile::NamedTempFile::new().unwrap();
+    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
+    outb.write_singlethreaded(chrom_map, vals_iter, runtime).unwrap();
 }
