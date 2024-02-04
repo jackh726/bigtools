@@ -78,7 +78,7 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
             BufferState::Real(_) => panic!("Should not have switched already."),
             BufferState::InMemory(data) => Ok(data.len() as u64),
             BufferState::Temp(ref mut t) => t.seek(io::SeekFrom::Current(0)),
-            BufferState::NotStarted => panic!("No data was written."),
+            BufferState::NotStarted => Ok(0),
         }
     }
 
@@ -113,11 +113,10 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
                 // Writer was dropped with no tempfile being created (or written to)
                 real_file
             }
-            (None, BufferState::InMemory(_) | BufferState::Temp(_)) => {
+            (None, BufferState::Real(real_file)) => real_file,
+            (None, BufferState::InMemory(_) | BufferState::Temp(_) | BufferState::NotStarted) => {
                 panic!("Should have switched already.")
             }
-            (None, BufferState::Real(real_file)) => real_file,
-            (None, BufferState::NotStarted) => panic!("No data was written."),
         }
     }
 
@@ -144,8 +143,8 @@ impl<R: Write + Send + 'static> TempFileBuffer<R> {
             BufferState::InMemory(data) => {
                 real.write_all(&data)?;
             }
+            BufferState::NotStarted => {}
             BufferState::Real(_) => panic!("Should only be writing to real file."),
-            BufferState::NotStarted => panic!("No data was written."),
         }
         Ok(())
     }
@@ -197,10 +196,7 @@ impl<R> Drop for TempFileBufferWriter<R> {
         let &(ref lock, ref cvar) = &*self.closed;
         let mut closed = lock.lock().unwrap();
         let buffer_state = std::mem::replace(&mut self.buffer_state, BufferState::NotStarted);
-        match buffer_state {
-            BufferState::NotStarted => {}
-            state => *closed = Some(state),
-        }
+        *closed = Some(buffer_state);
         cvar.notify_one();
         drop(closed);
     }

@@ -18,7 +18,7 @@ use ufmt::uwrite;
 #[command(
     name = "bigwigtobedgraph",
     about = "Converts an input bigWig to a bedGraph.",
-    long_about = "Converts an input bigWig to a bedGraph. Can be multi-threaded for substantial speedups. Note for roughly each core, one temporary file will be opened."
+    long_about = "Converts an input bigWig to a bedGraph. Can be multi-threaded for substantial speedups."
 )]
 pub struct BigWigToBedGraphArgs {
     /// the bigwig to get convert to bedgraph
@@ -42,10 +42,16 @@ pub struct BigWigToBedGraphArgs {
     /// If set, restrict output to regions overlapping the bed file
     pub overlap_bed: Option<String>,
 
-    /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms). Note: for parts of the runtime, the actual usage may be nthreads+1
+    /// Set the number of threads to use. This tool will nearly always benefit from more cores (<= # chroms).
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
     pub nthreads: usize,
+
+    /// Do not create temporary files for intermediate data. (Only applicable when using multiple threads.)
+    /// By default, approximately one temporary file will be opened for each core.
+    #[arg(long)]
+    #[arg(default_value_t = false)]
+    pub inmemory: bool,
 }
 
 pub fn bigwigtobedgraph(args: BigWigToBedGraphArgs) -> Result<(), Box<dyn Error>> {
@@ -92,6 +98,7 @@ pub fn bigwigtobedgraph(args: BigWigToBedGraphArgs) -> Result<(), Box<dyn Error>
                     args.start,
                     args.end,
                     runtime.handle(),
+                    args.inmemory,
                 ))?;
             }
         }
@@ -143,18 +150,19 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     start: Option<u32>,
     end: Option<u32>,
     runtime: &runtime::Handle,
+    inmemory: bool,
 ) -> Result<(), BBIReadError> {
     let start = chrom.as_ref().and_then(|_| start);
     let end = chrom.as_ref().and_then(|_| end);
 
     let chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
-    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = chroms
+    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>, String)>> = chroms
         .into_iter()
         .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
         .map(|chrom| {
             let bigwig = bigwig.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                TempFileBuffer::new(true);
+                TempFileBuffer::new(inmemory);
             let writer = io::BufWriter::new(file);
             async fn file_future<R: Reopen + SeekableRead + 'static>(
                 mut bigwig: BigWigRead<R>,
@@ -183,17 +191,18 @@ pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
             }
             let start = start.unwrap_or(0);
             let end = end.unwrap_or(chrom.length);
+            let name = chrom.name.clone();
             let handle = runtime
                 .spawn(file_future(bigwig, chrom, writer, start, end))
                 .map(|f| f.unwrap());
-            Ok((handle, buf))
+            Ok((handle, buf, name))
         })
         .collect::<Vec<_>>();
 
     for res in chrom_files {
-        let (f, mut buf) = res.unwrap();
+        let (f, mut buf, name) = res?;
         buf.switch(out_file);
-        f.await.unwrap();
+        f.await?;
         while !buf.is_real_file_ready() {
             tokio::task::yield_now().await;
         }
