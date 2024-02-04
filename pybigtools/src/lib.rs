@@ -6,6 +6,7 @@ use std::path::Path;
 
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
+#[cfg(feature = "remote")]
 use bigtools::utils::file::remote_file::RemoteFile;
 use bigtools::utils::file::reopen::ReopenableFile;
 use bigtools::utils::misc::{
@@ -60,6 +61,7 @@ impl Reopen for PyFileLikeObject {
 
 enum BigWigRaw {
     File(BigWigReadRaw<CachedBBIFileRead<ReopenableFile>>),
+    #[cfg(feature = "remote")]
     Remote(BigWigReadRaw<CachedBBIFileRead<RemoteFile>>),
     FileLike(BigWigReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
 }
@@ -95,6 +97,7 @@ impl BigWigRead {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
                 })
             }
+            #[cfg(feature = "remote")]
             BigWigRaw::Remote(b) => {
                 let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
@@ -359,6 +362,7 @@ impl BigWigRead {
             BigWigRaw::File(b) => {
                 to_array!(b)
             }
+            #[cfg(feature = "remote")]
             BigWigRaw::Remote(b) => {
                 to_array!(b)
             }
@@ -394,6 +398,7 @@ impl BigWigRead {
                 };
                 Ok(val)
             }
+            #[cfg(feature = "remote")]
             BigWigRaw::Remote(b) => {
                 let val = match chrom {
                     Some(chrom) => b
@@ -590,6 +595,7 @@ impl BigWigWrite {
 
 enum BigBedRaw {
     File(BigBedReadRaw<CachedBBIFileRead<ReopenableFile>>),
+    #[cfg(feature = "remote")]
     Remote(BigBedReadRaw<CachedBBIFileRead<RemoteFile>>),
     FileLike(BigBedReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
 }
@@ -624,6 +630,7 @@ impl BigBedRead {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
                 })
             }
+            #[cfg(feature = "remote")]
             BigBedRaw::Remote(b) => {
                 let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
@@ -664,6 +671,7 @@ impl BigBedRead {
                 };
                 Ok(val)
             }
+            #[cfg(feature = "remote")]
             BigBedRaw::Remote(b) => {
                 let val = match chrom {
                     Some(chrom) => b
@@ -1034,6 +1042,7 @@ fn open_path_or_url(
                         }
                     }
                 } else {
+                    #[cfg(feature = "remote")]
                     match BigWigReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
                         Ok(bwr) => BigWigRead {
                             bigwig: BigWigRaw::Remote(bwr.cached()),
@@ -1044,6 +1053,13 @@ fn open_path_or_url(
                                 "Error opening bigWig."
                             )))
                         }
+                    }
+
+                    #[cfg(not(feature = "remote"))]
+                    {
+                        return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            "Builtin support for remote files is not supported on this platform."
+                        )));
                     }
                 }
             }
@@ -1061,6 +1077,7 @@ fn open_path_or_url(
                         }
                     }
                 } else {
+                    #[cfg(feature = "remote")]
                     match BigBedReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
                         Ok(bwr) => BigBedRead {
                             bigbed: BigBedRaw::Remote(bwr.cached()),
@@ -1071,6 +1088,13 @@ fn open_path_or_url(
                                 "Error opening bigBed."
                             )))
                         }
+                    }
+
+                    #[cfg(not(feature = "remote"))]
+                    {
+                        return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            "Builtin support for remote files is not supported on this platform."
+                        )));
                     }
                 }
             }
@@ -1172,15 +1196,27 @@ fn bigWigAverageOverBed(
 
                 BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
             } else {
-                let read = BigWigReadRaw::open(RemoteFile::new(&bigwig))
-                    .map_err(|_| {
-                        PyErr::new::<exceptions::PyException, _>(format!("Error opening bigBed."))
-                    })?
-                    .cached();
-                let bedin = BufReader::new(File::open(bed)?);
-                let iter = Box::new(bigwig_average_over_bed(bedin, read, name));
+                #[cfg(feature = "remote")]
+                {
+                    let read = BigWigReadRaw::open(RemoteFile::new(&bigwig))
+                        .map_err(|_| {
+                            PyErr::new::<exceptions::PyException, _>(format!(
+                                "Error opening bigBed."
+                            ))
+                        })?
+                        .cached();
+                    let bedin = BufReader::new(File::open(bed)?);
+                    let iter = Box::new(bigwig_average_over_bed(bedin, read, name));
 
-                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+                    BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+                }
+
+                #[cfg(not(feature = "remote"))]
+                {
+                    return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                        "Builtin support for remote files is not available on this platform."
+                    )));
+                }
             }
         }
         _ => {

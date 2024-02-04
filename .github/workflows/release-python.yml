@@ -32,7 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64, x86, aarch64]
+        target: [
+          { target: x86_64, remote: true },
+          #{ target: x86, remote: false },
+          { target: aarch64, remote: true},
+        ]
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
@@ -41,10 +45,10 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
-          sccache: 'true'
-          manylinux: auto
+          target: ${{ matrix.target.target }}
+          args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml --no-default-features ${{ matrix.target.remote && '--features remote' || '' }}
+          #sccache: 'true'
+          manylinux: '2_28'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
@@ -69,7 +73,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
-          sccache: 'true'
+          #sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
@@ -93,7 +97,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
-          sccache: 'true'
+          #sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v3
         with:
