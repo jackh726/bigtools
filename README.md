@@ -1,8 +1,12 @@
 # Bigtools <a href="https://github.com/jackh726/bigtools"><img align="right" src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-logo.svg" height="38"></img></a>
 
 [![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
-[![Rust Docs](https://docs.rs/bigtools/badge.svg)](https://docs.rs/bigtools)
+[![PyPI](https://img.shields.io/pypi/v/pybigtools?color=green)](https://pypi.org/project/pybigtools/)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/jackh726/bigtools/blob/master/LICENSE)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
+
+[![Rust Docs](https://img.shields.io/docsrs/bigtools/latest?label=docs.rs)](https://docs.rs/bigtools)
+[![Python Docs](https://img.shields.io/readthedocs/bigtools/latest?label=docs|rtd)](https://bigtools.readthedocs.io/)
 
 Bigtools is a library and associated tools for reading and writing bigwig and bigbed files.
 
