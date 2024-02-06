@@ -21,7 +21,7 @@ Bigtools uses `async/await` internally to allow for efficient, multi-core comput
 
 ### Extensible
 
-Bigtools is designed to be as modular as possible. This, in addition to the safety and reliability of Rust, allows both flexibility and correctness as a library. In addition, its extremely easy to quickly create new tools or binaries.. (TODO: mention python wrapper)
+Bigtools is designed to be as modular as possible. This, in addition to the safety and reliability of Rust, allows both flexibility and correctness as a library. In addition, its extremely easy to quickly create new tools or binaries. A number of binaries are available that parallel related existing binaries from [UCSC](https://hgdownload.soe.ucsc.edu/admin/exe/), with drop-in compatibility for the most common flags.
 
 ### Modern
 
@@ -45,17 +45,35 @@ for interval in chr1 {
 
 ## Binaries
 
-TODO
+The following binaries are available:
+
+|binary|description|
+| ---- | ----- |
+|bigtools|Provides access to multiple subcommands, including all below|
+|bedgraphtobigwig|Writes a bigWig from a given bedGraph file|
+|bedtobigbed|Writes a bigBed from a given bed file|
+|bigbedinfo|Shows info about a provided bigBed|
+|bigbedtobed|Writes a bed from the data in a bigBed|
+|bigwigaverageoverbed|Calculate statistics over the regions of a bed file using values from a bigWig|
+|bigwiginfo|Shows info about a provided bigWig|
+|bigwigmerge|Merges multiple bigWigs, outputting to either a new bigWig or a bedGraph|
+|bigwigtobedgraph|Writes a bedGraph from the data in a bigWig|
+|bigwigvaluesoverbed|Get the per-base values from a bigWig over the regions of a bed file using values|
+
+Renaming the `bigtools` binary to any of the subcommands (case-insensitive) allows you to run that subcommand directly.
 
 ## Python wrapper
+
+Also included in this repo is a Python wrapper, `pybigtools` written using [`PyO3`](https://pyo3.rs/).
 
 See the `pybigtools` 🐍 [API Documentation](https://bigtools.readthedocs.io/en/latest).
 
 ## Benchmarks
 [Benchmarks]: #Benchmarks
 
-Benchmarks are included in the `./bench` directory. The require `python` to run.
+Benchmarks are included in the `./bench` directory. They require `python` to run.
 
 Multiple tools are compared against the comparable UCSC tools. For completeness, both single-threaded and multi-threaded (when available) benchmarks are included.
 
-TODO: include image of benchmarks
+<img src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-bench.png"></img></a>
+
