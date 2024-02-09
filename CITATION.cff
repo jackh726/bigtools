@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+type: software
+title: Bigtools
+license: MIT
+repository-code: 'https://github.com/jackh726/bigtools'
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+authors:
+  - given-names: Jack
+    family-names: Huey
+    orcid: "https://orcid.org/0000-0003-3463-7192"
+abstract: >-
+  Bigtools is a performant, extensible, and modern library for reading and writing BigWig and BigBed genomic data files, written in Rust. It also includes executable binaries for the command line as well as Python bindings.
+keywords:
+  - bigwig
+  - bigbed
+  - bbi
+  - bioinformatics
+  - genomics
+  - kent
+  - ucsc
+  - rust
+  - python
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.10606493
+    description: Zenodo
+  - type: doi
+    value: 10.1101/2024.02.06.579187
+    description: bioRxiv
+preferred-citation:
+  type: article
+  title: "Bigtools: a high-performance BigWig and BigBed library in Rust"
+  authors:
+  - given-names: Jack
+    family-names: Huey
+    orcid: "https://orcid.org/0000-0003-3463-7192"
+  - given-names: Nezar
+    family-names: Abdennur
+    orcid: "https://orcid.org/0000-0001-5814-0864"
+  journal: bioRxiv
+  year: 2024
+  doi: "10.1101/2024.02.06.579187"
