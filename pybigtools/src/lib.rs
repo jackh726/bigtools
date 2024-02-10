@@ -21,7 +21,7 @@ use bigtools::{BBIReadError, ZoomRecord};
 use bigtools::utils::reopen::Reopen;
 use file_like::PyFileLikeObject;
 use numpy::IntoPyArray;
-use pyo3::exceptions;
+use pyo3::exceptions::{self, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyString, PyTuple};
 use pyo3::wrap_pyfunction;
@@ -499,15 +499,14 @@ impl BigWigWrite {
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
         struct IterError(String);
         struct Iter {
-            inner: Py<PyAny>,
+            inner: PyObject,
         }
         impl Iterator for Iter {
             type Item = Result<(String, Value), IterError>;
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
                 Python::with_gil(|py| {
-                    let inner_obj: PyObject = (&self.inner).into_py(py);
-                    let mut iter = match PyIterator::from_object(py, &inner_obj) {
+                    let mut iter: &PyIterator = match self.inner.downcast(py) {
                         Ok(o) => o,
                         Err(_) => {
                             return Some(Err(IterError(format!(
@@ -567,18 +566,25 @@ impl BigWigWrite {
                 })
             }
         }
-        py.allow_threads(|| {
-            let vals_iter_raw = Iter { inner: vals }.map(|v| match v {
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
-                Ok(v) => Ok(v),
-            });
-            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, true);
-            match bigwig.write(chrom_map, chsi, runtime) {
-                Err(e) => println!("{}", e),
-                Ok(_) => {}
+        let iter = Python::with_gil(|py| {
+            let inner_obj: PyObject = vals.into_py(py);
+            match PyIterator::from_object(py, &inner_obj) {
+                Ok(iter) => Ok(iter.to_object(py)),
+                Err(_) => Err(PyTypeError::new_err(
+                    "Passed value for `val` is not iterable.",
+                )),
             }
+        })?;
+        let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+            Ok(v) => Ok(v),
         });
+        let vals_iter = BedParser::wrap_iter(vals_iter_raw);
+        let chsi = BedParserStreamingIterator::new(vals_iter, true);
+        match bigwig.write(chrom_map, chsi, runtime) {
+            Err(e) => println!("{}", e),
+            Ok(_) => {}
+        }
         Ok(())
     }
 
@@ -769,15 +775,14 @@ impl BigBedWrite {
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
         struct IterError(String);
         struct Iter {
-            inner: Py<PyAny>,
+            inner: PyObject,
         }
         impl Iterator for Iter {
             type Item = Result<(String, BedEntry), IterError>;
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
                 Python::with_gil(|py| {
-                    let inner_obj: PyObject = (&self.inner).into_py(py);
-                    let mut iter = match PyIterator::from_object(py, &inner_obj) {
+                    let mut iter: &PyIterator = match self.inner.downcast(py) {
                         Ok(o) => o,
                         Err(_) => {
                             return Some(Err(IterError(format!(
@@ -838,18 +843,27 @@ impl BigBedWrite {
                 })
             }
         }
-        py.allow_threads(|| {
-            let vals_iter_raw = Iter { inner: vals }.map(|v| match v {
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
-                Ok(v) => Ok(v),
-            });
-            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, true);
-            match bigbed.write(chrom_map, chsi, runtime) {
-                Err(e) => println!("{}", e),
-                Ok(_) => {}
+        let iter = Python::with_gil(|py| {
+            let inner_obj: PyObject = vals.into_py(py);
+            match PyIterator::from_object(py, &inner_obj) {
+                Ok(iter) => Ok(iter.to_object(py)),
+                Err(_) => Err(PyTypeError::new_err(
+                    "Passed value for `val` is not iterable.",
+                )),
             }
+        })?;
+        let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+            Ok(v) => Ok(v),
         });
+        let vals_iter = BedParser::wrap_iter(vals_iter_raw);
+        let chsi = BedParserStreamingIterator::new(vals_iter, true);
+        match bigbed.write(chrom_map, chsi, runtime) {
+            Err(e) => {
+                println!("{}", e)
+            }
+            Ok(_) => {}
+        }
         Ok(())
     }
 
