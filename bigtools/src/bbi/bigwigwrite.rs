@@ -41,6 +41,7 @@ out.write(chrom_map, vals, runtime)?;
 ```
 */
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufWriter, Write};
@@ -85,7 +86,9 @@ impl BigWigWrite {
         }
     }
 
-    fn write_pre<E>(file: &mut BufWriter<File>) -> Result<(u64, u64, u64), ProcessChromError<E>> {
+    fn write_pre<E: Error>(
+        file: &mut BufWriter<File>,
+    ) -> Result<(u64, u64, u64), ProcessChromError<E>> {
         write_blank_headers(file)?;
 
         let total_summary_offset = file.tell()?;
@@ -105,7 +108,7 @@ impl BigWigWrite {
         Ok((total_summary_offset, full_data_offset, pre_data))
     }
 
-    fn write_mid<E>(
+    fn write_mid<E: Error>(
         file: &mut BufWriter<File>,
         pre_data: u64,
         raw_sections_iter: impl Iterator<Item = Section>,

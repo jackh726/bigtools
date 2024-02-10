@@ -573,7 +573,7 @@ impl BigWigWrite {
                 Ok(v) => Ok(v),
             });
             let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, false);
+            let chsi = BedParserStreamingIterator::new(vals_iter, true);
             match bigwig.write(chrom_map, chsi, runtime) {
                 Err(e) => println!("{}", e),
                 Ok(_) => {}
@@ -844,7 +844,7 @@ impl BigBedWrite {
                 Ok(v) => Ok(v),
             });
             let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, false);
+            let chsi = BedParserStreamingIterator::new(vals_iter, true);
             match bigbed.write(chrom_map, chsi, runtime) {
                 Err(e) => println!("{}", e),
                 Ok(_) => {}

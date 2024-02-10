@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::iter::Flatten;
@@ -108,18 +109,18 @@ impl Default for BBIWriteOptions {
 
 /// Possible errors encountered when processing a chromosome when writing a bbi file
 #[derive(Error, Debug)]
-pub enum ProcessChromError<SourceError> {
+pub enum ProcessChromError<SourceError: Error> {
     #[error("{}", .0)]
     InvalidInput(String),
     #[error("{}", .0)]
     InvalidChromosome(String),
     #[error("{}", .0)]
     IoError(#[from] io::Error),
-    #[error("SourceError")]
+    #[error("{}", .0)]
     SourceError(SourceError),
 }
 
-pub(crate) struct TempZoomInfo<SourceError> {
+pub(crate) struct TempZoomInfo<SourceError: Error> {
     pub resolution: u32,
     pub data_write_future: Box<
         dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
@@ -144,7 +145,7 @@ pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn write_info<T>(
+pub(crate) fn write_info<Err: Error>(
     file: &mut BufWriter<File>,
     magic: u32,
     num_zooms: u16,
@@ -159,7 +160,7 @@ pub(crate) fn write_info<T>(
     zoom_entries: Vec<ZoomHeader>,
     summary: Summary,
     data_count: u64,
-) -> Result<(), ProcessChromError<T>> {
+) -> Result<(), ProcessChromError<Err>> {
     file.seek(SeekFrom::Start(0))?;
     file.write_u32::<NativeEndian>(magic)?;
     file.write_u16::<NativeEndian>(4)?;
@@ -596,10 +597,10 @@ type DataWithoutzooms<Error> = (
     futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
 );
 
-async fn write_chroms_with_zooms<Error: Send + 'static>(
+async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
     mut file: BufWriter<File>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
-    mut receiver: futures_mpsc::UnboundedReceiver<Data<Error>>,
+    mut receiver: futures_mpsc::UnboundedReceiver<Data<Err>>,
 ) -> Result<
     (
         BufWriter<File>,
@@ -607,7 +608,7 @@ async fn write_chroms_with_zooms<Error: Send + 'static>(
         Vec<crossbeam_channel::IntoIter<Section>>,
         BTreeMap<u32, ZoomValue>,
     ),
-    ProcessChromError<Error>,
+    ProcessChromError<Err>,
 > {
     let mut section_iter = vec![];
     let mut max_uncompressed_buf_size = 0;
@@ -659,16 +660,16 @@ async fn write_chroms_with_zooms<Error: Send + 'static>(
     Ok((file, max_uncompressed_buf_size, section_iter, zooms_map))
 }
 
-async fn write_chroms_without_zooms<Error: Send + 'static>(
+async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
     mut file: BufWriter<File>,
-    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms<Error>>,
+    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms<Err>>,
 ) -> Result<
     (
         BufWriter<File>,
         usize,
         Vec<crossbeam_channel::IntoIter<Section>>,
     ),
-    ProcessChromError<Error>,
+    ProcessChromError<Err>,
 > {
     let mut section_iter = vec![];
     let mut max_uncompressed_buf_size = 0;
@@ -1046,7 +1047,7 @@ pub(crate) fn write_zoom_vals<
         Option<TempFileBufferWriter<BufWriter<File>>>,
     );
 
-    pub(crate) struct TempZoomInfo<SourceError> {
+    pub(crate) struct TempZoomInfo<SourceError: Error> {
         pub resolution: u32,
         pub data_write_future: Box<
             dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>>
@@ -1243,7 +1244,7 @@ pub(crate) fn write_zoom_vals<
     Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
-async fn write_data<W: Write, SourceError: Send>(
+async fn write_data<W: Write, SourceError: Error + Send>(
     mut data_file: W,
     section_sender: crossbeam_channel::Sender<Section>,
     mut frx: futures_mpsc::Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
@@ -1271,7 +1272,7 @@ async fn write_data<W: Write, SourceError: Send>(
     Ok((total, max_uncompressed_buf_size))
 }
 
-pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
+pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'static>(
     channel_size: usize,
     runtime: &Handle,
     inmemory: bool,
@@ -1279,7 +1280,7 @@ pub(crate) fn future_channel<Error: Send + 'static, R: Write + Send + 'static>(
     futures_mpsc::Sender<
         Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
     >,
-    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
+    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Err>>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,
 ) {
