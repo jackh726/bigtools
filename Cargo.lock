@@ -109,7 +109,7 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "bigtools"
-version = "0.4.2-dev"
+version = "0.4.2"
 dependencies = [
  "attohttpc",
  "bincode",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "pybigtools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigtools",
  "futures",
