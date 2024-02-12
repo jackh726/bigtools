@@ -1,12 +1,15 @@
 # Bigtools <a href="https://github.com/jackh726/bigtools"><img align="right" src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-logo.svg" height="38"></img></a>
 
-[![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
-[![PyPI](https://img.shields.io/pypi/v/pybigtools?color=green)](https://pypi.org/project/pybigtools/)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/jackh726/bigtools/blob/master/LICENSE)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
 
+[![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
 [![Rust Docs](https://img.shields.io/docsrs/bigtools/latest?label=docs.rs)](https://docs.rs/bigtools)
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/bigtools/badges/version.svg)](https://anaconda.org/bioconda/bigtools)
+
+[![PyPI](https://img.shields.io/pypi/v/pybigtools?color=green)](https://pypi.org/project/pybigtools/)
 [![Python Docs](https://img.shields.io/readthedocs/bigtools/latest?label=docs|rtd)](https://bigtools.readthedocs.io/)
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/pybigtools/badges/version.svg)](https://anaconda.org/bioconda/pybigtools)
 
 Bigtools is a library and associated tools for reading and writing bigwig and bigbed files.
 
@@ -62,18 +65,25 @@ The following binaries are available:
 
 Renaming the `bigtools` binary to any of the subcommands (case-insensitive) allows you to run that subcommand directly.
 
+The `bigtools` CLI binaries can be installed through `crates.io` (`cargo install bigtools`) or [`conda`](https://anaconda.org/bioconda/bigtools/). Additionally, pre-built binaries can be downloaded through [Github releases](https://github.com/jackh726/bigtools/releases).
+
 ## Python wrapper
 
 Also included in this repo is a Python wrapper, `pybigtools` written using [`PyO3`](https://pyo3.rs/).
 
 See the `pybigtools` 🐍 [API Documentation](https://bigtools.readthedocs.io/en/latest).
 
+The `pybigtools` package can be used as a dpendency either through [pypi](https://pypi.org/project/pybigtools/) or [conda](https://anaconda.org/bioconda/pybigtools/).
+
 ## Benchmarks
 [Benchmarks]: #Benchmarks
 
 Benchmarks are included in the `./bench` directory. They require `python` to run.
 
-Multiple tools are compared against the comparable UCSC tools. For completeness, both single-threaded and multi-threaded (when available) benchmarks are included.
+Multiple tools are compared against the comparable UCSC tools. For completeness, both single-threaded and multi-threaded (when available) benchmarks are included. Multiple different configuration options are benchmarked across multiple replicates, but a summar is available in the table below:
 
 <img src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-bench.png"></img></a>
 
+## How to cite
+
+This repository contains contains a `CITATION.cff` file with citation information. Github allows you to get a citation in either APA or BibTeX format; this is available in "Cite this repository" under About.

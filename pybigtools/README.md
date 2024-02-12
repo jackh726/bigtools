@@ -1,8 +1,8 @@
-To build and install in a local virtualenv run
-```
-maturin build --release
-pip install -I target/wheels/pybigtools-0.1.0-cp311-cp311-manylinux_2_28_x86_64.whl
-```
+The `pybigtools` python package wraps the `bigtools` Rust library and allows effecient reading and writing of bigWig and bigBed files.
+
+## Documenation
+
+Documentation is available on [readthedocs](https://bigtools.readthedocs.io/en/latest/pybigtools.html).
 
 ## Examples
 
@@ -26,7 +26,7 @@ a = b.values("chr1")
 print(a.shape)
 ```
 
-## Open a file-like object
+### Open a file-like object
 
 ```python
 import pybigtools
@@ -34,8 +34,3 @@ b = pybigtools.open(open(<path>, 'rb'))
 a = b.values("chr1")
 print(a.shape)
 ```
-
-## Documenation
-To generate documenation install pdoc3 with `pip install pdoc3`.
-Then make sure you have pybigtools install as above.
-Then run `pdoc3 --html --force pybigtools`.
