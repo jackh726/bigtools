@@ -13,10 +13,10 @@ use bigtools::utils::misc::{
     bigwig_average_over_bed, BigWigAverageOverBedEntry, BigWigAverageOverBedError, Name,
 };
 use bigtools::{
-    BBIRead, BedEntry, BigBedRead as BigBedReadRaw, BigBedWrite as BigBedWriteRaw,
+    BBIReadError, BedEntry, BigBedRead as BigBedReadRaw, BigBedWrite as BigBedWriteRaw,
     BigWigRead as BigWigReadRaw, BigWigWrite as BigWigWriteRaw, CachedBBIFileRead, Value,
+    ZoomRecord,
 };
-use bigtools::{BBIReadError, ZoomRecord};
 
 use bigtools::utils::reopen::Reopen;
 use file_like::PyFileLikeObject;
@@ -34,13 +34,13 @@ mod file_like;
 type ValueTuple = (u32, u32, f32);
 type BedEntryTuple = (u32, u32, String);
 
-fn start_end<B: BBIRead>(
-    bigwig: &B,
+fn start_end<B: BBIFile>(
+    bbi: &B,
     chrom_name: &str,
     start: Option<u32>,
     end: Option<u32>,
 ) -> PyResult<(u32, u32)> {
-    let chrom = bigwig.chroms().into_iter().find(|x| x.name == chrom_name);
+    let chrom = bbi.chroms().into_iter().find(|x| x.name == chrom_name);
     let length = match chrom {
         None => {
             return Err(PyErr::new::<exceptions::PyException, _>(format!(
@@ -56,6 +56,32 @@ fn start_end<B: BBIRead>(
 impl Reopen for PyFileLikeObject {
     fn reopen(&self) -> io::Result<Self> {
         Ok(self.clone())
+    }
+}
+
+trait BBIFile {
+    fn chroms(&self) -> &[bigtools::ChromInfo];
+}
+
+impl BBIFile for BigWigRead {
+    fn chroms(&self) -> &[bigtools::ChromInfo] {
+        match &self.bigwig {
+            BigWigRaw::File(b) => b.chroms(),
+            #[cfg(feature = "remote")]
+            BigWigRaw::Remote(b) => b.chroms(),
+            BigWigRaw::FileLike(b) => b.chroms(),
+        }
+    }
+}
+
+impl BBIFile for BigBedRead {
+    fn chroms(&self) -> &[bigtools::ChromInfo] {
+        match &self.bigbed {
+            BigBedRaw::File(b) => b.chroms(),
+            #[cfg(feature = "remote")]
+            BigBedRaw::Remote(b) => b.chroms(),
+            BigBedRaw::FileLike(b) => b.chroms(),
+        }
     }
 }
 
@@ -89,9 +115,9 @@ impl BigWigRead {
         start: Option<u32>,
         end: Option<u32>,
     ) -> PyResult<IntervalIterator> {
+        let (start, end) = start_end(self, &chrom, start, end)?;
         match &self.bigwig {
             BigWigRaw::File(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(IntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
@@ -99,14 +125,12 @@ impl BigWigRead {
             }
             #[cfg(feature = "remote")]
             BigWigRaw::Remote(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(IntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
                 })
             }
             BigWigRaw::FileLike(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(IntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
@@ -272,9 +296,9 @@ impl BigWigRead {
                 )));
             }
         };
+        let (start, end) = start_end(self, &chrom, start, end)?;
         macro_rules! to_array {
             ($b:ident) => {{
-                let (start, end) = start_end($b, &chrom, start, end)?;
                 match bins {
                     Some(bins) if !exact.unwrap_or(false) => {
                         let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
@@ -630,9 +654,9 @@ impl BigBedRead {
         start: Option<u32>,
         end: Option<u32>,
     ) -> PyResult<EntriesIterator> {
+        let (start, end) = start_end(self, &chrom, start, end)?;
         match &mut self.bigbed {
             BigBedRaw::File(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(EntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
@@ -640,14 +664,12 @@ impl BigBedRead {
             }
             #[cfg(feature = "remote")]
             BigBedRaw::Remote(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(EntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
                 })
             }
             BigBedRaw::FileLike(b) => {
-                let (start, end) = start_end(b, &chrom, start, end)?;
                 let b = b.reopen()?;
                 Ok(EntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
