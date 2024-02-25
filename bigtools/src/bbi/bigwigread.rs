@@ -200,11 +200,7 @@ impl BigWigRead<ReopenableFile> {
             path: path.to_string(),
             file: File::open(path)?,
         };
-        let b = BigWigRead::open(reopen);
-        if b.is_err() {
-            eprintln!("Error when opening: {}", path);
-        }
-        b
+        BigWigRead::open(reopen)
     }
 }
 
