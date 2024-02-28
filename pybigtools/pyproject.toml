@@ -2,12 +2,19 @@
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
-[tools.maturin]
+[tool.maturin]
 bindings = "cffi"
 compatibility = "linux"
 
 [project]
 name = "pybigtools"
+description = "Python bindings to the Bigtools Rust library for high-performance BigWig and BigBed I/O"
+license = { text = "MIT" }
 dependencies = [
     "numpy"
 ]
+
+[project.urls]
+homepage = "https://github.com/jackh726/bigtools"
+documentation = "https://bigtools.readthedocs.io"
+repository = "https://github.com/jackh726/bigtools"
