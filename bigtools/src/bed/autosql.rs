@@ -356,6 +356,62 @@ pub mod parse {
         pub auto: bool,
     }
 
+    impl DeclareName {
+        fn parse(parser: &mut parser::Parser<'_>) -> Result<Self, ParseError> {
+            let declare_name = parser.eat_word();
+            if !declare_name.chars().next().unwrap_or(' ').is_alphabetic()
+                || declare_name.chars().any(|c| !c.is_alphanumeric())
+            {
+                return Err(ParseError::InvalidDeclareName(declare_name.to_string()));
+            }
+            let declare_name = declare_name.to_string();
+
+            let next_word = parser.peek_word();
+            let index_type = match next_word {
+                "primary" => {
+                    parser.eat_word();
+                    Some(IndexType::Primary)
+                }
+                "index" => {
+                    parser.eat_word();
+
+                    let next = parser.peek_one();
+                    let size = if next == "[" {
+                        parser.eat_one();
+                        let size = parser.eat_word().to_string();
+                        let close = parser.eat_one();
+                        if close != "]" {
+                            return Err(ParseError::InvalidIndexSizeBrackets(close.to_string()));
+                        }
+                        Some(size)
+                    } else {
+                        None
+                    };
+                    Some(IndexType::Index(size))
+                }
+                "unique" => {
+                    parser.eat_word();
+                    Some(IndexType::Unique)
+                }
+                "auto" => None,
+                _ => None,
+            };
+
+            let next_word = parser.peek_word();
+            let auto = if next_word == "auto" {
+                parser.eat_word();
+                true
+            } else {
+                false
+            };
+            Ok(DeclareName {
+                name: declare_name,
+                index_type,
+                auto,
+            })
+        }
+    }
+
     #[derive(Clone, Debug)]
     pub struct Declaration {
         pub declaration_type: DeclarationType,
@@ -445,7 +501,7 @@ pub mod parse {
                 }
                 "simple" => {
                     parser.take();
-                    let declare_name = parse_declare_name(parser)?;
+                    let declare_name = DeclareName::parse(parser)?;
                     return Ok(Some(FieldType::Declaration(
                         DeclarationType::Simple,
                         declare_name,
@@ -453,7 +509,7 @@ pub mod parse {
                 }
                 "object" => {
                     parser.take();
-                    let declare_name = parse_declare_name(parser)?;
+                    let declare_name = DeclareName::parse(parser)?;
                     return Ok(Some(FieldType::Declaration(
                         DeclarationType::Object,
                         declare_name,
@@ -461,7 +517,7 @@ pub mod parse {
                 }
                 "table" => {
                     parser.take();
-                    let declare_name = parse_declare_name(parser)?;
+                    let declare_name = DeclareName::parse(parser)?;
                     return Ok(Some(FieldType::Declaration(
                         DeclarationType::Object,
                         declare_name,
@@ -471,6 +527,46 @@ pub mod parse {
             };
             parser.take();
             return Ok(Some(field_type));
+        }
+
+        /// This is currently incomplete when printing `simple`, `table`, and `object`.
+        pub fn to_string(&self) -> String {
+            match self {
+                FieldType::Int => "int".to_string(),
+                FieldType::Uint => "uint".to_string(),
+                FieldType::Short => "short".to_string(),
+                FieldType::Ushort => "ushort".to_string(),
+                FieldType::Byte => "byte".to_string(),
+                FieldType::Ubyte => "ubyte".to_string(),
+                FieldType::Float => "float".to_string(),
+                FieldType::Double => "double".to_string(),
+                FieldType::Char => "char".to_string(),
+                FieldType::String => "string".to_string(),
+                FieldType::Lstring => "lstring".to_string(),
+                FieldType::Bigint => "bigint".to_string(),
+                FieldType::Enum(values) => {
+                    let mut e = "enum(".to_string();
+                    for v in values {
+                        e.push_str(v)
+                    }
+                    e.push(')');
+                    e
+                }
+                FieldType::Set(values) => {
+                    let mut e = "set(".to_string();
+                    for v in values {
+                        e.push_str(v)
+                    }
+                    e.push(')');
+                    e
+                }
+                FieldType::Declaration(decl_type, _decl_name) => match decl_type {
+                    DeclarationType::Simple => "simple ...",
+                    DeclarationType::Object => "object ...",
+                    DeclarationType::Table => "table ...",
+                }
+                .to_string(),
+            }
         }
     }
 
@@ -523,7 +619,7 @@ pub mod parse {
             _ => return Err(ParseError::InvalidDeclareType(declare_type.to_string())),
         };
 
-        let declare_name = parse_declare_name(parser)?;
+        let declare_name = DeclareName::parse(parser)?;
 
         let comment = parser.eat_quoted_string().to_string();
 
@@ -551,60 +647,6 @@ pub mod parse {
             comment,
             fields,
         }))
-    }
-
-    fn parse_declare_name(parser: &mut parser::Parser<'_>) -> Result<DeclareName, ParseError> {
-        let declare_name = parser.eat_word();
-        if !declare_name.chars().next().unwrap_or(' ').is_alphabetic()
-            || declare_name.chars().any(|c| !c.is_alphanumeric())
-        {
-            return Err(ParseError::InvalidDeclareName(declare_name.to_string()));
-        }
-        let declare_name = declare_name.to_string();
-
-        let next_word = parser.peek_word();
-        let index_type = match next_word {
-            "primary" => {
-                parser.eat_word();
-                Some(IndexType::Primary)
-            }
-            "index" => {
-                parser.eat_word();
-
-                let next = parser.peek_one();
-                let size = if next == "[" {
-                    parser.eat_one();
-                    let size = parser.eat_word().to_string();
-                    let close = parser.eat_one();
-                    if close != "]" {
-                        return Err(ParseError::InvalidIndexSizeBrackets(close.to_string()));
-                    }
-                    Some(size)
-                } else {
-                    None
-                };
-                Some(IndexType::Index(size))
-            }
-            "unique" => {
-                parser.eat_word();
-                Some(IndexType::Unique)
-            }
-            "auto" => None,
-            _ => None,
-        };
-
-        let next_word = parser.peek_word();
-        let auto = if next_word == "auto" {
-            parser.eat_word();
-            true
-        } else {
-            false
-        };
-        Ok(DeclareName {
-            name: declare_name,
-            index_type,
-            auto,
-        })
     }
 
     fn parse_field_list(parser: &mut parser::Parser<'_>) -> Result<Vec<Field>, ParseError> {
