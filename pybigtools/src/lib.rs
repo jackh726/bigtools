@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
 
+use bigtools::bed::autosql::parse::parse_autosql;
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
 #[cfg(feature = "remote")]
@@ -13,9 +14,9 @@ use bigtools::utils::misc::{
     bigwig_average_over_bed, BigWigAverageOverBedEntry, BigWigAverageOverBedError, Name,
 };
 use bigtools::{
-    BBIReadError, BedEntry, BigBedRead as BigBedReadRaw, BigBedWrite as BigBedWriteRaw,
-    BigWigRead as BigWigReadRaw, BigWigWrite as BigWigWriteRaw, CachedBBIFileRead, Value,
-    ZoomRecord,
+    BBIFileRead, BBIReadError, BedEntry, BigBedRead as BigBedReadRaw,
+    BigBedWrite as BigBedWriteRaw, BigWigRead as BigWigReadRaw, BigWigWrite as BigWigWriteRaw,
+    CachedBBIFileRead, Value, ZoomRecord,
 };
 
 use bigtools::utils::reopen::Reopen;
@@ -34,13 +35,23 @@ mod file_like;
 type ValueTuple = (u32, u32, f32);
 type BedEntryTuple = (u32, u32, String);
 
-fn start_end<B: BBIFile>(
-    bbi: &B,
+fn start_end(
+    bbi: &BBIReadRaw,
     chrom_name: &str,
     start: Option<u32>,
     end: Option<u32>,
 ) -> PyResult<(u32, u32)> {
-    let chrom = bbi.chroms().into_iter().find(|x| x.name == chrom_name);
+    let chroms = match &bbi {
+        BBIReadRaw::BigWigFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigWigRemote(b) => b.chroms(),
+        BBIReadRaw::BigWigFileLike(b) => b.chroms(),
+        BBIReadRaw::BigBedFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigBedRemote(b) => b.chroms(),
+        BBIReadRaw::BigBedFileLike(b) => b.chroms(),
+    };
+    let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
     let length = match chrom {
         None => {
             return Err(PyErr::new::<exceptions::PyException, _>(format!(
@@ -59,88 +70,175 @@ impl Reopen for PyFileLikeObject {
     }
 }
 
-trait BBIFile {
-    fn chroms(&self) -> &[bigtools::ChromInfo];
-}
-
-impl BBIFile for BigWigRead {
-    fn chroms(&self) -> &[bigtools::ChromInfo] {
-        match &self.bigwig {
-            BigWigRaw::File(b) => b.chroms(),
-            #[cfg(feature = "remote")]
-            BigWigRaw::Remote(b) => b.chroms(),
-            BigWigRaw::FileLike(b) => b.chroms(),
-        }
-    }
-}
-
-impl BBIFile for BigBedRead {
-    fn chroms(&self) -> &[bigtools::ChromInfo] {
-        match &self.bigbed {
-            BigBedRaw::File(b) => b.chroms(),
-            #[cfg(feature = "remote")]
-            BigBedRaw::Remote(b) => b.chroms(),
-            BigBedRaw::FileLike(b) => b.chroms(),
-        }
-    }
-}
-
-enum BigWigRaw {
-    File(BigWigReadRaw<CachedBBIFileRead<ReopenableFile>>),
+enum BBIReadRaw {
+    BigWigFile(BigWigReadRaw<CachedBBIFileRead<ReopenableFile>>),
     #[cfg(feature = "remote")]
-    Remote(BigWigReadRaw<CachedBBIFileRead<RemoteFile>>),
-    FileLike(BigWigReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
+    BigWigRemote(BigWigReadRaw<CachedBBIFileRead<RemoteFile>>),
+    BigWigFileLike(BigWigReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
+    BigBedFile(BigBedReadRaw<CachedBBIFileRead<ReopenableFile>>),
+    #[cfg(feature = "remote")]
+    BigBedRemote(BigBedReadRaw<CachedBBIFileRead<RemoteFile>>),
+    BigBedFileLike(BigBedReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
 }
 
-/// This class is the interface for reading a bigWig.
+/// This class is the interface for reading a bigWig or bigBed.
 #[pyclass(module = "pybigtools")]
-struct BigWigRead {
-    bigwig: BigWigRaw,
+struct BBIRead {
+    bbi: BBIReadRaw,
 }
 
 #[pymethods]
-impl BigWigRead {
-    /// Returns the intervals of a given range on a chromosome. The result is an iterator of (int, int, float) in the format (start, end, value).
-    /// The intervals may not be contiguous if the values in the bigwig are not.  
+impl BBIRead {
+    /// Returns the autosql of this bbi file.
+    ///
+    /// For bigBeds, this comes directly from the autosql stored in the file.
+    /// For bigWigs, the autosql returned matches that of a bedGraph file.
+    ///
+    /// By default, the autosql is returned as a string. Passing `parse = true`
+    /// returns instead a dictionary of the format:
+    /// ```
+    /// {
+    ///   "name": <declared name>,
+    ///   "comment": <declaration coment>,
+    ///   "fields": [(<field name>, <field type>, <field comment>), ...],
+    /// }
+    /// ```
+    fn sql(&mut self, py: Python, parse: Option<bool>) -> PyResult<PyObject> {
+        let parse = parse.unwrap_or(false);
+        pub const BEDGRAPH: &str = r#"
+            table bedGraph
+            "bedGraph file"
+            (
+                string chrom;        "Reference sequence chromosome or scaffold"
+                uint   chromStart;   "Start position in chromosome"
+                uint   chromEnd;     "End position in chromosome"
+                float  value;        "Value for a given interval"
+            )
+            "#;
+        let schema = match &mut self.bbi {
+            BBIReadRaw::BigWigFile(_)
+            | BBIReadRaw::BigWigRemote(_)
+            | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
+            BBIReadRaw::BigBedFile(b) => b
+                .autosql()
+                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+            BBIReadRaw::BigBedRemote(b) => b
+                .autosql()
+                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+            BBIReadRaw::BigBedFileLike(b) => b
+                .autosql()
+                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+        };
+        let obj = if parse {
+            let mut declarations = parse_autosql(&schema).map_err(|_| {
+                PyErr::new::<exceptions::PyException, _>("Unable to parse autosql.")
+            })?;
+            if declarations.len() > 1 {
+                return Err(PyErr::new::<exceptions::PyException, _>(
+                    "Unexpected extra declarations.",
+                ));
+            }
+            let declaration = declarations.pop();
+            match declaration {
+                None => PyDict::new(py).to_object(py),
+                Some(d) => {
+                    let fields = d
+                        .fields
+                        .iter()
+                        .map(|f| (&f.name, f.field_type.to_string(), &f.comment))
+                        .collect::<Vec<_>>()
+                        .to_object(py);
+                    [
+                        ("name", d.name.name.to_object(py)),
+                        ("comment", d.comment.to_object(py)),
+                        ("fields", fields),
+                    ]
+                    .into_py_dict(py)
+                    .to_object(py)
+                }
+            }
+        } else {
+            schema.to_object(py)
+        };
+        Ok(obj)
+    }
+
+    /// Returns the records of a given range on a chromosome.
+    ///
+    /// The result is an iterator of tuples. For bigWigs, these tuples are in
+    /// the format (start: int, end: int, value: float). For bigBeds, these
+    /// tuples are in the format (start: int, end: int, ...), where the "rest"
+    /// fields are split by whitespace.
+    ///
+    /// Missing values in bigWigs will results in non-contiguous records.
     ///
     /// The chrom argument is the name of the chromosome.  
-    /// The start and end arguments denote the range to get values for.  
-    ///  If end is not provided, it defaults to the length of the chromosome.  
-    ///  If start is not provided, it defaults to the beginning of the chromosome.  
-    ///
-    /// This returns an `IntervalIterator`.
-    fn intervals(
+    /// The start and end arguments denote the range to get values for.
+    ///  If end is not provided, it defaults to the length of the chromosome.
+    ///  If start is not provided, it defaults to the beginning of the chromosome.
+    fn records(
         &mut self,
+        py: Python<'_>,
         chrom: String,
         start: Option<u32>,
         end: Option<u32>,
-    ) -> PyResult<IntervalIterator> {
-        let (start, end) = start_end(self, &chrom, start, end)?;
-        match &self.bigwig {
-            BigWigRaw::File(b) => {
+    ) -> PyResult<PyObject> {
+        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        match &self.bbi {
+            BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
-                Ok(IntervalIterator {
+                Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
+                }
+                .into_py(py))
             }
             #[cfg(feature = "remote")]
-            BigWigRaw::Remote(b) => {
+            BBIReadRaw::BigWigRemote(b) => {
                 let b = b.reopen()?;
-                Ok(IntervalIterator {
+                Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
+                }
+                .into_py(py))
             }
-            BigWigRaw::FileLike(b) => {
+            BBIReadRaw::BigWigFileLike(b) => {
                 let b = b.reopen()?;
-                Ok(IntervalIterator {
+                Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
+                }
+                .into_py(py))
+            }
+            BBIReadRaw::BigBedFile(b) => {
+                let b = b.reopen()?;
+                Ok(BigBedEntriesIterator {
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                }
+                .into_py(py))
+            }
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(b) => {
+                let b = b.reopen()?;
+                Ok(BigBedEntriesIterator {
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                }
+                .into_py(py))
+            }
+            BBIReadRaw::BigBedFileLike(b) => {
+                let b = b.reopen()?;
+                Ok(BigBedEntriesIterator {
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                }
+                .into_py(py))
             }
         }
     }
 
-    /// Returns the values of a given range on a chromosome. The result is an iterator of floats, of length (end - start).  
-    /// If a value does not exist in the bigwig for a specific base, it will be nan.  
+    /// Returns the values of a given range on a chromosome.
+    ///
+    /// For bigWigs, the result is an array of length (end - start).
+    /// If a value does not exist in the bigwig for a specific base, it will be nan.
+    ///
+    /// For bigBeds, the returned array instead represents a pileup of the count
+    /// of intervals overlapping each base.
     ///
     /// The chrom argument is the name of the chromosome.  
     /// The start and end arguments denote the range to get values for.  
@@ -284,6 +382,65 @@ impl BigWigRead {
             }
             Ok(Array::from(v))
         }
+        fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+            start: usize,
+            end: usize,
+            iter: I,
+        ) -> Result<Array1<f64>, BBIReadError> {
+            use numpy::ndarray::Array;
+            let mut v = vec![0.0; end - start];
+            for interval in iter {
+                let interval = interval?;
+                let interval_start = (interval.start as usize) - start;
+                let interval_end = (interval.end as usize) - start;
+                for i in v[interval_start..interval_end].iter_mut() {
+                    *i += 1.0;
+                }
+            }
+            Ok(Array::from(v))
+        }
+        fn to_array_entry_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+            start: usize,
+            end: usize,
+            iter: I,
+            bins: usize,
+        ) -> Result<Array1<f64>, BBIReadError> {
+            use numpy::ndarray::Array;
+            let mut v = vec![0.0; bins];
+            let bin_size = (end - start) as f64 / bins as f64;
+            for interval in iter {
+                let interval = interval?;
+                let interval_start = (interval.start as usize) - start;
+                let interval_end = (interval.end as usize) - start;
+                let bin_start = ((interval_start as f64) / bin_size) as usize;
+                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+                for bin in bin_start..bin_end {
+                    v[bin] += 1.0;
+                }
+            }
+            Ok(Array::from(v))
+        }
+        fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
+            start: usize,
+            end: usize,
+            iter: I,
+            bins: usize,
+        ) -> Result<Array1<f64>, BBIReadError> {
+            use numpy::ndarray::Array;
+            let mut v = vec![0.0; bins];
+            let bin_size = (end - start) as f64 / bins as f64;
+            for interval in iter {
+                let interval = interval?;
+                let interval_start = (interval.start as usize).max(start) - start;
+                let interval_end = (interval.end as usize).min(end) - start;
+                let bin_start = ((interval_start as f64) / bin_size) as usize;
+                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+                for bin in bin_start..bin_end {
+                    v[bin] += interval.summary.total_items as f64;
+                }
+            }
+            Ok(Array::from(v))
+        }
 
         let summary = match summary.as_deref() {
             None => Summary::Mean,
@@ -296,103 +453,205 @@ impl BigWigRead {
                 )));
             }
         };
-        let (start, end) = start_end(self, &chrom, start, end)?;
-        macro_rules! to_array {
-            ($b:ident) => {{
-                match bins {
-                    Some(bins) if !exact.unwrap_or(false) => {
-                        let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
-                        let zoom = ($b)
-                            .info()
-                            .zoom_headers
-                            .iter()
-                            .filter(|z| z.reduction_level <= max_zoom_size)
-                            .min_by_key(|z| max_zoom_size - z.reduction_level);
-                        match zoom {
-                            Some(zoom) => {
-                                let iter = ($b)
-                                    .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
-                                    .map_err(|e| {
-                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                    })?;
-                                Python::with_gil(|py| {
-                                    Ok(to_array_zoom(
-                                        start as usize,
-                                        end as usize,
-                                        iter,
-                                        summary,
-                                        bins,
-                                    )
-                                    .map_err(|e| {
-                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                    })?
-                                    .into_pyarray(py)
-                                    .to_object(py))
-                                })
-                            }
-                            None => {
-                                let iter = ($b).get_interval(&chrom, start, end).map_err(|e| {
+        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        fn intervals_to_array<R: BBIFileRead>(
+            b: &mut BigWigReadRaw<R>,
+            chrom: &str,
+            start: u32,
+            end: u32,
+            bins: Option<usize>,
+            summary: Summary,
+            exact: Option<bool>,
+        ) -> PyResult<PyObject> {
+            match bins {
+                Some(bins) if !exact.unwrap_or(false) => {
+                    let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
+                    let zoom = b
+                        .info()
+                        .zoom_headers
+                        .iter()
+                        .filter(|z| z.reduction_level <= max_zoom_size)
+                        .min_by_key(|z| max_zoom_size - z.reduction_level);
+                    match zoom {
+                        Some(zoom) => {
+                            let iter = b
+                                .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
+                                .map_err(|e| {
                                     PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                                 })?;
-                                Python::with_gil(|py| {
-                                    Ok(to_array_bins(
+                            Python::with_gil(|py| {
+                                Ok(
+                                    to_array_zoom(
                                         start as usize,
                                         end as usize,
                                         iter,
                                         summary,
                                         bins,
                                     )
-                                    .map_err(|e| {
-                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                    })?
-                                    .into_pyarray(py)
-                                    .to_object(py))
-                                })
-                            }
-                        }
-                    }
-                    Some(bins) => {
-                        let iter = ($b).get_interval(&chrom, start, end).map_err(|e| {
-                            PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                        })?;
-                        Python::with_gil(|py| {
-                            Ok(
-                                to_array_bins(start as usize, end as usize, iter, summary, bins)
                                     .map_err(|e| {
                                         PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                                     })?
                                     .into_pyarray(py)
                                     .to_object(py),
-                            )
-                        })
+                                )
+                            })
+                        }
+                        None => {
+                            let iter = b.get_interval(&chrom, start, end).map_err(|e| {
+                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                            })?;
+                            Python::with_gil(|py| {
+                                Ok(
+                                    to_array_bins(
+                                        start as usize,
+                                        end as usize,
+                                        iter,
+                                        summary,
+                                        bins,
+                                    )
+                                    .map_err(|e| {
+                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                                    })?
+                                    .into_pyarray(py)
+                                    .to_object(py),
+                                )
+                            })
+                        }
                     }
-                    _ => {
-                        let iter = ($b).get_interval(&chrom, start, end).map_err(|e| {
-                            PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                        })?;
-                        Python::with_gil(|py| {
-                            Ok(to_array(start as usize, end as usize, iter)
+                }
+                Some(bins) => {
+                    let iter = b
+                        .get_interval(&chrom, start, end)
+                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+                    Python::with_gil(|py| {
+                        Ok(
+                            to_array_bins(start as usize, end as usize, iter, summary, bins)
                                 .map_err(|e| {
                                     PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                                 })?
                                 .into_pyarray(py)
-                                .to_object(py))
-                        })
+                                .to_object(py),
+                        )
+                    })
+                }
+                _ => {
+                    let iter = b
+                        .get_interval(&chrom, start, end)
+                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+                    Python::with_gil(|py| {
+                        Ok(to_array(start as usize, end as usize, iter)
+                            .map_err(|e| {
+                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                            })?
+                            .into_pyarray(py)
+                            .to_object(py))
+                    })
+                }
+            }
+        }
+        fn entries_to_array<R: BBIFileRead>(
+            b: &mut BigBedReadRaw<R>,
+            chrom: &str,
+            start: u32,
+            end: u32,
+            bins: Option<usize>,
+            exact: Option<bool>,
+        ) -> PyResult<PyObject> {
+            match bins {
+                Some(bins) if !exact.unwrap_or(false) => {
+                    let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
+                    let zoom = b
+                        .info()
+                        .zoom_headers
+                        .iter()
+                        .filter(|z| z.reduction_level <= max_zoom_size)
+                        .min_by_key(|z| max_zoom_size - z.reduction_level);
+                    match zoom {
+                        Some(zoom) => {
+                            let iter = b
+                                .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
+                                .map_err(|e| {
+                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                                })?;
+                            Python::with_gil(|py| {
+                                Ok(
+                                    to_entry_array_zoom(start as usize, end as usize, iter, bins)
+                                        .map_err(|e| {
+                                            PyErr::new::<exceptions::PyException, _>(format!(
+                                                "{}",
+                                                e
+                                            ))
+                                        })?
+                                        .into_pyarray(py)
+                                        .to_object(py),
+                                )
+                            })
+                        }
+                        None => {
+                            let iter = b.get_interval(&chrom, start, end).map_err(|e| {
+                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                            })?;
+                            Python::with_gil(|py| {
+                                Ok(
+                                    to_array_entry_bins(start as usize, end as usize, iter, bins)
+                                        .map_err(|e| {
+                                            PyErr::new::<exceptions::PyException, _>(format!(
+                                                "{}",
+                                                e
+                                            ))
+                                        })?
+                                        .into_pyarray(py)
+                                        .to_object(py),
+                                )
+                            })
+                        }
                     }
                 }
-            }};
+                Some(bins) => {
+                    let iter = b
+                        .get_interval(&chrom, start, end)
+                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+                    Python::with_gil(|py| {
+                        Ok(
+                            to_array_entry_bins(start as usize, end as usize, iter, bins)
+                                .map_err(|e| {
+                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                                })?
+                                .into_pyarray(py)
+                                .to_object(py),
+                        )
+                    })
+                }
+                _ => {
+                    let iter = b
+                        .get_interval(&chrom, start, end)
+                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+                    Python::with_gil(|py| {
+                        Ok(to_entry_array(start as usize, end as usize, iter)
+                            .map_err(|e| {
+                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                            })?
+                            .into_pyarray(py)
+                            .to_object(py))
+                    })
+                }
+            }
         }
-        match &mut self.bigwig {
-            BigWigRaw::File(b) => {
-                to_array!(b)
+        match &mut self.bbi {
+            BBIReadRaw::BigWigFile(b) => {
+                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
             }
             #[cfg(feature = "remote")]
-            BigWigRaw::Remote(b) => {
-                to_array!(b)
+            BBIReadRaw::BigWigRemote(b) => {
+                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
             }
-            BigWigRaw::FileLike(b) => {
-                to_array!(b)
+            BBIReadRaw::BigWigFileLike(b) => {
+                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
             }
+            BBIReadRaw::BigBedFile(b) => entries_to_array(b, &chrom, start, end, bins, exact),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(b) => entries_to_array(b, &chrom, start, end, bins, exact),
+            BBIReadRaw::BigBedFileLike(b) => entries_to_array(b, &chrom, start, end, bins, exact),
         }
     }
 
@@ -402,63 +661,37 @@ impl BigWigRead {
     ///  If it is None, then all chroms will be returned.  
     ///  If it is a String, then the length of that chromosome will be returned.  
     ///  If the chromosome doesn't exist, nothing will be returned.  
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Option<PyObject>> {
-        match &self.bigwig {
-            BigWigRaw::File(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
+    fn chroms(&mut self, py: Python, chrom: Option<String>) -> Option<PyObject> {
+        fn get_chrom_obj<B: bigtools::BBIRead>(
+            b: &B,
+            py: Python,
+            chrom: Option<String>,
+        ) -> Option<PyObject> {
+            match chrom {
+                Some(chrom) => b
+                    .chroms()
+                    .into_iter()
+                    .find(|c| c.name == chrom)
+                    .map(|c| c.length)
+                    .map(|c| c.to_object(py)),
+                None => Some(
+                    b.chroms()
                         .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
+                        .map(|c| (c.name.clone(), c.length))
+                        .into_py_dict(py)
+                        .into(),
+                ),
             }
+        }
+        match &self.bbi {
+            BBIReadRaw::BigWigFile(b) => get_chrom_obj(b, py, chrom),
             #[cfg(feature = "remote")]
-            BigWigRaw::Remote(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
-            }
-            BigWigRaw::FileLike(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
-            }
+            BBIReadRaw::BigWigRemote(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigWigFileLike(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigBedFile(b) => get_chrom_obj(b, py, chrom),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
         }
     }
 }
@@ -467,13 +700,13 @@ impl BigWigRead {
 /// It returns only values that exist in the bigWig, skipping
 /// any missing intervals.
 #[pyclass(module = "pybigtools")]
-struct IntervalIterator {
+struct BigWigIntervalIterator {
     iter: Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>,
 }
 
 #[pymethods]
-impl IntervalIterator {
-    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<IntervalIterator>> {
+impl BigWigIntervalIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigWigIntervalIterator>> {
         Ok(slf.into())
     }
 
@@ -483,6 +716,27 @@ impl IntervalIterator {
             .transpose()
             .map(|o| o.map(|v| (v.start, v.end, v.value)))
             .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))
+    }
+}
+
+/// This class is an interator for the entries in a bigBed file.
+#[pyclass(module = "pybigtools")]
+struct BigBedEntriesIterator {
+    iter: Box<dyn Iterator<Item = Result<BedEntry, BBIReadError>> + Send>,
+}
+
+#[pymethods]
+impl BigBedEntriesIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigBedEntriesIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<BedEntryTuple>> {
+        Ok(slf
+            .iter
+            .next()
+            .map(|e| e.unwrap())
+            .map(|e| (e.start, e.end, e.rest)))
     }
 }
 
@@ -622,144 +876,6 @@ impl BigWigWrite {
     fn close(&mut self) -> PyResult<()> {
         self.bigwig.take();
         Ok(())
-    }
-}
-
-enum BigBedRaw {
-    File(BigBedReadRaw<CachedBBIFileRead<ReopenableFile>>),
-    #[cfg(feature = "remote")]
-    Remote(BigBedReadRaw<CachedBBIFileRead<RemoteFile>>),
-    FileLike(BigBedReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
-}
-
-/// This class is the interface for reading a bigBed.
-#[pyclass(module = "pybigtools")]
-struct BigBedRead {
-    bigbed: BigBedRaw,
-}
-
-#[pymethods]
-impl BigBedRead {
-    /// Returns the entries of a given range on a chromosome. The result is an iterator of (int, int, String) in the format (start, end, rest).  
-    /// The entries may not be contiguous if the values in the bigbed are not.  
-    /// The chrom argument is the name of the chromosome.  
-    /// The start and end arguments denote the range to get values for.  
-    ///  If end is not provided, it defaults to the length of the chromosome.  
-    ///  If start is not provided, it defaults to the beginning of the chromosome.  
-    ///
-    /// This returns an `EntriesIterator`.  
-    fn entries(
-        &mut self,
-        chrom: String,
-        start: Option<u32>,
-        end: Option<u32>,
-    ) -> PyResult<EntriesIterator> {
-        let (start, end) = start_end(self, &chrom, start, end)?;
-        match &mut self.bigbed {
-            BigBedRaw::File(b) => {
-                let b = b.reopen()?;
-                Ok(EntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
-            }
-            #[cfg(feature = "remote")]
-            BigBedRaw::Remote(b) => {
-                let b = b.reopen()?;
-                Ok(EntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
-            }
-            BigBedRaw::FileLike(b) => {
-                let b = b.reopen()?;
-                Ok(EntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
-                })
-            }
-        }
-    }
-
-    /// Returns the chromosomes in a bigwig, and their lengths.  
-    /// The chroms argument can be either String or None. If it is None, then all chroms will be returned. If it is a String, then the length of that chromosome will be returned.  
-    ///  If the chromosome doesn't exist, nothing will be returned.  
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Option<PyObject>> {
-        match &self.bigbed {
-            BigBedRaw::File(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
-            }
-            #[cfg(feature = "remote")]
-            BigBedRaw::Remote(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
-            }
-            BigBedRaw::FileLike(b) => {
-                let val = match chrom {
-                    Some(chrom) => b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .map(|c| c.length)
-                        .map(|c| c.to_object(py)),
-                    None => Some(
-                        b.chroms()
-                            .into_iter()
-                            .map(|c| (c.name.clone(), c.length))
-                            .into_py_dict(py)
-                            .into(),
-                    ),
-                };
-                Ok(val)
-            }
-        }
-    }
-}
-
-/// This class is an interator for the entries in a bigBed file.
-#[pyclass(module = "pybigtools")]
-struct EntriesIterator {
-    iter: Box<dyn Iterator<Item = Result<BedEntry, BBIReadError>> + Send>,
-}
-
-#[pymethods]
-impl EntriesIterator {
-    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<EntriesIterator>> {
-        Ok(slf.into())
-    }
-
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<BedEntryTuple>> {
-        Ok(slf
-            .iter
-            .next()
-            .map(|e| e.unwrap())
-            .map(|e| (e.start, e.end, e.rest)))
     }
 }
 
@@ -966,9 +1082,8 @@ impl BigWigAverageOverBedEntriesIterator {
 ///
 /// This returns one of the following:  
 /// - `BigWigWrite`
-/// - `BigWigRead`
 /// - `BigBedWrite`
-/// - `BigBedRead`
+/// - `BBIRead`
 #[pyfunction]
 fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> PyResult<PyObject> {
     let iswrite = match &mode {
@@ -1000,13 +1115,13 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
         ))),
     };
     let read = match BigWigReadRaw::open(file_like.clone()) {
-        Ok(bwr) => BigWigRead {
-            bigwig: BigWigRaw::FileLike(bwr.cached()),
+        Ok(bwr) => BBIRead {
+            bbi: BBIReadRaw::BigWigFileLike(bwr.cached()),
         }
         .into_py(py),
         Err(_) => match BigBedReadRaw::open(file_like) {
-            Ok(bbr) => BigBedRead {
-                bigbed: BigBedRaw::FileLike(bbr.cached()),
+            Ok(bbr) => BBIRead {
+                bbi: BBIReadRaw::BigBedFileLike(bbr.cached()),
             }
             .into_py(py),
             Err(e) => {
@@ -1071,8 +1186,8 @@ fn open_path_or_url(
             "bw" | "bigWig" | "bigwig" => {
                 if isfile {
                     match BigWigReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BigWigRead {
-                            bigwig: BigWigRaw::File(bwr.cached()),
+                        Ok(bwr) => BBIRead {
+                            bbi: BBIReadRaw::BigWigFile(bwr.cached()),
                         }
                         .into_py(py),
                         Err(_) => {
@@ -1084,8 +1199,8 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigWigReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BigWigRead {
-                            bigwig: BigWigRaw::Remote(bwr.cached()),
+                        Ok(bwr) => BBIRead {
+                            bbi: BBIReadRaw::BigWigRemote(bwr.cached()),
                         }
                         .into_py(py),
                         Err(_) => {
@@ -1106,8 +1221,8 @@ fn open_path_or_url(
             "bb" | "bigBed" | "bigbed" => {
                 if isfile {
                     match BigBedReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BigBedRead {
-                            bigbed: BigBedRaw::File(bwr.cached()),
+                        Ok(bwr) => BBIRead {
+                            bbi: BBIReadRaw::BigBedFile(bwr.cached()),
                         }
                         .into_py(py),
                         Err(_) => {
@@ -1119,8 +1234,8 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigBedReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BigBedRead {
-                            bigbed: BigBedRaw::Remote(bwr.cached()),
+                        Ok(bwr) => BBIRead {
+                            bbi: BBIReadRaw::BigBedRemote(bwr.cached()),
                         }
                         .into_py(py),
                         Err(_) => {
@@ -1277,12 +1392,10 @@ fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_class::<BigWigWrite>()?;
     m.add_class::<BigBedWrite>()?;
-    m.add_class::<BigWigRead>()?;
-    m.add_class::<BigBedRead>()?;
+    m.add_class::<BBIRead>()?;
 
-    m.add_class::<IntervalIterator>()?;
-
-    m.add_class::<EntriesIterator>()?;
+    m.add_class::<BigWigIntervalIterator>()?;
+    m.add_class::<BigBedEntriesIterator>()?;
 
     Ok(())
 }
