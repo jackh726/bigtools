@@ -61,7 +61,7 @@ jobs:
           pip install -e .
   
       - name: Install
-        run: 
+        run: |
           cd pybigtools
           pytest -v
 
