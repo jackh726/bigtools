@@ -1,8 +1,10 @@
 import os
-import urllib.request
-if not os.path.exists('./ENCFF667CZO.bigWig'):
-    print("Downloading test bigWig")
-    urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF667CZO/@@download/ENCFF667CZO.bigWig', './ENCFF667CZO.bigWig')
+
+def install_dependencies():
+    import urllib.request
+    if not os.path.exists('./ENCFF667CZO.bigWig'):
+        print("Downloading test bigWig")
+        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF667CZO/@@download/ENCFF667CZO.bigWig', './ENCFF667CZO.bigWig')
 
 print("Testing")
 # Imports for test
@@ -12,6 +14,7 @@ import math
 import pybigtools
 
 def test_bigwig_write_read(tmp_path):
+    install_dependencies()
     # bigWig read
     b = pybigtools.open('./ENCFF667CZO.bigWig')
 
