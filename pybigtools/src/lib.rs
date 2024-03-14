@@ -566,26 +566,28 @@ impl BigWigWrite {
                 })
             }
         }
-        let iter = Python::with_gil(|py| {
-            let inner_obj: PyObject = vals.into_py(py);
-            match PyIterator::from_object(py, &inner_obj) {
-                Ok(iter) => Ok(iter.to_object(py)),
-                Err(_) => Err(PyTypeError::new_err(
-                    "Passed value for `val` is not iterable.",
-                )),
+        py.allow_threads(|| {
+            let iter = Python::with_gil(|py| {
+                let inner_obj: PyObject = vals.into_py(py);
+                match PyIterator::from_object(py, &inner_obj) {
+                    Ok(iter) => Ok(iter.to_object(py)),
+                    Err(_) => Err(PyTypeError::new_err(
+                        "Passed value for `val` is not iterable.",
+                    )),
+                }
+            })?;
+            let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+                Ok(v) => Ok(v),
+            });
+            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
+            let chsi = BedParserStreamingIterator::new(vals_iter, true);
+            match bigwig.write(chrom_map, chsi, runtime) {
+                Err(e) => println!("{}", e),
+                Ok(_) => {}
             }
-        })?;
-        let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
-            Ok(v) => Ok(v),
-        });
-        let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-        let chsi = BedParserStreamingIterator::new(vals_iter, true);
-        match bigwig.write(chrom_map, chsi, runtime) {
-            Err(e) => println!("{}", e),
-            Ok(_) => {}
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// close()
@@ -843,28 +845,30 @@ impl BigBedWrite {
                 })
             }
         }
-        let iter = Python::with_gil(|py| {
-            let inner_obj: PyObject = vals.into_py(py);
-            match PyIterator::from_object(py, &inner_obj) {
-                Ok(iter) => Ok(iter.to_object(py)),
-                Err(_) => Err(PyTypeError::new_err(
-                    "Passed value for `val` is not iterable.",
-                )),
+        py.allow_threads(|| {
+            let iter = Python::with_gil(|py| {
+                let inner_obj: PyObject = vals.into_py(py);
+                match PyIterator::from_object(py, &inner_obj) {
+                    Ok(iter) => Ok(iter.to_object(py)),
+                    Err(_) => Err(PyTypeError::new_err(
+                        "Passed value for `val` is not iterable.",
+                    )),
+                }
+            })?;
+            let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+                Ok(v) => Ok(v),
+            });
+            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
+            let chsi = BedParserStreamingIterator::new(vals_iter, true);
+            match bigbed.write(chrom_map, chsi, runtime) {
+                Err(e) => {
+                    println!("{}", e)
+                }
+                Ok(_) => {}
             }
-        })?;
-        let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
-            Ok(v) => Ok(v),
-        });
-        let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-        let chsi = BedParserStreamingIterator::new(vals_iter, true);
-        match bigbed.write(chrom_map, chsi, runtime) {
-            Err(e) => {
-                println!("{}", e)
-            }
-            Ok(_) => {}
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Manually closed the file. No other operations will be allowed after it is closed. This is done automatically after write is performed.
