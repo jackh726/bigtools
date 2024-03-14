@@ -57,7 +57,8 @@ jobs:
       - name: Install pybigtools
         run: |
           pip install maturin pytest
-          cd pybigtools && pip install -e .
+          cd pybigtools
+          pip install -e .
   
       - name: Install
         run: 
