@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64, x86]
+        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,28 +60,12 @@ jobs:
           name: wheels-linux-${{ matrix.target }}
           path: dist
       - name: pytest
-        if: ${{ startsWith(matrix.target, 'x86_64') }}
         shell: bash
         run: |
           set -e
           pip install pybigtools --find-links dist --force-reinstall
           pip install pytest
-          pytest
-      - name: pytest
-        if: ${{ !startsWith(matrix.target, 'x86') && matrix.target != 'ppc64' }}
-        uses: uraimo/run-on-arch-action@v2.5.0
-        with:
-          arch: ${{ matrix.target }}
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y --no-install-recommends python3 python3-pip
-            pip3 install -U pip pytest
-          run: |
-            set -e
-            pip3 install pybigtools --find-links dist --force-reinstall
-            pytest  
+          pytest -v
 
   fmt:
     name: Format
