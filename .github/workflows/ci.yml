@@ -63,7 +63,8 @@ jobs:
         shell: bash
         run: |
           set -e
-          pip install --find-links dist --force-reinstall
+          cd pybigtools
+          pip install . --force-reinstall
           pip install pytest
           pytest -v
 
