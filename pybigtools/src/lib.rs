@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
@@ -21,6 +22,7 @@ use bigtools::{
 
 use bigtools::utils::reopen::Reopen;
 use file_like::PyFileLikeObject;
+use numpy::ndarray::Array1;
 use numpy::IntoPyArray;
 use pyo3::exceptions::{self, PyTypeError};
 use pyo3::prelude::*;
@@ -79,6 +81,229 @@ enum BBIReadRaw {
     #[cfg(feature = "remote")]
     BigBedRemote(BigBedReadRaw<CachedBBIFileRead<RemoteFile>>),
     BigBedFileLike(BigBedReadRaw<CachedBBIFileRead<PyFileLikeObject>>),
+}
+
+#[derive(Copy, Clone, Debug)]
+enum Summary {
+    Mean,
+    Min,
+    Max,
+}
+
+fn to_array_entry_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+    summary: Summary,
+    bins: usize,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut bin_data: VecDeque<(usize, usize, usize, Vec<f64>)> = VecDeque::new();
+    let mut v = vec![0.0; bins];
+    let bin_size = (end - start) as f64 / bins as f64;
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize).max(start) - start;
+        let interval_end = (interval.end as usize).min(end) - start;
+        let bin_start = ((interval_start as f64) / bin_size) as usize;
+        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+
+        while let Some(front) = bin_data.front_mut() {
+            if front.0 < bin_start {
+                let front = bin_data.pop_front().unwrap();
+                let bin = front.0;
+
+                match summary {
+                    Summary::Min => {
+                        v[bin] = front
+                            .3
+                            .into_iter()
+                            .reduce(|min, v| min.min(v))
+                            .unwrap_or(0.0);
+                    }
+                    Summary::Max => {
+                        v[bin] = front
+                            .3
+                            .into_iter()
+                            .reduce(|max, v| max.max(v))
+                            .unwrap_or(0.0);
+                    }
+                    Summary::Mean => {
+                        v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        while let Some(bin) = bin_data
+            .back_mut()
+            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .unwrap_or(Some(bin_start))
+        {
+            let bin_start = ((bin as f64) * bin_size).ceil() as usize;
+            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as usize;
+
+            bin_data.push_back((bin, bin_start, bin_end, vec![0.0; bin_end - bin_start]));
+        }
+        for bin in bin_data.iter() {
+            assert!(
+                (bin_start..bin_end).contains(&bin.0),
+                "{} not in {}..{}",
+                bin.0,
+                bin_start,
+                bin_end
+            );
+        }
+        for bin in bin_start..bin_end {
+            assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
+        }
+        for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+            let overlap_start = (*bin_start).max(interval_start);
+            let overlap_end = (*bin_end).min(interval_end);
+
+            for i in &mut data[(overlap_start - *bin_start)..(overlap_end - *bin_start)] {
+                *i = *i + 1.0;
+            }
+        }
+    }
+    while let Some(front) = bin_data.pop_front() {
+        let bin = front.0;
+
+        match summary {
+            Summary::Min => {
+                v[bin] = front
+                    .3
+                    .into_iter()
+                    .reduce(|min, v| min.min(v))
+                    .unwrap_or(0.0);
+            }
+            Summary::Max => {
+                v[bin] = front
+                    .3
+                    .into_iter()
+                    .reduce(|max, v| max.max(v))
+                    .unwrap_or(0.0);
+            }
+            Summary::Mean => {
+                v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+            }
+        }
+    }
+    Ok(Array::from(v))
+}
+
+fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+    summary: Summary,
+    bins: usize,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut bin_data: VecDeque<(usize, usize, usize, Vec<f64>)> = VecDeque::new();
+    let mut v = vec![0.0; bins];
+    let bin_size = (end - start) as f64 / bins as f64;
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize).max(start) - start;
+        let interval_end = (interval.end as usize).min(end) - start;
+        let bin_start = ((interval_start as f64) / bin_size) as usize;
+        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+
+        while let Some(front) = bin_data.front_mut() {
+            if front.0 < bin_start {
+                let front = bin_data.pop_front().unwrap();
+                let bin = front.0;
+
+                match summary {
+                    Summary::Min => {
+                        v[bin] = front
+                            .3
+                            .into_iter()
+                            .reduce(|min, v| min.min(v))
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                    }
+                    Summary::Max => {
+                        v[bin] = front
+                            .3
+                            .into_iter()
+                            .reduce(|max, v| max.max(v))
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                    }
+                    Summary::Mean => {
+                        v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        while let Some(bin) = bin_data
+            .back_mut()
+            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .unwrap_or(Some(bin_start))
+        {
+            let bin_start = ((bin as f64) * bin_size).ceil() as usize;
+            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as usize;
+
+            bin_data.push_back((bin, bin_start, bin_end, vec![f64::NAN; bin_end - bin_start]));
+        }
+        for bin in bin_data.iter() {
+            assert!(
+                (bin_start..bin_end).contains(&bin.0),
+                "{} not in {}..{}",
+                bin.0,
+                bin_start,
+                bin_end
+            );
+        }
+        for bin in bin_start..bin_end {
+            assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
+        }
+        for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+            let overlap_start = (*bin_start).max(interval_start);
+            let overlap_end = (*bin_end).min(interval_end);
+
+            let mean = interval.summary.sum / (interval.end - interval.start) as f64;
+            for i in &mut data[(overlap_start - *bin_start)..(overlap_end - *bin_start)] {
+                match summary {
+                    Summary::Mean => *i += mean,
+                    Summary::Min => *i = i.min(interval.summary.min_val),
+                    Summary::Max => *i = i.max(interval.summary.max_val),
+                }
+                *i = i.max(0.0);
+            }
+        }
+    }
+    while let Some(front) = bin_data.pop_front() {
+        let bin = front.0;
+
+        match summary {
+            Summary::Min => {
+                v[bin] = front
+                    .3
+                    .into_iter()
+                    .reduce(|min, v| min.min(v))
+                    .unwrap_or(0.0)
+                    .max(0.0);
+            }
+            Summary::Max => {
+                v[bin] = front
+                    .3
+                    .into_iter()
+                    .reduce(|max, v| max.max(v))
+                    .unwrap_or(0.0)
+                    .max(0.0);
+            }
+            Summary::Mean => {
+                v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+            }
+        }
+    }
+    Ok(Array::from(v))
 }
 
 /// This class is the interface for reading a bigWig or bigBed.
@@ -255,12 +480,6 @@ impl BBIRead {
         summary: Option<String>,
         exact: Option<bool>,
     ) -> PyResult<PyObject> {
-        enum Summary {
-            Mean,
-            Min,
-            Max,
-        }
-        use numpy::ndarray::Array1;
         fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
             start: usize,
             end: usize,
@@ -399,48 +618,6 @@ impl BBIRead {
             }
             Ok(Array::from(v))
         }
-        fn to_array_entry_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-            bins: usize,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = vec![0.0; bins];
-            let bin_size = (end - start) as f64 / bins as f64;
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize) - start;
-                let interval_end = (interval.end as usize) - start;
-                let bin_start = ((interval_start as f64) / bin_size) as usize;
-                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                for bin in bin_start..bin_end {
-                    v[bin] += 1.0;
-                }
-            }
-            Ok(Array::from(v))
-        }
-        fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-            bins: usize,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = vec![0.0; bins];
-            let bin_size = (end - start) as f64 / bins as f64;
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize).max(start) - start;
-                let interval_end = (interval.end as usize).min(end) - start;
-                let bin_start = ((interval_start as f64) / bin_size) as usize;
-                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                for bin in bin_start..bin_end {
-                    v[bin] += interval.summary.total_items as f64;
-                }
-            }
-            Ok(Array::from(v))
-        }
 
         let summary = match summary.as_deref() {
             None => Summary::Mean,
@@ -555,6 +732,7 @@ impl BBIRead {
             start: u32,
             end: u32,
             bins: Option<usize>,
+            summary: Summary,
             exact: Option<bool>,
         ) -> PyResult<PyObject> {
             match bins {
@@ -574,17 +752,18 @@ impl BBIRead {
                                     PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                                 })?;
                             Python::with_gil(|py| {
-                                Ok(
-                                    to_entry_array_zoom(start as usize, end as usize, iter, bins)
-                                        .map_err(|e| {
-                                            PyErr::new::<exceptions::PyException, _>(format!(
-                                                "{}",
-                                                e
-                                            ))
-                                        })?
-                                        .into_pyarray(py)
-                                        .to_object(py),
+                                Ok(to_entry_array_zoom(
+                                    start as usize,
+                                    end as usize,
+                                    iter,
+                                    summary,
+                                    bins,
                                 )
+                                .map_err(|e| {
+                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                                })?
+                                .into_pyarray(py)
+                                .to_object(py))
                             })
                         }
                         None => {
@@ -592,17 +771,18 @@ impl BBIRead {
                                 PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                             })?;
                             Python::with_gil(|py| {
-                                Ok(
-                                    to_array_entry_bins(start as usize, end as usize, iter, bins)
-                                        .map_err(|e| {
-                                            PyErr::new::<exceptions::PyException, _>(format!(
-                                                "{}",
-                                                e
-                                            ))
-                                        })?
-                                        .into_pyarray(py)
-                                        .to_object(py),
+                                Ok(to_array_entry_bins(
+                                    start as usize,
+                                    end as usize,
+                                    iter,
+                                    summary,
+                                    bins,
                                 )
+                                .map_err(|e| {
+                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
+                                })?
+                                .into_pyarray(py)
+                                .to_object(py))
                             })
                         }
                     }
@@ -613,7 +793,7 @@ impl BBIRead {
                         .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
                     Python::with_gil(|py| {
                         Ok(
-                            to_array_entry_bins(start as usize, end as usize, iter, bins)
+                            to_array_entry_bins(start as usize, end as usize, iter, summary, bins)
                                 .map_err(|e| {
                                     PyErr::new::<exceptions::PyException, _>(format!("{}", e))
                                 })?
@@ -648,10 +828,16 @@ impl BBIRead {
             BBIReadRaw::BigWigFileLike(b) => {
                 intervals_to_array(b, &chrom, start, end, bins, summary, exact)
             }
-            BBIReadRaw::BigBedFile(b) => entries_to_array(b, &chrom, start, end, bins, exact),
+            BBIReadRaw::BigBedFile(b) => {
+                entries_to_array(b, &chrom, start, end, bins, summary, exact)
+            }
             #[cfg(feature = "remote")]
-            BBIReadRaw::BigBedRemote(b) => entries_to_array(b, &chrom, start, end, bins, exact),
-            BBIReadRaw::BigBedFileLike(b) => entries_to_array(b, &chrom, start, end, bins, exact),
+            BBIReadRaw::BigBedRemote(b) => {
+                entries_to_array(b, &chrom, start, end, bins, summary, exact)
+            }
+            BBIReadRaw::BigBedFileLike(b) => {
+                entries_to_array(b, &chrom, start, end, bins, summary, exact)
+            }
         }
     }
 
@@ -1398,4 +1584,137 @@ fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<BigBedEntriesIterator>()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use bigtools::BedEntry;
+
+    use crate::to_array_entry_bins;
+
+    #[test]
+    fn test_to_array_entry_bins() {
+        let entries = [BedEntry {
+            start: 10,
+            end: 20,
+            rest: "".to_string(),
+        }];
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            1,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+
+        let entries = [BedEntry {
+            start: 10,
+            end: 20,
+            rest: "".to_string(),
+        }];
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            2,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0, 1.0].into_iter().collect::<Vec<_>>());
+
+        let entries = [
+            BedEntry {
+                start: 10,
+                end: 20,
+                rest: "".to_string(),
+            },
+            BedEntry {
+                start: 15,
+                end: 20,
+                rest: "".to_string(),
+            },
+        ];
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            2,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0, 2.0].into_iter().collect::<Vec<_>>());
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Min,
+            1,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Max,
+            1,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [2.0].into_iter().collect::<Vec<_>>());
+
+        let entries = [
+            BedEntry {
+                start: 10,
+                end: 20,
+                rest: "".to_string(),
+            },
+            BedEntry {
+                start: 15,
+                end: 20,
+                rest: "".to_string(),
+            },
+            BedEntry {
+                start: 15,
+                end: 25,
+                rest: "".to_string(),
+            },
+        ];
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            2,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0, 3.0].into_iter().collect::<Vec<_>>());
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Min,
+            1,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+        let res = to_array_entry_bins(
+            10,
+            20,
+            entries.clone().into_iter().map(|v| Ok(v)),
+            crate::Summary::Max,
+            1,
+        )
+        .unwrap();
+        let res = res.to_vec();
+        assert_eq!(res, [3.0].into_iter().collect::<Vec<_>>());
+    }
 }
