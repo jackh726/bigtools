@@ -2,7 +2,7 @@ name: Build and publish Python package to PyPI
 
 on:
   release:
-    types: [created]
+    types: [published]
   workflow_dispatch:
 
 permissions:
