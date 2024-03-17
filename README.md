@@ -3,13 +3,36 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/jackh726/bigtools/blob/master/LICENSE)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
 
-[![crates.io](https://img.shields.io/crates/v/bigtools.svg)](https://crates.io/crates/bigtools)
-[![Rust Docs](https://img.shields.io/docsrs/bigtools/latest?label=docs.rs)](https://docs.rs/bigtools)
-[![Anaconda-Server Badge](https://anaconda.org/bioconda/bigtools/badges/version.svg)](https://anaconda.org/bioconda/bigtools)
-
-[![PyPI](https://img.shields.io/pypi/v/pybigtools?color=green)](https://pypi.org/project/pybigtools/)
-[![Python Docs](https://img.shields.io/readthedocs/bigtools/latest?label=docs|rtd)](https://bigtools.readthedocs.io/)
-[![Anaconda-Server Badge](https://anaconda.org/bioconda/pybigtools/badges/version.svg)](https://anaconda.org/bioconda/pybigtools)
+<table>
+    <tr>
+        <td>bigtools</td>
+        <td>
+            <a href="https://crates.io/crates/bigtools">
+                <img src="https://img.shields.io/crates/v/bigtools.svg" alt="crates.io">
+            </a>
+            <a href="https://bioconda.github.io/recipes/bigtools/README.html">
+                <img src="https://img.shields.io/conda/vn/bioconda/bigtools.svg?color=green" alt="bigtools on Bioconda">
+            </a>
+            <a href="https://docs.rs/bigtools">
+                <img src="https://img.shields.io/docsrs/bigtools/latest?label=docs.rs" alt="Rust Docs">
+            </a>
+        </td>
+    </tr>
+    <tr>
+        <td>pybigtools</td>
+        <td>
+            <a href="https://pypi.org/project/pybigtools/">
+                <img src="https://img.shields.io/pypi/v/pybigtools?color=orange" alt="PyPI">
+            </a>
+            <a href="https://bioconda.github.io/recipes/pybigtools/README.html">
+                <img src="https://img.shields.io/conda/vn/bioconda/pybigtools?color=green" alt="pybigtools on Bioconda">
+            </a>
+            <a href="https://bigtools.readthedocs.io/">
+                <img src="https://img.shields.io/readthedocs/bigtools/latest?label=docs" alt="Python Docs">
+            </a>
+        </td>
+    </tr>
+</table>
 
 Bigtools is a library and associated tools for reading and writing bigwig and bigbed files.
 
