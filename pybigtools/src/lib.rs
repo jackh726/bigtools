@@ -35,7 +35,6 @@ use url::Url;
 mod file_like;
 
 type ValueTuple = (u32, u32, f32);
-type BedEntryTuple = (u32, u32, String);
 
 fn start_end(
     bbi: &BBIReadRaw,
@@ -917,12 +916,19 @@ impl BigBedEntriesIterator {
         Ok(slf.into())
     }
 
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<BedEntryTuple>> {
-        Ok(slf
-            .iter
-            .next()
-            .map(|e| e.unwrap())
-            .map(|e| (e.start, e.end, e.rest)))
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+        let py = slf.py();
+        let next = match slf.iter.next() {
+            Some(n) => n.map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+            None => return Ok(None),
+        };
+        let elements: Vec<_> = [next.start.to_object(py), next.end.to_object(py)]
+            .into_iter()
+            .chain(next.rest.split_whitespace().map(|o| o.to_object(py)))
+            .collect();
+        Ok(Some(
+            PyTuple::new::<PyObject, _>(py, elements.into_iter()).to_object(py),
+        ))
     }
 }
 
