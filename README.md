@@ -5,7 +5,7 @@
 
 <table>
     <tr>
-        <td>bigtools</td>
+        <td>Rust, CLI</td>
         <td>
             <a href="https://crates.io/crates/bigtools">
                 <img src="https://img.shields.io/crates/v/bigtools.svg" alt="crates.io">
@@ -19,7 +19,7 @@
         </td>
     </tr>
     <tr>
-        <td>pybigtools</td>
+        <td>Python</td>
         <td>
             <a href="https://pypi.org/project/pybigtools/">
                 <img src="https://img.shields.io/pypi/v/pybigtools?color=orange" alt="PyPI">
