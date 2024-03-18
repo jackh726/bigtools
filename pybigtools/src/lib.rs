@@ -313,6 +313,44 @@ struct BBIRead {
 
 #[pymethods]
 impl BBIRead {
+    fn is_bigwig(&self) -> bool {
+        #[cfg(feature = "remote")]
+        {
+            matches!(
+                self.bbi,
+                BBIReadRaw::BigWigFile(_)
+                    | BBIReadRaw::BigWigRemote(_)
+                    | BBIReadRaw::BigWigFileLike(_)
+            )
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            matches!(
+                self.bbi,
+                BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigWigFileLike(_)
+            )
+        }
+    }
+
+    fn is_bigbed(&self) -> bool {
+        #[cfg(feature = "remote")]
+        {
+            matches!(
+                self.bbi,
+                BBIReadRaw::BigBedFile(_)
+                    | BBIReadRaw::BigBedRemote(_)
+                    | BBIReadRaw::BigBedFileLike(_)
+            )
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            matches!(
+                self.bbi,
+                BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_)
+            )
+        }
+    }
+
     /// Returns the autosql of this bbi file.
     ///
     /// For bigBeds, this comes directly from the autosql stored in the file.
