@@ -1250,6 +1250,7 @@ fn bigWigAverageOverBed(
 /// The base module for opening a bigWig or bigBed. The only defined function is `open`.
 #[pymodule]
 fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_wrapped(wrap_pyfunction!(open))?;
     m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
 
