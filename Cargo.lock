@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "pybigtools"
-version = "0.1.3-dev"
+version = "0.1.4-dev"
 dependencies = [
  "bigtools",
  "futures",
