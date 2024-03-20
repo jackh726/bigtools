@@ -89,6 +89,298 @@ enum Summary {
     Max,
 }
 
+trait ToPyErr {
+    fn to_py_err(self) -> PyErr;
+}
+
+impl ToPyErr for bigtools::ZoomIntervalError {
+    fn to_py_err(self) -> PyErr {
+        PyErr::new::<exceptions::PyException, _>(format!("{}", self))
+    }
+}
+impl ToPyErr for bigtools::BBIReadError {
+    fn to_py_err(self) -> PyErr {
+        PyErr::new::<exceptions::PyException, _>(format!("{}", self))
+    }
+}
+
+trait ConvertResult<T> {
+    fn convert_err(self) -> Result<T, PyErr>;
+}
+impl<T, E: ToPyErr> ConvertResult<T> for Result<T, E> {
+    fn convert_err(self) -> Result<T, PyErr> {
+        self.map_err(|e| e.to_py_err())
+    }
+}
+
+fn intervals_to_array<R: BBIFileRead>(
+    b: &mut BigWigReadRaw<R>,
+    chrom: &str,
+    start: u32,
+    end: u32,
+    bins: Option<usize>,
+    summary: Summary,
+    exact: bool,
+    missing: f64,
+    oob: f64,
+    arr: Option<PyObject>,
+) -> PyResult<PyObject> {
+    let zoom = if let (Some(bins), false) = (bins, exact) {
+        let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
+        let zoom = b
+            .info()
+            .zoom_headers
+            .iter()
+            .filter(|z| z.reduction_level <= max_zoom_size)
+            .min_by_key(|z| max_zoom_size - z.reduction_level);
+        zoom
+    } else {
+        None
+    };
+    match (bins, zoom) {
+        (Some(bins), Some(zoom)) => {
+            let iter = b
+                .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
+                .convert_err()?;
+            Python::with_gil(|py| {
+                Ok(
+                    to_array_zoom(start as usize, end as usize, iter, summary, bins)
+                        .convert_err()?
+                        .into_pyarray(py)
+                        .to_object(py),
+                )
+            })
+        }
+        (Some(bins), None) => {
+            let iter = b.get_interval(&chrom, start, end).convert_err()?;
+            Python::with_gil(|py| {
+                Ok(
+                    to_array_bins(start as usize, end as usize, iter, summary, bins)
+                        .convert_err()?
+                        .into_pyarray(py)
+                        .to_object(py),
+                )
+            })
+        }
+        _ => {
+            let iter = b.get_interval(&chrom, start, end).convert_err()?;
+            Python::with_gil(|py| {
+                Ok(to_array(start as usize, end as usize, iter)
+                    .convert_err()?
+                    .into_pyarray(py)
+                    .to_object(py))
+            })
+        }
+    }
+}
+fn entries_to_array<R: BBIFileRead>(
+    b: &mut BigBedReadRaw<R>,
+    chrom: &str,
+    start: u32,
+    end: u32,
+    bins: Option<usize>,
+    summary: Summary,
+    exact: bool,
+    missing: f64,
+    oob: f64,
+    arr: Option<PyObject>,
+) -> PyResult<PyObject> {
+    match bins {
+        Some(bins) if !exact => {
+            let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
+            let zoom = b
+                .info()
+                .zoom_headers
+                .iter()
+                .filter(|z| z.reduction_level <= max_zoom_size)
+                .min_by_key(|z| max_zoom_size - z.reduction_level);
+            match zoom {
+                Some(zoom) => {
+                    let iter = b
+                        .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
+                        .convert_err()?;
+                    Python::with_gil(|py| {
+                        Ok(
+                            to_entry_array_zoom(start as usize, end as usize, iter, summary, bins)
+                                .convert_err()?
+                                .into_pyarray(py)
+                                .to_object(py),
+                        )
+                    })
+                }
+                None => {
+                    let iter = b.get_interval(&chrom, start, end).convert_err()?;
+                    Python::with_gil(|py| {
+                        Ok(
+                            to_array_entry_bins(start as usize, end as usize, iter, summary, bins)
+                                .convert_err()?
+                                .into_pyarray(py)
+                                .to_object(py),
+                        )
+                    })
+                }
+            }
+        }
+        Some(bins) => {
+            let iter = b.get_interval(&chrom, start, end).convert_err()?;
+            Python::with_gil(|py| {
+                Ok(
+                    to_array_entry_bins(start as usize, end as usize, iter, summary, bins)
+                        .convert_err()?
+                        .into_pyarray(py)
+                        .to_object(py),
+                )
+            })
+        }
+        _ => {
+            let iter = b.get_interval(&chrom, start, end).convert_err()?;
+            Python::with_gil(|py| {
+                Ok(to_entry_array(start as usize, end as usize, iter)
+                    .convert_err()?
+                    .into_pyarray(py)
+                    .to_object(py))
+            })
+        }
+    }
+}
+fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut v = vec![f64::NAN; end - start];
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize) - start;
+        let interval_end = (interval.end as usize) - start;
+        for i in v[interval_start..interval_end].iter_mut() {
+            *i = interval.value as f64;
+        }
+    }
+    Ok(Array::from(v))
+}
+fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+    summary: Summary,
+    bins: usize,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut v = match summary {
+        Summary::Min | Summary::Max => vec![f64::NAN; bins],
+        Summary::Mean => vec![0.0; bins],
+    };
+    let bin_size = (end - start) as f64 / bins as f64;
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize) - start;
+        let interval_end = (interval.end as usize) - start;
+        let bin_start = ((interval_start as f64) / bin_size) as usize;
+        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        for bin in bin_start..bin_end {
+            let bin_start = (bin as f64) * bin_size;
+            let bin_end = (bin as f64 + 1.0) * bin_size;
+            let interval_start = (interval_start as f64).max(bin_start);
+            let interval_end = (interval_end as f64).min(bin_end);
+            // Possible overlaps
+            // bin  |-----|    |------|   |-----|
+            // value   |----|   |----|  |----|
+            // overlap ----     ------    ----
+            match summary {
+                Summary::Min => {
+                    v[bin] = v[bin].min(interval.value as f64);
+                }
+                Summary::Max => {
+                    v[bin] = v[bin].max(interval.value as f64);
+                }
+                Summary::Mean => {
+                    let overlap_size = interval_end - interval_start;
+                    v[bin] += (overlap_size as f64) * interval.value as f64;
+                }
+            }
+        }
+    }
+    if let Summary::Mean = summary {
+        let last = v.last().copied().expect("Should be at least one bin.");
+        let last_size = (end - start) as f64 - (bins as f64 - 1.0) * bin_size;
+        v = v.into_iter().map(|v| v / bin_size as f64).collect();
+        // The last bin could be smaller
+        *v.last_mut().expect("Should be at least one bin.") = last / last_size;
+    }
+    Ok(Array::from(v))
+}
+fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+    summary: Summary,
+    bins: usize,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut v = match summary {
+        Summary::Min | Summary::Max => vec![f64::NAN; bins],
+        Summary::Mean => vec![0.0; bins],
+    };
+    let bin_size = (end - start) as f64 / bins as f64;
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize).max(start) - start;
+        let interval_end = (interval.end as usize).min(end) - start;
+        let bin_start = ((interval_start as f64) / bin_size) as usize;
+        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        for bin in bin_start..bin_end {
+            let bin_start = (bin as f64) * bin_size;
+            let bin_end = (bin as f64 + 1.0) * bin_size;
+            let interval_start = (interval_start as f64).max(bin_start);
+            let interval_end = (interval_end as f64).min(bin_end);
+            // Possible overlaps
+            // bin  |-----|    |------|   |-----|
+            // value   |----|   |----|  |----|
+            // overlap ----     ------    ----
+            match summary {
+                Summary::Min => {
+                    v[bin] = v[bin].min(interval.summary.min_val as f64);
+                }
+                Summary::Max => {
+                    v[bin] = v[bin].max(interval.summary.max_val as f64);
+                }
+                Summary::Mean => {
+                    let overlap_size = interval_end - interval_start;
+                    let zoom_mean =
+                        (interval.summary.sum as f64) / (interval.summary.bases_covered as f64);
+                    v[bin] += (overlap_size as f64) * zoom_mean;
+                }
+            }
+        }
+    }
+    if let Summary::Mean = summary {
+        let last = v.last().copied().expect("Should be at least one bin.");
+        let last_size = (end - start) as f64 - (bins as f64 - 1.0) * bin_size;
+        v = v.into_iter().map(|v| v / bin_size as f64).collect();
+        // The last bin could be smaller
+        *v.last_mut().expect("Should be at least one bin.") = last / last_size;
+    }
+    Ok(Array::from(v))
+}
+fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+    start: usize,
+    end: usize,
+    iter: I,
+) -> Result<Array1<f64>, BBIReadError> {
+    use numpy::ndarray::Array;
+    let mut v = vec![0.0; end - start];
+    for interval in iter {
+        let interval = interval?;
+        let interval_start = (interval.start as usize) - start;
+        let interval_end = (interval.end as usize) - start;
+        for i in v[interval_start..interval_end].iter_mut() {
+            *i += 1.0;
+        }
+    }
+    Ok(Array::from(v))
+}
 fn to_array_entry_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     start: usize,
     end: usize,
@@ -381,15 +673,9 @@ impl BBIRead {
             BBIReadRaw::BigWigFile(_)
             | BBIReadRaw::BigWigRemote(_)
             | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
-            BBIReadRaw::BigBedFile(b) => b
-                .autosql()
-                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
-            BBIReadRaw::BigBedRemote(b) => b
-                .autosql()
-                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
-            BBIReadRaw::BigBedFileLike(b) => b
-                .autosql()
-                .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+            BBIReadRaw::BigBedFile(b) => b.autosql().convert_err()?,
+            BBIReadRaw::BigBedRemote(b) => b.autosql().convert_err()?,
+            BBIReadRaw::BigBedFileLike(b) => b.autosql().convert_err()?,
         };
         let obj = if parse {
             let mut declarations = parse_autosql(&schema).map_err(|_| {
@@ -508,159 +794,23 @@ impl BBIRead {
     ///  If start is not provided, it defaults to the beginning of the chromosome.  
     ///
     /// This returns a numpy array.
+    #[pyo3(signature = (chrom, start, end, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None))]
     fn values(
         &mut self,
         chrom: String,
         start: Option<u32>,
         end: Option<u32>,
         bins: Option<usize>,
-        summary: Option<String>,
-        exact: Option<bool>,
+        summary: String,
+        exact: bool,
+        missing: f64,
+        oob: f64,
+        arr: Option<PyObject>,
     ) -> PyResult<PyObject> {
-        fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = vec![f64::NAN; end - start];
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize) - start;
-                let interval_end = (interval.end as usize) - start;
-                for i in v[interval_start..interval_end].iter_mut() {
-                    *i = interval.value as f64;
-                }
-            }
-            Ok(Array::from(v))
-        }
-        fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-            summary: Summary,
-            bins: usize,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = match summary {
-                Summary::Min | Summary::Max => vec![f64::NAN; bins],
-                Summary::Mean => vec![0.0; bins],
-            };
-            let bin_size = (end - start) as f64 / bins as f64;
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize) - start;
-                let interval_end = (interval.end as usize) - start;
-                let bin_start = ((interval_start as f64) / bin_size) as usize;
-                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                for bin in bin_start..bin_end {
-                    let bin_start = (bin as f64) * bin_size;
-                    let bin_end = (bin as f64 + 1.0) * bin_size;
-                    let interval_start = (interval_start as f64).max(bin_start);
-                    let interval_end = (interval_end as f64).min(bin_end);
-                    // Possible overlaps
-                    // bin  |-----|    |------|   |-----|
-                    // value   |----|   |----|  |----|
-                    // overlap ----     ------    ----
-                    match summary {
-                        Summary::Min => {
-                            v[bin] = v[bin].min(interval.value as f64);
-                        }
-                        Summary::Max => {
-                            v[bin] = v[bin].max(interval.value as f64);
-                        }
-                        Summary::Mean => {
-                            let overlap_size = interval_end - interval_start;
-                            v[bin] += (overlap_size as f64) * interval.value as f64;
-                        }
-                    }
-                }
-            }
-            if let Summary::Mean = summary {
-                let last = v.last().copied().expect("Should be at least one bin.");
-                let last_size = (end - start) as f64 - (bins as f64 - 1.0) * bin_size;
-                v = v.into_iter().map(|v| v / bin_size as f64).collect();
-                // The last bin could be smaller
-                *v.last_mut().expect("Should be at least one bin.") = last / last_size;
-            }
-            Ok(Array::from(v))
-        }
-        fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-            summary: Summary,
-            bins: usize,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = match summary {
-                Summary::Min | Summary::Max => vec![f64::NAN; bins],
-                Summary::Mean => vec![0.0; bins],
-            };
-            let bin_size = (end - start) as f64 / bins as f64;
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize).max(start) - start;
-                let interval_end = (interval.end as usize).min(end) - start;
-                let bin_start = ((interval_start as f64) / bin_size) as usize;
-                let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                for bin in bin_start..bin_end {
-                    let bin_start = (bin as f64) * bin_size;
-                    let bin_end = (bin as f64 + 1.0) * bin_size;
-                    let interval_start = (interval_start as f64).max(bin_start);
-                    let interval_end = (interval_end as f64).min(bin_end);
-                    // Possible overlaps
-                    // bin  |-----|    |------|   |-----|
-                    // value   |----|   |----|  |----|
-                    // overlap ----     ------    ----
-                    match summary {
-                        Summary::Min => {
-                            v[bin] = v[bin].min(interval.summary.min_val as f64);
-                        }
-                        Summary::Max => {
-                            v[bin] = v[bin].max(interval.summary.max_val as f64);
-                        }
-                        Summary::Mean => {
-                            let overlap_size = interval_end - interval_start;
-                            let zoom_mean = (interval.summary.sum as f64)
-                                / (interval.summary.bases_covered as f64);
-                            v[bin] += (overlap_size as f64) * zoom_mean;
-                        }
-                    }
-                }
-            }
-            if let Summary::Mean = summary {
-                let last = v.last().copied().expect("Should be at least one bin.");
-                let last_size = (end - start) as f64 - (bins as f64 - 1.0) * bin_size;
-                v = v.into_iter().map(|v| v / bin_size as f64).collect();
-                // The last bin could be smaller
-                *v.last_mut().expect("Should be at least one bin.") = last / last_size;
-            }
-            Ok(Array::from(v))
-        }
-        fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
-            start: usize,
-            end: usize,
-            iter: I,
-        ) -> Result<Array1<f64>, BBIReadError> {
-            use numpy::ndarray::Array;
-            let mut v = vec![0.0; end - start];
-            for interval in iter {
-                let interval = interval?;
-                let interval_start = (interval.start as usize) - start;
-                let interval_end = (interval.end as usize) - start;
-                for i in v[interval_start..interval_end].iter_mut() {
-                    *i += 1.0;
-                }
-            }
-            Ok(Array::from(v))
-        }
-
-        let summary = match summary.as_deref() {
-            None => Summary::Mean,
-            Some("mean") => Summary::Mean,
-            Some("min") => Summary::Min,
-            Some("max") => Summary::Max,
+        let summary = match summary.as_ref() {
+            "mean" => Summary::Mean,
+            "min" => Summary::Min,
+            "max" => Summary::Max,
             _ => {
                 return Err(PyErr::new::<exceptions::PyException, _>(format!(
                     "Unrecognized summary. Only `mean`, `min`, and `max` are allowed."
@@ -668,213 +818,27 @@ impl BBIRead {
             }
         };
         let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
-        fn intervals_to_array<R: BBIFileRead>(
-            b: &mut BigWigReadRaw<R>,
-            chrom: &str,
-            start: u32,
-            end: u32,
-            bins: Option<usize>,
-            summary: Summary,
-            exact: Option<bool>,
-        ) -> PyResult<PyObject> {
-            match bins {
-                Some(bins) if !exact.unwrap_or(false) => {
-                    let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
-                    let zoom = b
-                        .info()
-                        .zoom_headers
-                        .iter()
-                        .filter(|z| z.reduction_level <= max_zoom_size)
-                        .min_by_key(|z| max_zoom_size - z.reduction_level);
-                    match zoom {
-                        Some(zoom) => {
-                            let iter = b
-                                .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?;
-                            Python::with_gil(|py| {
-                                Ok(
-                                    to_array_zoom(
-                                        start as usize,
-                                        end as usize,
-                                        iter,
-                                        summary,
-                                        bins,
-                                    )
-                                    .map_err(|e| {
-                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                    })?
-                                    .into_pyarray(py)
-                                    .to_object(py),
-                                )
-                            })
-                        }
-                        None => {
-                            let iter = b.get_interval(&chrom, start, end).map_err(|e| {
-                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                            })?;
-                            Python::with_gil(|py| {
-                                Ok(
-                                    to_array_bins(
-                                        start as usize,
-                                        end as usize,
-                                        iter,
-                                        summary,
-                                        bins,
-                                    )
-                                    .map_err(|e| {
-                                        PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                    })?
-                                    .into_pyarray(py)
-                                    .to_object(py),
-                                )
-                            })
-                        }
-                    }
-                }
-                Some(bins) => {
-                    let iter = b
-                        .get_interval(&chrom, start, end)
-                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-                    Python::with_gil(|py| {
-                        Ok(
-                            to_array_bins(start as usize, end as usize, iter, summary, bins)
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?
-                                .into_pyarray(py)
-                                .to_object(py),
-                        )
-                    })
-                }
-                _ => {
-                    let iter = b
-                        .get_interval(&chrom, start, end)
-                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-                    Python::with_gil(|py| {
-                        Ok(to_array(start as usize, end as usize, iter)
-                            .map_err(|e| {
-                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                            })?
-                            .into_pyarray(py)
-                            .to_object(py))
-                    })
-                }
-            }
-        }
-        fn entries_to_array<R: BBIFileRead>(
-            b: &mut BigBedReadRaw<R>,
-            chrom: &str,
-            start: u32,
-            end: u32,
-            bins: Option<usize>,
-            summary: Summary,
-            exact: Option<bool>,
-        ) -> PyResult<PyObject> {
-            match bins {
-                Some(bins) if !exact.unwrap_or(false) => {
-                    let max_zoom_size = ((end - start) as f32 / (bins * 2) as f32) as u32;
-                    let zoom = b
-                        .info()
-                        .zoom_headers
-                        .iter()
-                        .filter(|z| z.reduction_level <= max_zoom_size)
-                        .min_by_key(|z| max_zoom_size - z.reduction_level);
-                    match zoom {
-                        Some(zoom) => {
-                            let iter = b
-                                .get_zoom_interval(&chrom, start, end, zoom.reduction_level)
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?;
-                            Python::with_gil(|py| {
-                                Ok(to_entry_array_zoom(
-                                    start as usize,
-                                    end as usize,
-                                    iter,
-                                    summary,
-                                    bins,
-                                )
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?
-                                .into_pyarray(py)
-                                .to_object(py))
-                            })
-                        }
-                        None => {
-                            let iter = b.get_interval(&chrom, start, end).map_err(|e| {
-                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                            })?;
-                            Python::with_gil(|py| {
-                                Ok(to_array_entry_bins(
-                                    start as usize,
-                                    end as usize,
-                                    iter,
-                                    summary,
-                                    bins,
-                                )
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?
-                                .into_pyarray(py)
-                                .to_object(py))
-                            })
-                        }
-                    }
-                }
-                Some(bins) => {
-                    let iter = b
-                        .get_interval(&chrom, start, end)
-                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-                    Python::with_gil(|py| {
-                        Ok(
-                            to_array_entry_bins(start as usize, end as usize, iter, summary, bins)
-                                .map_err(|e| {
-                                    PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                                })?
-                                .into_pyarray(py)
-                                .to_object(py),
-                        )
-                    })
-                }
-                _ => {
-                    let iter = b
-                        .get_interval(&chrom, start, end)
-                        .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-                    Python::with_gil(|py| {
-                        Ok(to_entry_array(start as usize, end as usize, iter)
-                            .map_err(|e| {
-                                PyErr::new::<exceptions::PyException, _>(format!("{}", e))
-                            })?
-                            .into_pyarray(py)
-                            .to_object(py))
-                    })
-                }
-            }
-        }
         match &mut self.bbi {
-            BBIReadRaw::BigWigFile(b) => {
-                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
+            BBIReadRaw::BigWigFile(b) => intervals_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
             #[cfg(feature = "remote")]
-            BBIReadRaw::BigWigRemote(b) => {
-                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
-            BBIReadRaw::BigWigFileLike(b) => {
-                intervals_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
-            BBIReadRaw::BigBedFile(b) => {
-                entries_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
+            BBIReadRaw::BigWigRemote(b) => intervals_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
+            BBIReadRaw::BigWigFileLike(b) => intervals_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
+            BBIReadRaw::BigBedFile(b) => entries_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
             #[cfg(feature = "remote")]
-            BBIReadRaw::BigBedRemote(b) => {
-                entries_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
-            BBIReadRaw::BigBedFileLike(b) => {
-                entries_to_array(b, &chrom, start, end, bins, summary, exact)
-            }
+            BBIReadRaw::BigBedRemote(b) => entries_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
+            BBIReadRaw::BigBedFileLike(b) => entries_to_array(
+                b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+            ),
         }
     }
 
@@ -938,7 +902,7 @@ impl BigWigIntervalIterator {
             .next()
             .transpose()
             .map(|o| o.map(|v| (v.start, v.end, v.value)))
-            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))
+            .convert_err()
     }
 }
 
@@ -957,7 +921,7 @@ impl BigBedEntriesIterator {
     fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
         let py = slf.py();
         let next = match slf.iter.next() {
-            Some(n) => n.map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?,
+            Some(n) => n.convert_err()?,
             None => return Ok(None),
         };
         let elements: Vec<_> = [next.start.to_object(py), next.end.to_object(py)]
