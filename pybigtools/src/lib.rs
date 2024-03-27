@@ -179,127 +179,114 @@ fn intervals_to_array<R: BBIFileRead>(
     } else {
         None
     };
+    let arr = match (bins, arr) {
+        (_, Some(arr)) => arr,
+        (Some(bins), None) => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
+        (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
+    };
+    let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
+        PyErr::new::<exceptions::PyException, _>(
+            "`arr` option must be a one-dimensional numpy array, if passed.",
+        )
+    })?;
     let (intervals_start, intervals_end) = (start.max(0) as u32, end.min(length) as u32);
-    match bins {
+    let bin_size = match bins {
         Some(bins) => {
-            let arr = match arr {
-                Some(v) => v,
-                None => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
-            };
-            let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-                PyErr::new::<exceptions::PyException, _>(
-                    "`arr` option must be a one-dimensional numpy array, if passed.",
-                )
-            })?;
-            {
-                let mut array = v.readwrite();
-
-                match zoom {
-                    Some(zoom) => {
-                        let iter = b
-                            .get_zoom_interval(
-                                &chrom,
-                                intervals_start,
-                                intervals_end,
-                                zoom.reduction_level,
-                            )
-                            .convert_err()?;
-                        to_array_zoom(
-                            start,
-                            end,
-                            iter,
-                            summary,
-                            bins,
-                            missing,
-                            array.as_array_mut(),
-                        )
-                        .convert_err()?;
-                    }
-                    None => {
-                        let iter = b
-                            .get_interval(&chrom, intervals_start, intervals_end)
-                            .convert_err()?;
-                        to_array_bins(
-                            start,
-                            end,
-                            iter,
-                            summary,
-                            bins,
-                            missing,
-                            array.as_array_mut(),
-                        )
-                        .convert_err()?;
-                    }
-                };
-
-                let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
-
-                let bin_size = (end - start) as f64 / bins as f64;
-                if start < 0 {
-                    let bin_start = 0;
-                    let interval_end = 0 - start;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
-                if end >= length {
-                    let interval_start = (length as i32) - start;
-                    let interval_end = end - start;
-                    let bin_start = ((interval_start as f64) / bin_size) as usize;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    assert_eq!(bin_end, array.len() - 1);
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
+            if v.len() != bins {
+                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                    bins,
+                    v.len(),
+                )));
             }
-            Ok(arr)
+
+            let mut array = v.readwrite();
+
+            match zoom {
+                Some(zoom) => {
+                    let iter = b
+                        .get_zoom_interval(
+                            &chrom,
+                            intervals_start,
+                            intervals_end,
+                            zoom.reduction_level,
+                        )
+                        .convert_err()?;
+                    to_array_zoom(
+                        start,
+                        end,
+                        iter,
+                        summary,
+                        bins,
+                        missing,
+                        array.as_array_mut(),
+                    )
+                    .convert_err()?;
+                }
+                None => {
+                    let iter = b
+                        .get_interval(&chrom, intervals_start, intervals_end)
+                        .convert_err()?;
+                    to_array_bins(
+                        start,
+                        end,
+                        iter,
+                        summary,
+                        bins,
+                        missing,
+                        array.as_array_mut(),
+                    )
+                    .convert_err()?;
+                }
+            };
+
+            (end - start) as f64 / bins as f64
         }
         _ => {
-            let arr = match arr {
-                Some(v) => v,
-                None => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
-            };
-            let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-                PyErr::new::<exceptions::PyException, _>(
-                    "`arr` option must be a one-dimensional numpy array, if passed.",
-                )
-            })?;
-
-            {
-                let mut array = v.readwrite();
-
-                let iter = b
-                    .get_interval(&chrom, intervals_start, intervals_end)
-                    .convert_err()?;
-                to_array(start, end, iter, array.as_array_mut()).convert_err()?;
-
-                let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
-
-                let bin_size = (end - start) as f64;
-                if start < 0 {
-                    let bin_start = 0;
-                    let interval_end = 0 - start;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
-                if end >= length {
-                    let interval_start = (length as i32) - start;
-                    let interval_end = end - start;
-                    let bin_start = ((interval_start as f64) / bin_size) as usize;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    assert_eq!(bin_end, array.len() - 1);
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
+            if v.len() != (end - start) as usize {
+                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                    (end - start) as usize,
+                    v.len(),
+                )));
             }
-            Ok(arr)
+
+            let mut array = v.readwrite();
+
+            let iter = b
+                .get_interval(&chrom, intervals_start, intervals_end)
+                .convert_err()?;
+            to_array(start, end, iter, missing, array.as_array_mut()).convert_err()?;
+
+            (end - start) as f64
+        }
+    };
+
+    {
+        let mut array = v.readwrite();
+        let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
+
+        if start < 0 {
+            let bin_start = 0;
+            let interval_end = 0 - start;
+            let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+            for i in bin_start..bin_end {
+                array[i] = oob;
+            }
+        }
+        if end >= length {
+            let interval_start = (length as i32) - start;
+            let interval_end = end - start;
+            let bin_start = ((interval_start as f64) / bin_size) as usize;
+            let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+            assert_eq!(bin_end, array.len() - 1);
+            for i in bin_start..bin_end {
+                array[i] = oob;
+            }
         }
     }
+
+    Ok(arr)
 }
 fn entries_to_array<R: BBIFileRead>(
     py: Python<'_>,
@@ -327,119 +314,125 @@ fn entries_to_array<R: BBIFileRead>(
     } else {
         None
     };
+    let arr = match (bins, arr) {
+        (_, Some(arr)) => arr,
+        (Some(bins), None) => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
+        (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
+    };
+    let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
+        PyErr::new::<exceptions::PyException, _>(
+            "`arr` option must be a one-dimensional numpy array, if passed.",
+        )
+    })?;
     let (intervals_start, intervals_end) = (start.max(0) as u32, end.min(length) as u32);
-    match bins {
+    let bin_size = match bins {
         Some(bins) => {
-            let arr = match arr {
-                Some(v) => v,
-                None => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
-            };
-            let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-                PyErr::new::<exceptions::PyException, _>(
-                    "`arr` option must be a one-dimensional numpy array, if passed.",
-                )
-            })?;
-            {
-                let mut array = v.readwrite();
-
-                match zoom {
-                    Some(zoom) => {
-                        let iter = b
-                            .get_zoom_interval(
-                                &chrom,
-                                intervals_start,
-                                intervals_end,
-                                zoom.reduction_level,
-                            )
-                            .convert_err()?;
-                        to_entry_array_zoom(start, end, iter, summary, bins, array.as_array_mut())
-                            .convert_err()?;
-                    }
-                    None => {
-                        let iter = b
-                            .get_interval(&chrom, intervals_start, intervals_end)
-                            .convert_err()?;
-                        to_entry_array_bins(start, end, iter, summary, bins, array.as_array_mut())
-                            .convert_err()?;
-                    }
-                };
-
-                let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
-
-                let bin_size = (end - start) as f64 / bins as f64;
-                if start < 0 {
-                    let bin_start = 0;
-                    let interval_end = 0 - start;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
-                if end >= length {
-                    let interval_start = (length as i32) - start;
-                    let interval_end = end - start;
-                    let bin_start = ((interval_start as f64) / bin_size) as usize;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    assert_eq!(bin_end, array.len() - 1);
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
+            if v.len() != bins {
+                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                    bins,
+                    v.len(),
+                )));
             }
-            Ok(arr)
+
+            let mut array = v.readwrite();
+
+            match zoom {
+                Some(zoom) => {
+                    let iter = b
+                        .get_zoom_interval(
+                            &chrom,
+                            intervals_start,
+                            intervals_end,
+                            zoom.reduction_level,
+                        )
+                        .convert_err()?;
+                    to_entry_array_zoom(
+                        start,
+                        end,
+                        iter,
+                        summary,
+                        bins,
+                        missing,
+                        array.as_array_mut(),
+                    )
+                    .convert_err()?;
+                }
+                None => {
+                    let iter = b
+                        .get_interval(&chrom, intervals_start, intervals_end)
+                        .convert_err()?;
+                    to_entry_array_bins(
+                        start,
+                        end,
+                        iter,
+                        summary,
+                        bins,
+                        missing,
+                        array.as_array_mut(),
+                    )
+                    .convert_err()?;
+                }
+            };
+
+            (end - start) as f64 / bins as f64
         }
         _ => {
-            let arr = match arr {
-                Some(v) => v,
-                None => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
-            };
-            let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-                PyErr::new::<exceptions::PyException, _>(
-                    "`arr` option must be a one-dimensional numpy array, if passed.",
-                )
-            })?;
-
-            {
-                let mut array = v.readwrite();
-
-                let iter = b
-                    .get_interval(&chrom, intervals_start, intervals_end)
-                    .convert_err()?;
-                to_entry_array(start, end, iter, array.as_array_mut()).convert_err()?;
-
-                let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
-
-                let bin_size = (end - start) as f64;
-                if start < 0 {
-                    let bin_start = 0;
-                    let interval_end = 0 - start;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
-                if end >= length {
-                    let interval_start = (length as i32) - start;
-                    let interval_end = end - start;
-                    let bin_start = ((interval_start as f64) / bin_size) as usize;
-                    let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-                    assert_eq!(bin_end, array.len() - 1);
-                    for i in bin_start..bin_end {
-                        array[i] = oob;
-                    }
-                }
+            if v.len() != (end - start) as usize {
+                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                    (end - start) as usize,
+                    v.len(),
+                )));
             }
-            Ok(arr)
+
+            let mut array = v.readwrite();
+
+            let iter = b
+                .get_interval(&chrom, intervals_start, intervals_end)
+                .convert_err()?;
+            to_entry_array(start, end, iter, missing, array.as_array_mut()).convert_err()?;
+
+            (end - start) as f64
+        }
+    };
+
+    {
+        let mut array = v.readwrite();
+        let mut array: ArrayViewMut<'_, f64, numpy::Ix1> = array.as_array_mut();
+
+        if start < 0 {
+            let bin_start = 0;
+            let interval_end = 0 - start;
+            let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+            for i in bin_start..bin_end {
+                array[i] = oob;
+            }
+        }
+        if end >= length {
+            let interval_start = (length as i32) - start;
+            let interval_end = end - start;
+            let bin_start = ((interval_start as f64) / bin_size) as usize;
+            let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+            assert_eq!(bin_end, array.len() - 1);
+            for i in bin_start..bin_end {
+                array[i] = oob;
+            }
         }
     }
+
+    Ok(arr)
 }
+
 fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
+    missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
+    v.fill(missing);
     for interval in iter {
         let interval = interval?;
         let interval_start = ((interval.start as i32) - start) as usize;
@@ -460,6 +453,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), bins);
+    v.fill(missing);
 
     let mut bin_data: VecDeque<(usize, i32, i32, Option<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
@@ -565,6 +559,7 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), bins);
+    v.fill(missing);
 
     let mut bin_data: VecDeque<(usize, i32, i32, Option<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
@@ -675,9 +670,11 @@ fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
+    missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
+    v.fill(missing);
     for interval in iter {
         let interval = interval?;
         let interval_start = ((interval.start as i32) - start) as usize;
@@ -694,9 +691,11 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     iter: I,
     summary: Summary,
     bins: usize,
+    missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), bins);
+    v.fill(missing);
 
     let mut bin_data: VecDeque<(usize, i32, i32, Vec<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
@@ -718,14 +717,14 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
                             .3
                             .into_iter()
                             .reduce(|min, v| min.min(v))
-                            .unwrap_or(0.0);
+                            .unwrap_or(missing);
                     }
                     Summary::Max => {
                         v[bin] = front
                             .3
                             .into_iter()
                             .reduce(|max, v| max.max(v))
-                            .unwrap_or(0.0);
+                            .unwrap_or(missing);
                     }
                     Summary::Mean => {
                         v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
@@ -747,7 +746,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
                 bin,
                 bin_start,
                 bin_end,
-                vec![0.0; (bin_end - bin_start) as usize],
+                vec![missing; (bin_end - bin_start) as usize],
             ));
         }
         for bin in bin_data.iter() {
@@ -769,7 +768,8 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
             for i in &mut data
                 [((overlap_start - *bin_start) as usize)..((overlap_end - *bin_start) as usize)]
             {
-                *i = *i + 1.0;
+                // If NAN, then 0.0 + 1.0, else i + 1.0
+                *i = (*i).max(0.0) + 1.0;
             }
         }
     }
@@ -782,14 +782,14 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
                     .3
                     .into_iter()
                     .reduce(|min, v| min.min(v))
-                    .unwrap_or(0.0);
+                    .unwrap_or(missing);
             }
             Summary::Max => {
                 v[bin] = front
                     .3
                     .into_iter()
                     .reduce(|max, v| max.max(v))
-                    .unwrap_or(0.0);
+                    .unwrap_or(missing);
             }
             Summary::Mean => {
                 v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
@@ -805,9 +805,11 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
     iter: I,
     summary: Summary,
     bins: usize,
+    missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(v.len(), bins);
+    v.fill(missing);
 
     let mut bin_data: VecDeque<(usize, i32, i32, Vec<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
@@ -829,16 +831,14 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
                             .3
                             .into_iter()
                             .reduce(|min, v| min.min(v))
-                            .unwrap_or(0.0)
-                            .max(0.0);
+                            .unwrap_or(missing);
                     }
                     Summary::Max => {
                         v[bin] = front
                             .3
                             .into_iter()
                             .reduce(|max, v| max.max(v))
-                            .unwrap_or(0.0)
-                            .max(0.0);
+                            .unwrap_or(missing);
                     }
                     Summary::Mean => {
                         v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
@@ -860,7 +860,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
                 bin,
                 bin_start,
                 bin_end,
-                vec![f64::NAN; (bin_end - bin_start) as usize],
+                vec![missing; (bin_end - bin_start) as usize],
             ));
         }
         for bin in bin_data.iter() {
@@ -883,12 +883,12 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
             for i in &mut data
                 [((overlap_start - *bin_start) as usize)..((overlap_end - *bin_start) as usize)]
             {
+                *i = i.max(0.0);
                 match summary {
                     Summary::Mean => *i += mean,
                     Summary::Min => *i = i.min(interval.summary.min_val),
                     Summary::Max => *i = i.max(interval.summary.max_val),
                 }
-                *i = i.max(0.0);
             }
         }
     }
@@ -901,16 +901,14 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
                     .3
                     .into_iter()
                     .reduce(|min, v| min.min(v))
-                    .unwrap_or(0.0)
-                    .max(0.0);
+                    .unwrap_or(missing);
             }
             Summary::Max => {
                 v[bin] = front
                     .3
                     .into_iter()
                     .reduce(|max, v| max.max(v))
-                    .unwrap_or(0.0)
-                    .max(0.0);
+                    .unwrap_or(missing);
             }
             Summary::Mean => {
                 v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
@@ -1926,6 +1924,51 @@ mod test {
 
     #[test]
     fn test_to_entry_array_bins() {
+        fn eq_with_nan_eq(a: f64, b: f64) -> bool {
+            (a.is_nan() && b.is_nan()) || (a == b)
+        }
+
+        #[track_caller]
+        fn assert_equal(found: Vec<f64>, expected: Vec<f64>) {
+            let equal = (found.len() == expected.len()) &&  // zip stops at the shortest
+            found.iter()
+               .zip(expected.iter())
+               .all(|(a,b)| eq_with_nan_eq(*a, *b));
+            if !equal {
+                panic!("Vecs not equal: expected {:?}, found {:?}", expected, found);
+            }
+        }
+
+        let entries = [];
+        let mut arr = Array::from(vec![f64::NAN]);
+        to_entry_array_bins(
+            10,
+            20,
+            entries.into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            1,
+            f64::NAN,
+            arr.view_mut(),
+        )
+        .unwrap();
+        let res = arr.to_vec();
+        assert_equal(res, [f64::NAN].into_iter().collect::<Vec<_>>());
+
+        let entries = [];
+        let mut arr = Array::from(vec![f64::NAN]);
+        to_entry_array_bins(
+            10,
+            20,
+            entries.into_iter().map(|v| Ok(v)),
+            crate::Summary::Mean,
+            1,
+            0.0,
+            arr.view_mut(),
+        )
+        .unwrap();
+        let res = arr.to_vec();
+        assert_equal(res, [0.0].into_iter().collect::<Vec<_>>());
+
         let entries = [BedEntry {
             start: 10,
             end: 20,
@@ -1938,11 +1981,12 @@ mod test {
             entries.into_iter().map(|v| Ok(v)),
             crate::Summary::Mean,
             1,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0].into_iter().collect::<Vec<_>>());
 
         let entries = [BedEntry {
             start: 10,
@@ -1956,11 +2000,12 @@ mod test {
             entries.into_iter().map(|v| Ok(v)),
             crate::Summary::Mean,
             2,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0, 1.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0, 1.0].into_iter().collect::<Vec<_>>());
 
         let entries = [
             BedEntry {
@@ -1981,11 +2026,12 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Mean,
             2,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0, 2.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0, 2.0].into_iter().collect::<Vec<_>>());
         let mut arr = Array::from(vec![f64::NAN]);
         to_entry_array_bins(
             10,
@@ -1993,11 +2039,12 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Min,
             1,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0].into_iter().collect::<Vec<_>>());
         let mut arr = Array::from(vec![f64::NAN]);
         to_entry_array_bins(
             10,
@@ -2005,11 +2052,12 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Max,
             1,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [2.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [2.0].into_iter().collect::<Vec<_>>());
 
         let entries = [
             BedEntry {
@@ -2035,11 +2083,12 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Mean,
             2,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0, 3.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0, 3.0].into_iter().collect::<Vec<_>>());
         let mut arr = Array::from(vec![f64::NAN]);
         to_entry_array_bins(
             10,
@@ -2047,11 +2096,12 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Min,
             1,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [1.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [1.0].into_iter().collect::<Vec<_>>());
         let mut arr = Array::from(vec![f64::NAN]);
         to_entry_array_bins(
             10,
@@ -2059,10 +2109,11 @@ mod test {
             entries.clone().into_iter().map(|v| Ok(v)),
             crate::Summary::Max,
             1,
+            f64::NAN,
             arr.view_mut(),
         )
         .unwrap();
         let res = arr.to_vec();
-        assert_eq!(res, [3.0].into_iter().collect::<Vec<_>>());
+        assert_equal(res, [3.0].into_iter().collect::<Vec<_>>());
     }
 }
