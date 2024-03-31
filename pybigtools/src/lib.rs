@@ -964,6 +964,65 @@ impl BBIRead {
         }
     }
 
+    fn info(&mut self, py: Python<'_>) -> PyResult<PyObject> {
+        let (info, summary) = match &mut self.bbi {
+            BBIReadRaw::BigWigFile(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+            BBIReadRaw::BigWigRemote(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+            BBIReadRaw::BigWigFileLike(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+            BBIReadRaw::BigBedFile(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+            BBIReadRaw::BigBedRemote(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+            BBIReadRaw::BigBedFileLike(b) => {
+                let summary = b.get_summary()?;
+                (b.info(), summary)
+            }
+        };
+        let var = (summary.sum_squares
+            - (summary.sum * summary.sum) / summary.bases_covered as f64)
+            / (summary.bases_covered as f64 - 1.0);
+        let summary = [
+            ("basesCovered", summary.bases_covered.to_object(py)),
+            ("sum", summary.sum.to_object(py)),
+            (
+                "mean",
+                (summary.sum as f64 / summary.bases_covered as f64).to_object(py),
+            ),
+            ("min", summary.min_val.to_object(py)),
+            ("max", summary.max_val.to_object(py)),
+            ("std", f64::sqrt(var).to_object(py)),
+        ]
+        .into_py_dict(py)
+        .to_object(py);
+        let info = [
+            ("version", info.header.version.to_object(py)),
+            ("isCompressed", info.header.is_compressed().to_object(py)),
+            (
+                "primaryDataSize",
+                info.header.primary_data_size().to_object(py),
+            ),
+            ("zoomLevels", info.zoom_headers.len().to_object(py)),
+            ("chromCount", info.chrom_info.len().to_object(py)),
+            ("summary", summary),
+        ]
+        .into_py_dict(py)
+        .to_object(py);
+        Ok(info)
+    }
+
     /// Returns the autosql of this bbi file.
     ///
     /// For bigBeds, this comes directly from the autosql stored in the file.

@@ -54,6 +54,16 @@ pub struct BBIHeader {
     pub(crate) uncompress_buf_size: u32,
 }
 
+impl BBIHeader {
+    pub fn is_compressed(&self) -> bool {
+        self.uncompress_buf_size > 0
+    }
+
+    pub fn primary_data_size(&self) -> u64 {
+        self.full_index_offset - self.full_data_offset
+    }
+}
+
 /// Information on a chromosome in a bbi file
 #[derive(Clone, Debug)]
 pub struct ChromInfo {
