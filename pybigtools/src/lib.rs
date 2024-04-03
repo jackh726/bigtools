@@ -926,6 +926,7 @@ struct BBIRead {
 
 #[pymethods]
 impl BBIRead {
+    #[getter]
     fn is_bigwig(&self) -> bool {
         #[cfg(feature = "remote")]
         {
@@ -945,6 +946,7 @@ impl BBIRead {
         }
     }
 
+    #[getter]
     fn is_bigbed(&self) -> bool {
         #[cfg(feature = "remote")]
         {
