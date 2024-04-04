@@ -1025,6 +1025,18 @@ impl BBIRead {
         Ok(info)
     }
 
+    fn zooms(&self) -> Vec<u32> {
+        let zooms = match &self.bbi {
+            BBIReadRaw::BigWigFile(b) => &b.info().zoom_headers,
+            BBIReadRaw::BigWigRemote(b) => &b.info().zoom_headers,
+            BBIReadRaw::BigWigFileLike(b) => &b.info().zoom_headers,
+            BBIReadRaw::BigBedFile(b) => &b.info().zoom_headers,
+            BBIReadRaw::BigBedRemote(b) => &b.info().zoom_headers,
+            BBIReadRaw::BigBedFileLike(b) => &b.info().zoom_headers,
+        };
+        zooms.iter().map(|z| z.reduction_level).collect()
+    }
+
     /// Returns the autosql of this bbi file.
     ///
     /// For bigBeds, this comes directly from the autosql stored in the file.
@@ -1118,7 +1130,7 @@ impl BBIRead {
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
             }
@@ -1126,21 +1138,21 @@ impl BBIRead {
             BBIReadRaw::BigWigRemote(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
             }
             BBIReadRaw::BigWigFileLike(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
             }
             BBIReadRaw::BigBedFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigBedEntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
             }
@@ -1148,16 +1160,93 @@ impl BBIRead {
             BBIReadRaw::BigBedRemote(b) => {
                 let b = b.reopen()?;
                 Ok(BigBedEntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
             }
             BBIReadRaw::BigBedFileLike(b) => {
                 let b = b.reopen()?;
                 Ok(BigBedEntriesIterator {
-                    iter: Box::new(b.get_interval_move(&chrom, start, end).unwrap()),
+                    iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
                 .into_py(py))
+            }
+        }
+    }
+
+    /// Returns the zoom records of a given range on a chromosome for a given zoom level.
+    ///
+    /// The result is an iterator of tuples. These tuples are in the format
+    /// (start: int, end: int, summary: dict).
+    ///
+    /// The chrom argument is the name of the chromosome.  
+    /// The start and end arguments denote the range to get values for.
+    ///  If end is not provided, it defaults to the length of the chromosome.
+    ///  If start is not provided, it defaults to the beginning of the chromosome.
+    fn zoom_records(
+        &mut self,
+        reduction_level: u32,
+        chrom: String,
+        start: Option<u32>,
+        end: Option<u32>,
+    ) -> PyResult<ZoomIntervalIterator> {
+        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        match &self.bbi {
+            BBIReadRaw::BigWigFile(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
+            }
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigWigRemote(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
+            }
+            BBIReadRaw::BigWigFileLike(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
+            }
+            BBIReadRaw::BigBedFile(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
+            }
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
+            }
+            BBIReadRaw::BigBedFileLike(b) => {
+                let b = b.reopen()?;
+                let iter = b
+                    .get_zoom_interval_move(&chrom, start, end, reduction_level)
+                    .convert_err()?;
+                Ok(ZoomIntervalIterator {
+                    iter: Box::new(iter),
+                })
             }
         }
     }
@@ -1262,6 +1351,39 @@ impl BBIRead {
             BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
             BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
         }
+    }
+}
+
+#[pyclass(module = "pybigtools")]
+struct ZoomIntervalIterator {
+    iter: Box<dyn Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send>,
+}
+
+#[pymethods]
+impl ZoomIntervalIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<ZoomIntervalIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<(u32, u32, PyObject)>> {
+        slf.iter
+            .next()
+            .transpose()
+            .map(|o| {
+                o.map(|v| {
+                    let summary = [
+                        ("total_items", v.summary.total_items.to_object(slf.py())),
+                        ("bases_covered", v.summary.bases_covered.to_object(slf.py())),
+                        ("min_val", v.summary.min_val.to_object(slf.py())),
+                        ("max_val", v.summary.max_val.to_object(slf.py())),
+                        ("sum", v.summary.sum.to_object(slf.py())),
+                        ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
+                    ]
+                    .to_object(slf.py());
+                    (v.start, v.end, summary)
+                })
+            })
+            .convert_err()
     }
 }
 

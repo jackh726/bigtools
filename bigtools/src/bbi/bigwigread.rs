@@ -348,6 +348,28 @@ where
 
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
 
+        Ok(ZoomIntervalIter::<
+            std::vec::IntoIter<Block>,
+            BigWigRead<R>,
+            &mut BigWigRead<R>,
+        >::new(self, blocks.into_iter(), chrom, start, end))
+    }
+
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `ZoomRecord`s.
+    pub fn get_zoom_interval_move<'a>(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+        reduction_level: u32,
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>>, ZoomIntervalError> {
+        let cir_tree = self.zoom_cir_tree(reduction_level)?;
+
+        let chrom = self.info.chrom_id(chrom_name)?;
+
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
+
         Ok(ZoomIntervalIter::new(
             self,
             blocks.into_iter(),
