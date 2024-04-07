@@ -26,9 +26,9 @@ use file_like::PyFileLikeObject;
 use numpy::ndarray::ArrayViewMut;
 use numpy::PyArray1;
 use pyo3::exceptions::{self, PyTypeError};
-use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyString, PyTuple};
-use pyo3::wrap_pyfunction;
+use pyo3::{create_exception, wrap_pyfunction};
+use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use tokio::runtime;
 use url::Url;
@@ -37,13 +37,16 @@ mod file_like;
 
 type ValueTuple = (u32, u32, f32);
 
+create_exception!(pybigtools, BBIFileClosed, exceptions::PyException);
+
 fn start_end(
     bbi: &BBIReadRaw,
     chrom_name: &str,
-    start: Option<u32>,
-    end: Option<u32>,
+    start: Option<i32>,
+    end: Option<i32>,
 ) -> PyResult<(u32, u32)> {
     let chroms = match &bbi {
+        BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
         BBIReadRaw::BigWigFile(b) => b.chroms(),
         #[cfg(feature = "remote")]
         BBIReadRaw::BigWigRemote(b) => b.chroms(),
@@ -63,7 +66,10 @@ fn start_end(
         }
         Some(c) => c.length,
     };
-    return Ok((start.unwrap_or(0), end.unwrap_or(length)));
+    return Ok((
+        start.map(|v| v.max(0) as u32).unwrap_or(0),
+        end.map(|v| (v.max(0) as u32).min(length)).unwrap_or(length),
+    ));
 }
 
 fn bigwig_start_end_length<R>(
@@ -112,6 +118,7 @@ impl Reopen for PyFileLikeObject {
 }
 
 enum BBIReadRaw {
+    Closed,
     BigWigFile(BigWigReadRaw<CachedBBIFileRead<ReopenableFile>>),
     #[cfg(feature = "remote")]
     BigWigRemote(BigWigReadRaw<CachedBBIFileRead<RemoteFile>>),
@@ -968,6 +975,7 @@ impl BBIRead {
 
     fn info(&mut self, py: Python<'_>) -> PyResult<PyObject> {
         let (info, summary) = match &mut self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let summary = b.get_summary()?;
                 (b.info(), summary)
@@ -1025,8 +1033,9 @@ impl BBIRead {
         Ok(info)
     }
 
-    fn zooms(&self) -> Vec<u32> {
+    fn zooms(&self) -> PyResult<Vec<u32>> {
         let zooms = match &self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => &b.info().zoom_headers,
             BBIReadRaw::BigWigRemote(b) => &b.info().zoom_headers,
             BBIReadRaw::BigWigFileLike(b) => &b.info().zoom_headers,
@@ -1034,7 +1043,7 @@ impl BBIRead {
             BBIReadRaw::BigBedRemote(b) => &b.info().zoom_headers,
             BBIReadRaw::BigBedFileLike(b) => &b.info().zoom_headers,
         };
-        zooms.iter().map(|z| z.reduction_level).collect()
+        Ok(zooms.iter().map(|z| z.reduction_level).collect())
     }
 
     /// Returns the autosql of this bbi file.
@@ -1051,19 +1060,19 @@ impl BBIRead {
     ///   "fields": [(<field name>, <field type>, <field comment>), ...],
     /// }
     /// ```
-    fn sql(&mut self, py: Python, parse: Option<bool>) -> PyResult<PyObject> {
-        let parse = parse.unwrap_or(false);
-        pub const BEDGRAPH: &str = r#"
-            table bedGraph
-            "bedGraph file"
-            (
-                string chrom;        "Reference sequence chromosome or scaffold"
-                uint   chromStart;   "Start position in chromosome"
-                uint   chromEnd;     "End position in chromosome"
-                float  value;        "Value for a given interval"
-            )
+    #[pyo3(signature = (parse = false))]
+    fn sql(&mut self, py: Python, parse: bool) -> PyResult<PyObject> {
+        pub const BEDGRAPH: &str = r#"table bedGraph
+"bedGraph file"
+(
+    string chrom;        "Reference sequence chromosome or scaffold"
+    uint   chromStart;   "Start position in chromosome"
+    uint   chromEnd;     "End position in chromosome"
+    float  value;        "Value for a given interval"
+)\
             "#;
         let schema = match &mut self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(_)
             | BBIReadRaw::BigWigRemote(_)
             | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
@@ -1122,11 +1131,12 @@ impl BBIRead {
         &mut self,
         py: Python<'_>,
         chrom: String,
-        start: Option<u32>,
-        end: Option<u32>,
+        start: Option<i32>,
+        end: Option<i32>,
     ) -> PyResult<PyObject> {
         let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
@@ -1187,11 +1197,12 @@ impl BBIRead {
         &mut self,
         reduction_level: u32,
         chrom: String,
-        start: Option<u32>,
-        end: Option<u32>,
+        start: Option<i32>,
+        end: Option<i32>,
     ) -> PyResult<ZoomIntervalIterator> {
         let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 let iter = b
@@ -1262,10 +1273,14 @@ impl BBIRead {
     /// The chrom argument is the name of the chromosome.  
     /// The start and end arguments denote the range to get values for.  
     ///  If end is not provided, it defaults to the length of the chromosome.  
-    ///  If start is not provided, it defaults to the beginning of the chromosome.  
+    ///  If start is not provided, it defaults to the beginning of the chromosome.
+    /// The default oob value is `numpy.nan`.
     ///
     /// This returns a numpy array.
-    #[pyo3(signature = (chrom, start, end, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None))]
+    #[pyo3(
+        signature = (chrom, start, end, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
+        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
+    )]
     fn values(
         &mut self,
         py: Python<'_>,
@@ -1290,6 +1305,7 @@ impl BBIRead {
             }
         };
         match &mut self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => intervals_to_array(
                 py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
             ),
@@ -1319,7 +1335,7 @@ impl BBIRead {
     ///  If it is None, then all chroms will be returned.  
     ///  If it is a String, then the length of that chromosome will be returned.  
     ///  If the chromosome doesn't exist, nothing will be returned.  
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> Option<PyObject> {
+    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Option<PyObject>> {
         fn get_chrom_obj<B: bigtools::BBIRead>(
             b: &B,
             py: Python,
@@ -1341,7 +1357,8 @@ impl BBIRead {
                 ),
             }
         }
-        match &self.bbi {
+        Ok(match &self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => get_chrom_obj(b, py, chrom),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => get_chrom_obj(b, py, chrom),
@@ -1350,7 +1367,41 @@ impl BBIRead {
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
             BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
+        })
+    }
+
+    fn close(&mut self) {
+        self.bbi = BBIReadRaw::Closed;
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __exit__(
+        slf: Py<Self>,
+        py: Python<'_>,
+        _exc_type: PyObject,
+        _exc_value: PyObject,
+        _exc_traceback: PyObject,
+    ) -> Py<Self> {
+        slf.borrow_mut(py).bbi = BBIReadRaw::Closed;
+        slf
+    }
+
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        match &self.bbi {
+            BBIReadRaw::Closed | BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigBedFile(_) => {}
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigWigRemote(_) | BBIReadRaw::BigBedRemote(_) => {}
+            BBIReadRaw::BigWigFileLike(b) => visit.call(&b.inner_read().inner_read().inner)?,
+            BBIReadRaw::BigBedFileLike(b) => visit.call(&b.inner_read().inner_read().inner)?,
         }
+        Ok(())
+    }
+
+    fn __clear__(&mut self) {
+        self.close()
     }
 }
 
@@ -1379,6 +1430,7 @@ impl ZoomIntervalIterator {
                         ("sum", v.summary.sum.to_object(slf.py())),
                         ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
                     ]
+                    .into_py_dict(slf.py())
                     .to_object(slf.py());
                     (v.start, v.end, summary)
                 })
@@ -2085,6 +2137,8 @@ fn bigWigAverageOverBed(
 /// The base module for opening a bigWig or bigBed. The only defined function is `open`.
 #[pymodule]
 fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
+
     m.add_wrapped(wrap_pyfunction!(open))?;
     m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
 

@@ -527,7 +527,7 @@ fn get_block_values<R: BBIFileRead>(
                     end: chrom_end,
                     value,
                 };
-                if value.end >= start && value.start <= end {
+                if value.end > start && value.start < end {
                     value.start = value.start.max(start);
                     value.end = value.end.min(end);
                     values.push(value)
@@ -555,7 +555,7 @@ fn get_block_values<R: BBIFileRead>(
                     end: chrom_end,
                     value,
                 };
-                if value.end >= start && value.start <= end {
+                if value.end > start && value.start < end {
                     value.start = value.start.max(start);
                     value.end = value.end.min(end);
                     values.push(value)
@@ -584,7 +584,7 @@ fn get_block_values<R: BBIFileRead>(
                     end: chrom_end,
                     value,
                 };
-                if value.end >= start && value.start <= end {
+                if value.end > start && value.start < end {
                     value.start = value.start.max(start);
                     value.end = value.end.min(end);
                     values.push(value)
