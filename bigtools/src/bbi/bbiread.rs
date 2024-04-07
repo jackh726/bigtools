@@ -557,10 +557,16 @@ impl<S: SeekableRead> BBIFileRead for S {
     }
 }
 
-pub struct CachedBBIFileRead<S: SeekableRead> {
+pub struct CachedBBIFileRead<S> {
     read: S,
     cir_tree_node_map: HashMap<u64, Either<Vec<CirTreeNodeLeaf>, Vec<CirTreeNodeNonLeaf>>>,
     block_data: HashMap<Block, Vec<u8>>,
+}
+
+impl<S> CachedBBIFileRead<S> {
+    pub fn inner_read(&self) -> &S {
+        &self.read
+    }
 }
 
 impl<S: SeekableRead> CachedBBIFileRead<S> {

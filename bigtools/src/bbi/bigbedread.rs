@@ -214,6 +214,11 @@ impl<R: BBIFileRead> BigBedRead<R> {
         })
     }
 
+    /// Gets a reference to the inner `R` type, in order to access any info
+    pub fn inner_read(&self) -> &R {
+        &self.read
+    }
+
     /// Returns the summary data from bigBed
     ///
     /// Note: For version 1 of bigBeds, there is no total summary. In that
