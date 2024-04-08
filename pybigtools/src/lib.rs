@@ -1117,8 +1117,7 @@ impl BBIRead {
     uint   chromStart;   "Start position in chromosome"
     uint   chromEnd;     "End position in chromosome"
     float  value;        "Value for a given interval"
-)\
-            "#;
+)"#;
         let schema = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
