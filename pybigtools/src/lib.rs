@@ -2080,19 +2080,22 @@ impl BigWigAverageOverBedEntriesIterator {
     fn __next__(
         mut slf: PyRefMut<Self>,
     ) -> PyResult<Option<BigWigAverageOverBedEntriesIteratorRet>> {
-        slf.iter
+        let v = slf
+            .iter
             .next()
             .transpose()
-            .map(|o| {
-                o.map(|v| {
-                    if slf.usename {
-                        BigWigAverageOverBedEntriesIteratorRet::WithName((v.name, v.mean))
-                    } else {
-                        BigWigAverageOverBedEntriesIteratorRet::Single(v.mean)
-                    }
-                })
-            })
-            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+
+        let Some(v) = v else {
+            return Ok(None);
+        };
+
+        let item = if slf.usename {
+            BigWigAverageOverBedEntriesIteratorRet::WithName((v.name, v.mean))
+        } else {
+            BigWigAverageOverBedEntriesIteratorRet::Single(v.mean)
+        };
+        Ok(Some(item))
     }
 }
 
@@ -2303,140 +2306,6 @@ fn open_path_or_url(
     Ok(res)
 }
 
-/// Gets the average values from a bigWig over the entries of a bed file.
-///
-/// Parameters
-/// ----------
-/// bigWig : str
-///     The path to the bigWig.
-/// bed : str
-///     The path to the bed.
-/// names : bool or int, optional
-///     If ``None``, then each return value will be a single float, the
-///     average value over an interval in the bed file.  
-///     
-///     If ``True``, then each return value will be a tuple of the value of
-///     column 4 and the average value over the interval with that name in the
-///     bed file.  
-///     
-///     If ``False``, then each return value will be a tuple of the interval
-///     in the format ``{chrom}:{start}-{end}`` and the average value over
-///     that interval.  
-///     
-///     If ``0``, then each return value will match as if ``False`` was passed.
-///   
-///     If a ``1+``, then each return value will be a tuple of the value of
-///     column of this parameter (1-based) and the average value over the
-///     interval.  
-///
-/// Returns
-/// -------
-/// Generator of float or tuple.
-///
-/// Notes
-/// -----
-/// If no ``name`` field is specified, returns a generator of floats.  
-/// If a ``name`` column is specified, returns a generator of tuples
-/// ``({name}, {average})``.  
-#[pyfunction]
-fn bigWigAverageOverBed(
-    py: Python,
-    bigwig: String,
-    bed: String,
-    names: Option<PyObject>,
-) -> PyResult<PyObject> {
-    let extension = match &Path::new(&bigwig).extension().map(|e| e.to_string_lossy()) {
-        Some(e) => e.to_string(),
-        None => {
-            return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                "Invalid file type. Must be a bigWig (.bigWig, .bw)."
-            )));
-        }
-    };
-    let isfile = std::path::Path::new(&bigwig).exists();
-    if !isfile {
-        match Url::parse(&bigwig) {
-            Ok(_) => {}
-            Err(_) => {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "Invalid file path. The file does not exists and it is not a url."
-                )))
-            }
-        }
-    }
-    let (name, usename) = {
-        match names {
-            Some(names) => match names.extract::<bool>(py) {
-                Ok(b) => {
-                    if b {
-                        (Name::Column(4), true)
-                    } else {
-                        (Name::None, true)
-                    }
-                }
-                Err(_) => match names.extract::<isize>(py) {
-                    Ok(col) => {
-                        if col < 0 {
-                            return Err(PyErr::new::<exceptions::PyValueError, _>(
-                                "Invalid names argument. Must be >= 0.",
-                            ));
-                        }
-                        if col == 0 {
-                            (Name::None, true)
-                        } else {
-                            (Name::Column(col as usize), true)
-                        }
-                    }
-                    Err(_) => {
-                        return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
-                    }
-                },
-            },
-            None => (Name::None, false),
-        }
-    };
-    let res = match extension.as_ref() {
-        "bw" | "bigWig" | "bigwig" => {
-            if isfile {
-                let read = BigWigReadRaw::open_file(&bigwig)
-                    .map_err(|_| PyErr::new::<BBIReadError, _>(format!("Error opening bigWig.")))?
-                    .cached();
-                let bedin = BufReader::new(File::open(bed)?);
-                let iter = Box::new(bigwig_average_over_bed(bedin, read, name));
-
-                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
-            } else {
-                #[cfg(feature = "remote")]
-                {
-                    let read = BigWigReadRaw::open(RemoteFile::new(&bigwig))
-                        .map_err(|_| {
-                            PyErr::new::<BBIReadError, _>(format!("Error opening bigBed."))
-                        })?
-                        .cached();
-                    let bedin = BufReader::new(File::open(bed)?);
-                    let iter = Box::new(bigwig_average_over_bed(bedin, read, name));
-
-                    BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
-                }
-
-                #[cfg(not(feature = "remote"))]
-                {
-                    return Err(PyErr::new::<exceptions::PyOSError, _>(format!(
-                        "Builtin support for remote files is not available on this platform."
-                    )));
-                }
-            }
-        }
-        _ => {
-            return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                "Invalid file type. Must be a bigWig (.bigWig, .bw)."
-            )));
-        }
-    };
-
-    Ok(res)
-}
-
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
 #[pymodule]
 fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -2452,7 +2321,6 @@ fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
     m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
-    m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
 
     Ok(())
 }
