@@ -980,6 +980,7 @@ impl BBIRead {
                 let summary = b.get_summary()?;
                 (b.info(), summary)
             }
+            #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => {
                 let summary = b.get_summary()?;
                 (b.info(), summary)
@@ -992,6 +993,7 @@ impl BBIRead {
                 let summary = b.get_summary()?;
                 (b.info(), summary)
             }
+            #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => {
                 let summary = b.get_summary()?;
                 (b.info(), summary)
@@ -1037,9 +1039,11 @@ impl BBIRead {
         let zooms = match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => &b.info().zoom_headers,
+            #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => &b.info().zoom_headers,
             BBIReadRaw::BigWigFileLike(b) => &b.info().zoom_headers,
             BBIReadRaw::BigBedFile(b) => &b.info().zoom_headers,
+            #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => &b.info().zoom_headers,
             BBIReadRaw::BigBedFileLike(b) => &b.info().zoom_headers,
         };
@@ -1074,9 +1078,11 @@ impl BBIRead {
         let schema = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(_)
-            | BBIReadRaw::BigWigRemote(_)
             | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigWigRemote(_) => BEDGRAPH.to_string(),
             BBIReadRaw::BigBedFile(b) => b.autosql().convert_err()?,
+            #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => b.autosql().convert_err()?,
             BBIReadRaw::BigBedFileLike(b) => b.autosql().convert_err()?,
         };
@@ -1368,6 +1374,92 @@ impl BBIRead {
             BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
             BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
         })
+    }
+
+    /// Gets the average values from a bigWig over the entries of a bed file.
+    /// Raises an exception if the current file is a bigBed.
+    ///
+    /// Parameters:
+    ///     bed (str): The path to the bed.
+    ///     names (None, bool, or int):  
+    ///         If `None`, then each return value will be a single `float`,
+    ///             the average value over an interval in the bed file.  
+    ///         If `True`, then each return value will be a tuple of the value of column 4
+    ///             and the average value over the interval with that name in the bed file.  
+    ///         If `False`, then each return value will be a tuple of the interval in the format
+    ///             `{chrom}:{start}-{end}` and the average value over that interval.  
+    ///         If `0`, then each return value will match as if `False` was passed.  
+    ///         If a `1+`, then each return value will be a tuple of the value of column of this
+    ///             parameter (1-based) and the average value over the interval.  
+    ///
+    /// Returns:
+    ///     This returns a generator of values. (Therefore, to save to a list, do `list(bigWigAverageOverBed(...))`)  
+    ///     If no name is specified (see the `names` parameter above), then returns a generator of `float`s.  
+    ///     If a name column is specified (see above), then returns a generator of tuples `({name}, {average})`
+    fn average_over_bed(
+        &mut self,
+        py: Python,
+        bed: String,
+        names: Option<PyObject>,
+    ) -> PyResult<PyObject> {
+        let (name, usename) = {
+            match names {
+                Some(names) => match names.extract::<bool>(py) {
+                    Ok(b) => {
+                        if b {
+                            (Name::Column(4), true)
+                        } else {
+                            (Name::None, true)
+                        }
+                    }
+                    Err(_) => match names.extract::<isize>(py) {
+                        Ok(col) => {
+                            if col < 0 {
+                                return Err(PyErr::new::<exceptions::PyException, _>(
+                                    "Invalid names argument. Must be >= 0.",
+                                ));
+                            }
+                            if col == 0 {
+                                (Name::None, true)
+                            } else {
+                                (Name::Column(col as usize), true)
+                            }
+                        }
+                        Err(_) => {
+                            return Err(PyErr::new::<exceptions::PyException, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
+                        }
+                    },
+                },
+                None => (Name::None, false),
+            }
+        };
+        let bedin = BufReader::new(File::open(bed)?);
+
+        let res = match &mut self.bbi {
+            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::BigWigFile(b) => {
+                let b = b.reopen()?;
+                let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
+                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+            }
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigWigRemote(b) => {
+                let b = b.reopen()?;
+                let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
+                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+            }
+            BBIReadRaw::BigWigFileLike(b) => {
+                let b = b.reopen()?;
+                let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
+                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+            }
+            BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => return Err(BBIFileClosed::new_err("Not a bigWig.")),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(_) => return Err(BBIFileClosed::new_err("Not a bigWig.")),
+        };
+
+        Ok(res)
+
     }
 
     fn close(&mut self) {
