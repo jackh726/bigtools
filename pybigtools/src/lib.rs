@@ -933,7 +933,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     Ok(())
 }
 
-/// This class is the interface for reading a bigWig or bigBed.
+/// Interface for reading a BigWig or BigBed file.
 #[pyclass(module = "pybigtools")]
 struct BBIRead {
     bbi: BBIReadRaw,
@@ -981,6 +981,7 @@ impl BBIRead {
         }
     }
 
+    /// Return a dict of information about the BBI file.
     fn info(&mut self, py: Python<'_>) -> PyResult<PyObject> {
         let (info, summary) = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
@@ -1043,6 +1044,8 @@ impl BBIRead {
         Ok(info)
     }
 
+    /// Return a list of sizes in bases of the summary intervals used in each
+    /// of the zoom levels (i.e. reduction levels) of the BBI file.
     fn zooms(&self) -> PyResult<Vec<u32>> {
         let zooms = match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
@@ -1058,20 +1061,38 @@ impl BBIRead {
         Ok(zooms.iter().map(|z| z.reduction_level).collect())
     }
 
-    /// Returns the autosql of this bbi file.
+    /// Return the autoSql schema definition of this BBI file.
     ///
-    /// For bigBeds, this comes directly from the autosql stored in the file.
-    /// For bigWigs, the autosql returned matches that of a bedGraph file.
+    /// For BigBeds, this schema comes directly from the autoSql string stored
+    /// in the file. For BigWigs, the schema generated describes a bedGraph
+    /// file.
     ///
-    /// By default, the autosql is returned as a string. Passing `parse = true`
-    /// returns instead a dictionary of the format:
-    /// ```
-    /// {
-    ///   "name": <declared name>,
-    ///   "comment": <declaration coment>,
-    ///   "fields": [(<field name>, <field type>, <field comment>), ...],
-    /// }
-    /// ```
+    /// Parameters
+    /// ----------
+    /// parse : bool, optional [default: False]
+    ///     If True, return the schema as a dictionary. If False, return the
+    ///     schema as a string. Default is False.
+    ///
+    /// Returns
+    /// -------
+    /// schema : str or dict
+    ///     The autoSql schema of the BBI file. If `parse` is True, the schema
+    ///     is returned as a dictionary of the format:
+    ///
+    ///     ```
+    ///     {
+    ///         "name": <declared name>,
+    ///         "comment": <declaration coment>,
+    ///         "fields": [(<field name>, <field type>, <field comment>), ...],
+    ///     }
+    ///     ```
+    ///
+    /// See Also
+    /// --------
+    /// is_bigwig : Check if the BBI file is a bigWig.
+    /// is_bigbed : Check if the BBI file is a bigBed.
+    /// info : Get information about the BBI file.
+    /// zooms : Get the zoom levels of the BBI file.
     #[pyo3(signature = (parse = false))]
     fn sql(&mut self, py: Python, parse: bool) -> PyResult<PyObject> {
         pub const BEDGRAPH: &str = r#"table bedGraph
@@ -1126,19 +1147,36 @@ impl BBIRead {
         Ok(obj)
     }
 
-    /// Returns the records of a given range on a chromosome.
+    /// Return the records of a given range on a chromosome.
     ///
-    /// The result is an iterator of tuples. For bigWigs, these tuples are in
-    /// the format (start: int, end: int, value: float). For bigBeds, these
+    /// The result is an iterator of tuples. For BigWigs, these tuples are in
+    /// the format (start: int, end: int, value: float). For BigBeds, these
     /// tuples are in the format (start: int, end: int, ...), where the "rest"
     /// fields are split by whitespace.
     ///
-    /// Missing values in bigWigs will results in non-contiguous records.
+    /// Parameters
+    /// ----------
+    /// chrom : str
+    ///     Name of the chromosome.
+    /// start, end : int, optional
+    ///     The range to get values for. If end is not provided, it defaults to
+    ///     the length of the chromosome. If start is not provided, it defaults
+    ///     to the beginning of the chromosome.
     ///
-    /// The chrom argument is the name of the chromosome.  
-    /// The start and end arguments denote the range to get values for.
-    ///  If end is not provided, it defaults to the length of the chromosome.
-    ///  If start is not provided, it defaults to the beginning of the chromosome.
+    /// Returns
+    /// -------
+    /// Iterator[tuple[int, int, float] or tuple[int, int, ...]]
+    ///     An iterator of tuples in the format (start: int, end: int, value:
+    ///     float) for BigWigs, or (start: int, end: int, *rest) for BigBeds.
+    ///
+    /// Notes
+    /// -----
+    /// Missing values in BigWigs will results in non-contiguous records.
+    ///
+    /// See Also
+    /// --------
+    /// zoom_records : Get the zoom records of a given range on a chromosome.
+    /// values : Get the values of a given range on a chromosome.
     fn records(
         &mut self,
         py: Python<'_>,
@@ -1196,15 +1234,52 @@ impl BBIRead {
         }
     }
 
-    /// Returns the zoom records of a given range on a chromosome for a given zoom level.
+    /// Return the zoom records of a given range on a chromosome for a given
+    /// zoom level.
     ///
     /// The result is an iterator of tuples. These tuples are in the format
     /// (start: int, end: int, summary: dict).
     ///
-    /// The chrom argument is the name of the chromosome.  
-    /// The start and end arguments denote the range to get values for.
-    ///  If end is not provided, it defaults to the length of the chromosome.
-    ///  If start is not provided, it defaults to the beginning of the chromosome.
+    /// Parameters
+    /// ----------
+    /// reduction_level : int
+    ///     The zoom level to use, as a resolution in bases. Use the ``zooms``
+    ///     method to get a list of available zoom levels.
+    /// chrom : str
+    ///     Name of the chromosome.
+    /// start, end : int, optional
+    ///     The range to get values for. If end is not provided, it defaults
+    ///     to the length of the chromosome. If start is not provided, it
+    ///     defaults to the beginning of the chromosome.
+    ///
+    /// Returns
+    /// -------
+    /// Iterator[tuple[int, int, dict]]
+    ///     An iterator of tuples in the format (start: int, end: int,
+    ///     summary: dict).
+    ///
+    /// Notes
+    /// -----
+    /// The summary dictionary contains the following keys
+    ///
+    /// - ``total_items``: The number of items in the interval.
+    /// - ``bases_covered``: The number of bases covered by the interval.
+    /// - ``min_val``: The minimum value in the interval.
+    /// - ``max_val``: The maximum value in the interval.
+    /// - ``sum``: The sum of all values in the interval.
+    /// - ``sum_squares``: The sum of the squares of all values in the interval.
+    ///
+    /// For BigWigs, the summary statistics are derived from the unique
+    /// **signal values** associated with each base in the interval.
+    ///
+    /// For BigBeds, the summary statistics instead are derived from the
+    /// **number of BED intervals** overlapping each base in the interval.
+    ///
+    /// See Also
+    /// --------
+    /// zooms : Get a list of available zoom levels.
+    /// records : Get the records of a given range on a chromosome.
+    /// values : Get the values of a given range on a chromosome.
     fn zoom_records(
         &mut self,
         reduction_level: u32,
@@ -1274,21 +1349,66 @@ impl BBIRead {
         }
     }
 
-    /// Returns the values of a given range on a chromosome.
+    /// Return the values of a given range on a chromosome as a numpy array.
     ///
-    /// For bigWigs, the result is an array of length (end - start).
-    /// If a value does not exist in the bigwig for a specific base, it will be nan.
+    /// For BigWigs, the returned values or summary statistics are derived
+    /// from the unique **signal values** associated with each base.
     ///
-    /// For bigBeds, the returned array instead represents a pileup of the count
-    /// of intervals overlapping each base.
+    /// For BigBeds, the returned values or summary statistics instead are
+    /// derived from the **number of BED intervals** overlapping each base.
     ///
-    /// The chrom argument is the name of the chromosome.  
-    /// The start and end arguments denote the range to get values for.  
-    ///  If end is not provided, it defaults to the length of the chromosome.  
-    ///  If start is not provided, it defaults to the beginning of the chromosome.
-    /// The default oob value is `numpy.nan`.
+    /// Parameters
+    /// ----------
+    /// chrom : str
+    ///     Name of the chromosome.  
+    /// start, end : int, optional
+    ///     The range to get values for. If end is not provided, it defaults
+    ///     to the length of the chromosome. If start is not provided, it
+    ///     defaults to the beginning of the chromosome.
+    /// bins : int, optional
+    ///     If provided, the query interval will be divided into equally spaced
+    ///     bins and the values in each bin will be interpolated or summarized.
+    ///     If not provided, the values will be returned for each base.
+    /// summary : Literal["mean", "min", "max"], optional [default: "mean"]
+    ///     The summary statistic to use. Currently supported statistics are
+    ///     ``mean``, ``min``, and ``max``.
+    /// exact : bool, optional [default: False]
+    ///     If True and ``bins`` is specified, return exact summary statistic
+    ///     values instead of interpolating from the optimal zoom level.
+    ///     Default is False.
+    /// missing : float, optional [default: 0.0]
+    ///     Fill-in value for unreported data in valid regions. Default is 0.
+    /// oob : float, optional [default: NaN]
+    ///     Fill-in value for out-of-bounds regions. Default is NaN.
+    /// arr : numpy.ndarray, optional
+    ///     If provided, the values will be written to this array or array
+    ///     view. The array must be of the correct size and type.
     ///
-    /// This returns a numpy array.
+    /// Returns
+    /// -------
+    /// numpy.ndarray
+    ///     The signal values of the bigwig or bigbed in the specified range.
+    ///
+    /// Notes
+    /// -----
+    /// A BigWig file encodes a step function, and the value at
+    /// a base is given by the signal value of the unique interval that
+    /// contains that base.
+    ///
+    /// A BigBed file encodes a collection of (possibly overlapping) intervals
+    /// which may or may not be associated with quantitative scores. The
+    /// "value" at given base used here summarizes the number of intervals
+    /// overlapping that base, not any particular score.
+    ///
+    /// If a number of bins is requested and ``exact`` is False, the summarized
+    /// data is interpolated from the closest available zoom level. If you
+    /// need accurate summary data and are okay with small trade-off in speed,
+    /// set ``exact`` to True.
+    ///
+    /// See Also
+    /// --------
+    /// records : Get the records of a given range on a chromosome.
+    /// zoom_records : Get the zoom records of a given range on a chromosome.
     #[pyo3(
         signature = (chrom, start, end, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
         text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
@@ -1341,12 +1461,19 @@ impl BBIRead {
         }
     }
 
-    /// Returns the chromosomes in a bigwig, and their lengths.  
+    /// Return the names of chromosomes in a BBI file and their lengths.  
     ///
-    /// The chroms argument can be either String or None.  
-    ///  If it is None, then all chroms will be returned.  
-    ///  If it is a String, then the length of that chromosome will be returned.  
-    ///  If the chromosome doesn't exist, nothing will be returned.  
+    /// Parameters
+    /// ----------
+    /// chrom : str or None
+    ///     The name of the chromosome to get the length of. If None, then a
+    ///     dictionary of all chromosome sizes will be returned. If the
+    ///     chromosome doesn't exist, returns None.
+    ///
+    /// Returns
+    /// -------
+    /// int or Dict[str, int] or None:
+    ///     Chromosome length or a dictionary of chromosome lengths.
     fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Option<PyObject>> {
         fn get_chrom_obj<B: bigtools::BBIRead>(
             b: &B,
@@ -1538,9 +1665,10 @@ impl ZoomIntervalIterator {
     }
 }
 
-/// This class is an iterator for `Values` from a bigWig.  
-/// It returns only values that exist in the bigWig, skipping
-/// any missing intervals.
+/// An iterator for intervals in a bigWig.  
+///
+/// It returns only values that exist in the bigWig, skipping any missing
+/// intervals.
 #[pyclass(module = "pybigtools")]
 struct BigWigIntervalIterator {
     iter: Box<dyn Iterator<Item = Result<Value, _BBIReadError>> + Send>,
@@ -1561,7 +1689,7 @@ impl BigWigIntervalIterator {
     }
 }
 
-/// This class is an interator for the entries in a bigBed file.
+/// An iterator for the entries in a bigBed.
 #[pyclass(module = "pybigtools")]
 struct BigBedEntriesIterator {
     iter: Box<dyn Iterator<Item = Result<BedEntry, _BBIReadError>> + Send>,
@@ -1589,7 +1717,7 @@ impl BigBedEntriesIterator {
     }
 }
 
-/// This class is the interface for writing a bigWig.
+/// Interface for writing to a BigWig file.
 #[pyclass(module = "pybigtools")]
 struct BigWigWrite {
     bigwig: Option<BigWigWriteRaw>,
@@ -1597,11 +1725,24 @@ struct BigWigWrite {
 
 #[pymethods]
 impl BigWigWrite {
-    /// Writes the values passsed to the bigwig file.
-    /// The underlying file will be closed automatically when the function completes (and no other operations will be able to be performed).  
+    /// Write values to the BigWig file.
     ///
-    /// The chroms argument should be a dictionary with keys as chromosome names and values as their length.  
-    /// The vals argument should be an iterable with values (String, int, int, float) that represents each value to write in the format (chromosome, start, end, value).  
+    /// The underlying file will be closed automatically when the function
+    /// completes (and no other operations will be able to be performed).
+    ///
+    /// Parameters
+    /// ----------
+    /// chroms : Dict[str, int]
+    ///     A dictionary with keys as chromosome names and values as their
+    ///     length.
+    /// vals : Iterable[tuple[str, int, int, float]]
+    ///     An iterable with values that represents each value to write in the
+    ///     format (chromosome, start, end, value).
+    ///
+    /// Notes
+    /// -----
+    /// The underlying file will be closed automatically when the function
+    /// completes, and no other operations will be able to be performed.  
     fn write(&mut self, py: Python, chroms: &PyDict, vals: Py<PyAny>) -> PyResult<()> {
         let runtime = runtime::Builder::new_multi_thread()
             .worker_threads(
@@ -1717,18 +1858,17 @@ impl BigWigWrite {
         })
     }
 
-    /// close()
-    /// --
+    /// Close the file.
     ///
-    /// Manually closed the file.
-    /// No other operations will be allowed after it is closed. This is done automatically after write is performed.
+    /// No other operations will be allowed after it is closed. This is done
+    /// automatically after write is performed.
     fn close(&mut self) -> PyResult<()> {
         self.bigwig.take();
         Ok(())
     }
 }
 
-/// This class is the interface for writing to a bigBed.
+/// Interface for writing to a BigBed file.
 #[pyclass(module = "pybigtools")]
 struct BigBedWrite {
     bigbed: Option<BigBedWriteRaw>,
@@ -1736,10 +1876,25 @@ struct BigBedWrite {
 
 #[pymethods]
 impl BigBedWrite {
-    /// Writes the values passsed to the bigwig file. The underlying file will be closed automatically when the function completes (and no other operations will be able to be performed).  
-    /// The chroms argument should be a dictionary with keys as chromosome names and values as their length.  
-    /// The vals argument should be an iterable with values (String, int, int, String) that represents each value to write in the format (chromosome, start, end, rest)  
-    ///   The rest String should consist of tab-delimited fields.  
+    /// Write values to the BigBed file.
+    ///
+    /// The underlying file will be closed automatically when the function
+    /// completes (and no other operations will be able to be performed).
+    ///
+    /// Parameters
+    /// ----------
+    /// chroms : Dict[str, int]
+    ///     A dictionary with keys as chromosome names and values as their
+    ///     length.
+    /// vals : Iterable[tuple[str, int, int, str]]
+    ///     An iterable with values that represents each value to write in the
+    ///     format (chromosome, start, end, rest). The ``rest`` string should
+    ///     consist of tab-delimited fields.  
+    ///
+    /// Notes
+    /// -----
+    /// The underlying file will be closed automatically when the function
+    /// completes, and no other operations will be able to be performed.
     fn write(&mut self, py: Python, chroms: &PyDict, vals: Py<PyAny>) -> PyResult<()> {
         let runtime = runtime::Builder::new_multi_thread()
             .worker_threads(
@@ -1858,7 +2013,10 @@ impl BigBedWrite {
         })
     }
 
-    /// Manually closed the file. No other operations will be allowed after it is closed. This is done automatically after write is performed.
+    /// Close the file.
+    ///
+    /// No other operations will be allowed after it is closed. This is done
+    /// automatically after write is performed.
     fn close(&mut self) -> PyResult<()> {
         self.bigbed.take();
         Ok(())
@@ -1913,26 +2071,29 @@ impl BigWigAverageOverBedEntriesIterator {
     }
 }
 
-/// This is the entrypoint for working with bigWigs or bigBeds.
+/// Open a BigWig or BigBed file for reading or writing.
 ///
-/// The first argument can take one of three values:
-/// 1) A path to a file as a string
-/// 2) An http url for a remote file as a string
-/// 3) A file-like object with a `read` and `seek` method
+/// Parameters
+/// ----------
+/// path_url_or_file_like : str or file-like object
+///     The path to a file or an http url for a remote file as a string, or
+///     a Python file-like object with ``read`` and ``seek`` methods.
+/// mode : Literal["r", "w"], optional [default: "r"]
+///     The mode to open the file in. If not provided, it will default to read.
+///     "r" will open a bigWig/bigBed for reading but will not allow writing.
+///     "w" will open a bigWig/bigBed for writing but will not allow reading.
 ///
-/// When writing, only a file path can be used.
+/// Returns
+/// -------
+/// BigWigWrite or BigBedWrite or BBIRead
+///     The object for reading or writing the BigWig or BigBed file.
 ///
-/// The mode is either "w", "r", or None. "r" or None will open a
-/// bigWig or bigBed for reading (but will not allow writing).
-/// "w" Will open a bigWig/bigBed for writing (but will not allow reading).
+/// Notes
+/// -----
+/// For writing, only a file path is currently accepted.
 ///
-/// If passing a file-like object, simultaneous reading of different intervals
+/// If passing a file-like object, concurrent reading of different intervals
 /// is not supported and may result in incorrect behavior.
-///
-/// This returns one of the following:  
-/// - `BigWigWrite`
-/// - `BigBedWrite`
-/// - `BBIRead`
 #[pyfunction]
 fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> PyResult<PyObject> {
     let iswrite = match &mode {
@@ -2112,24 +2273,39 @@ fn open_path_or_url(
 
 /// Gets the average values from a bigWig over the entries of a bed file.
 ///
-/// Parameters:
-///     bigWig (str): The path to the bigWig.
-///     bed (str): The path to the bed.
-///     names (None, bool, or int):  
-///         If `None`, then each return value will be a single `float`,
-///             the average value over an interval in the bed file.  
-///         If `True`, then each return value will be a tuple of the value of column 4
-///             and the average value over the interval with that name in the bed file.  
-///         If `False`, then each return value will be a tuple of the interval in the format
-///             `{chrom}:{start}-{end}` and the average value over that interval.  
-///         If `0`, then each return value will match as if `False` was passed.  
-///         If a `1+`, then each return value will be a tuple of the value of column of this
-///             parameter (1-based) and the average value over the interval.  
+/// Parameters
+/// ----------
+/// bigWig : str
+///     The path to the bigWig.
+/// bed : str
+///     The path to the bed.
+/// names : bool or int, optional
+///     If ``None``, then each return value will be a single float, the
+///     average value over an interval in the bed file.  
+///     
+///     If ``True``, then each return value will be a tuple of the value of
+///     column 4 and the average value over the interval with that name in the
+///     bed file.  
+///     
+///     If ``False``, then each return value will be a tuple of the interval
+///     in the format ``{chrom}:{start}-{end}`` and the average value over
+///     that interval.  
+///     
+///     If ``0``, then each return value will match as if ``False`` was passed.
+///   
+///     If a ``1+``, then each return value will be a tuple of the value of
+///     column of this parameter (1-based) and the average value over the
+///     interval.  
 ///
-/// Returns:
-///     This returns a generator of values. (Therefore, to save to a list, do `list(bigWigAverageOverBed(...))`)  
-///     If no name is specified (see the `names` parameter above), then returns a generator of `float`s.  
-///     If a name column is specified (see above), then returns a generator of tuples `({name}, {average})`  
+/// Returns
+/// -------
+/// Generator of float or tuple.
+///
+/// Notes
+/// -----
+/// If no ``name`` field is specified, returns a generator of floats.  
+/// If a ``name`` column is specified, returns a generator of tuples
+/// ``({name}, {average})``.  
 #[pyfunction]
 fn bigWigAverageOverBed(
     py: Python,
@@ -2229,21 +2405,20 @@ fn bigWigAverageOverBed(
     Ok(res)
 }
 
-/// The base module for opening a bigWig or bigBed. The only defined function is `open`.
+/// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
 #[pymodule]
 fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
-    m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
-
     m.add_wrapped(wrap_pyfunction!(open))?;
-    m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
 
+    m.add_class::<BBIRead>()?;
     m.add_class::<BigWigWrite>()?;
     m.add_class::<BigBedWrite>()?;
-    m.add_class::<BBIRead>()?;
-
     m.add_class::<BigWigIntervalIterator>()?;
     m.add_class::<BigBedEntriesIterator>()?;
+
+    m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
+    m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
+    m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
 
     Ok(())
 }
