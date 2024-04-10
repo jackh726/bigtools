@@ -1,40 +1,45 @@
-import os
-
-def install_dependencies():
-    import urllib.request
-    if not os.path.exists('./ENCFF667CZO.bigWig'):
-        print("Downloading test bigWig")
-        urllib.request.urlretrieve('https://www.encodeproject.org/files/ENCFF667CZO/@@download/ENCFF667CZO.bigWig', './ENCFF667CZO.bigWig')
-
-print("Testing")
-# Imports for test
 import math
+import os
+import pathlib
+import urllib.request
 
-# Test
 import pybigtools
 
-def test_bigwig_write_read(tmp_path):
-    install_dependencies()
-    # bigWig read
-    b = pybigtools.open('./ENCFF667CZO.bigWig')
+TEST_DIR = pathlib.Path(__file__).parent
 
-    i = b.intervals("chr1")
+
+def retrieve_encode_file(accession, filetype):
+    file_url = f"https://www.encodeproject.org/files/{accession}/@@download/{accession}.{filetype}"
+    path = TEST_DIR / f"data/{accession}.{filetype}"
+    if not path.exists():
+        urllib.request.urlretrieve(file_url, path)
+    return path
+
+
+def test_bigwig_read():
+    path = retrieve_encode_file("ENCFF667CZO", "bigWig")
+    b = pybigtools.open(str(path))
+
+    i = b.records("chr1")
     n = next(i)
     assert n[0] == 10495
     assert n[1] == 10545
     assert math.isclose(n[2], 0.01591, abs_tol=0.00001)
 
-    i = b.intervals("chr12")
+    i = b.records("chr12")
     c = 0
     for _ in i:
         c += 1
     assert c == 1028747
 
-    # bigWig write
-    chroms = ['chr1', 'chr2', 'chr3']
-    clengths = { 'chr1': 10000, 'chr2': 8000, 'chr3': 6000 }
+
+def test_bigwig_write(tmpdir):
+    chroms = ["chr1", "chr2", "chr3"]
+    clengths = {"chr1": 10000, "chr2": 8000, "chr3": 6000}
+
     def genintervals():
         import random
+
         for chrom in chroms:
             clength = clengths[chrom]
             current = random.randint(0, 300)
@@ -49,20 +54,20 @@ def test_bigwig_write_read(tmp_path):
                 start = end + random.randint(20, 50)
 
     intervals = list(genintervals())
-    b = pybigtools.open('./test.bigWig', 'w')
+    b = pybigtools.open(os.path.join(tmpdir, "test.bigWig"), "w")
     b.write(clengths, iter(intervals))
     # If didn't need to test, could also be done like
-    #b.write(clengths, genintervals())
+    # b.write(clengths, genintervals())
 
-    b = pybigtools.open('./test.bigWig')
+    b = pybigtools.open(os.path.join(tmpdir, "test.bigWig"))
     i = []
     for chrom in chroms:
-        i.extend(list(b.intervals(chrom)))
+        i.extend(list(b.records(chrom)))
     c = 0
     for _ in i:
         c += 1
     assert c == len(intervals)
-    for a,b in zip(i, intervals):
+    for a, b in zip(i, intervals):
         assert a[0] == b[1]
         assert a[1] == b[2]
         assert math.isclose(a[2], b[3], abs_tol=0.00001)

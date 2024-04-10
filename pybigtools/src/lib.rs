@@ -40,7 +40,6 @@ type ValueTuple = (u32, u32, f32);
 create_exception!(pybigtools, BBIFileClosed, exceptions::PyException);
 create_exception!(pybigtools, BBIReadError, exceptions::PyException);
 
-
 fn start_end(
     bbi: &BBIReadRaw,
     chrom_name: &str,
@@ -150,10 +149,12 @@ impl ToPyErr for bigtools::BBIReadError {
 impl ToPyErr for bigtools::ZoomIntervalError {
     fn to_py_err(self) -> PyErr {
         match self {
-            bigtools::ZoomIntervalError::ReductionLevelNotFound => PyErr::new::<exceptions::PyKeyError, _>(
-                format!("The passed reduction level was not found")
-            ),
-            _ => PyErr::new::<BBIReadError, _>(format!("{}", self))
+            bigtools::ZoomIntervalError::ReductionLevelNotFound => {
+                PyErr::new::<exceptions::PyKeyError, _>(format!(
+                    "The passed reduction level was not found"
+                ))
+            }
+            _ => PyErr::new::<BBIReadError, _>(format!("{}", self)),
         }
     }
 }
@@ -1084,8 +1085,7 @@ impl BBIRead {
             "#;
         let schema = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
-            BBIReadRaw::BigWigFile(_)
-            | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
+            BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(_) => BEDGRAPH.to_string(),
             BBIReadRaw::BigBedFile(b) => b.autosql().convert_err()?,
@@ -1094,9 +1094,8 @@ impl BBIRead {
             BBIReadRaw::BigBedFileLike(b) => b.autosql().convert_err()?,
         };
         let obj = if parse {
-            let mut declarations = parse_autosql(&schema).map_err(|_| {
-                PyErr::new::<BBIReadError, _>("Unable to parse autosql.")
-            })?;
+            let mut declarations = parse_autosql(&schema)
+                .map_err(|_| PyErr::new::<BBIReadError, _>("Unable to parse autosql."))?;
             if declarations.len() > 1 {
                 return Err(PyErr::new::<BBIReadError, _>(
                     "Unexpected extra declarations.",
@@ -1460,13 +1459,14 @@ impl BBIRead {
                 let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
                 BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
             }
-            BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => return Err(BBIFileClosed::new_err("Not a bigWig.")),
+            BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => {
+                return Err(BBIFileClosed::new_err("Not a bigWig."))
+            }
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(_) => return Err(BBIFileClosed::new_err("Not a bigWig.")),
         };
 
         Ok(res)
-
     }
 
     fn close(&mut self) {
@@ -2191,9 +2191,7 @@ fn bigWigAverageOverBed(
         "bw" | "bigWig" | "bigwig" => {
             if isfile {
                 let read = BigWigReadRaw::open_file(&bigwig)
-                    .map_err(|_| {
-                        PyErr::new::<BBIReadError, _>(format!("Error opening bigWig."))
-                    })?
+                    .map_err(|_| PyErr::new::<BBIReadError, _>(format!("Error opening bigWig.")))?
                     .cached();
                 let bedin = BufReader::new(File::open(bed)?);
                 let iter = Box::new(bigwig_average_over_bed(bedin, read, name));
@@ -2204,9 +2202,7 @@ fn bigWigAverageOverBed(
                 {
                     let read = BigWigReadRaw::open(RemoteFile::new(&bigwig))
                         .map_err(|_| {
-                            PyErr::new::<BBIReadError, _>(format!(
-                                "Error opening bigBed."
-                            ))
+                            PyErr::new::<BBIReadError, _>(format!("Error opening bigBed."))
                         })?
                         .cached();
                     let bedin = BufReader::new(File::open(bed)?);
