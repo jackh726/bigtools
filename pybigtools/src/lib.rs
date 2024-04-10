@@ -16,7 +16,7 @@ use bigtools::utils::misc::{
     bigwig_average_over_bed, BigWigAverageOverBedEntry, BigWigAverageOverBedError, Name,
 };
 use bigtools::{
-    BBIFileRead, BBIReadError, BedEntry, BigBedRead as BigBedReadRaw,
+    BBIFileRead, BBIReadError as _BBIReadError, BedEntry, BigBedRead as BigBedReadRaw,
     BigBedWrite as BigBedWriteRaw, BigWigRead as BigWigReadRaw, BigWigWrite as BigWigWriteRaw,
     CachedBBIFileRead, Value, ZoomRecord,
 };
@@ -38,6 +38,8 @@ mod file_like;
 type ValueTuple = (u32, u32, f32);
 
 create_exception!(pybigtools, BBIFileClosed, exceptions::PyException);
+create_exception!(pybigtools, BBIReadError, exceptions::PyException);
+
 
 fn start_end(
     bbi: &BBIReadRaw,
@@ -59,7 +61,7 @@ fn start_end(
     let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
     let length = match chrom {
         None => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+            return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
                 "No chromomsome with name `{}` found.",
                 chrom_name
             )))
@@ -101,7 +103,7 @@ fn start_end_length_inner(
     let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
     let length = match chrom {
         None => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+            return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
                 "No chromomsome with name `{}` found.",
                 chrom_name
             )))
@@ -140,14 +142,19 @@ trait ToPyErr {
     fn to_py_err(self) -> PyErr;
 }
 
-impl ToPyErr for bigtools::ZoomIntervalError {
-    fn to_py_err(self) -> PyErr {
-        PyErr::new::<exceptions::PyException, _>(format!("{}", self))
-    }
-}
 impl ToPyErr for bigtools::BBIReadError {
     fn to_py_err(self) -> PyErr {
-        PyErr::new::<exceptions::PyException, _>(format!("{}", self))
+        PyErr::new::<BBIReadError, _>(format!("{}", self))
+    }
+}
+impl ToPyErr for bigtools::ZoomIntervalError {
+    fn to_py_err(self) -> PyErr {
+        match self {
+            bigtools::ZoomIntervalError::ReductionLevelNotFound => PyErr::new::<exceptions::PyKeyError, _>(
+                format!("The passed reduction level was not found")
+            ),
+            _ => PyErr::new::<BBIReadError, _>(format!("{}", self))
+        }
     }
 }
 
@@ -192,7 +199,7 @@ fn intervals_to_array<R: BBIFileRead>(
         (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
     };
     let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-        PyErr::new::<exceptions::PyException, _>(
+        PyErr::new::<exceptions::PyValueError, _>(
             "`arr` option must be a one-dimensional numpy array, if passed.",
         )
     })?;
@@ -200,7 +207,7 @@ fn intervals_to_array<R: BBIFileRead>(
     let bin_size = match bins {
         Some(bins) => {
             if v.len() != bins {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
                     bins,
                     v.len(),
@@ -251,8 +258,8 @@ fn intervals_to_array<R: BBIFileRead>(
         }
         _ => {
             if v.len() != (end - start) as usize {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
-                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                    "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     (end - start) as usize,
                     v.len(),
                 )));
@@ -327,7 +334,7 @@ fn entries_to_array<R: BBIFileRead>(
         (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
     };
     let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
-        PyErr::new::<exceptions::PyException, _>(
+        PyErr::new::<exceptions::PyValueError, _>(
             "`arr` option must be a one-dimensional numpy array, if passed.",
         )
     })?;
@@ -335,8 +342,8 @@ fn entries_to_array<R: BBIFileRead>(
     let bin_size = match bins {
         Some(bins) => {
             if v.len() != bins {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
-                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                    "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     bins,
                     v.len(),
                 )));
@@ -386,8 +393,8 @@ fn entries_to_array<R: BBIFileRead>(
         }
         _ => {
             if v.len() != (end - start) as usize {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
-                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                    "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     (end - start) as usize,
                     v.len(),
                 )));
@@ -431,13 +438,13 @@ fn entries_to_array<R: BBIFileRead>(
     Ok(arr)
 }
 
-fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
+fn to_array<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
     v.fill(missing);
     for interval in iter {
@@ -450,7 +457,7 @@ fn to_array<I: Iterator<Item = Result<Value, BBIReadError>>>(
     }
     Ok(())
 }
-fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
+fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
@@ -458,7 +465,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
     bins: usize,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
@@ -556,7 +563,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, BBIReadError>>>(
     }
     Ok(())
 }
-fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
+fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
@@ -564,7 +571,7 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
     bins: usize,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
@@ -673,13 +680,13 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
     }
     Ok(())
 }
-fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+fn to_entry_array<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
     v.fill(missing);
     for interval in iter {
@@ -692,7 +699,7 @@ fn to_entry_array<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     }
     Ok(())
 }
-fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
+fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
@@ -700,7 +707,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     bins: usize,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
@@ -806,7 +813,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, BBIReadError>>>(
     Ok(())
 }
 
-fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
+fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
@@ -814,7 +821,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, BBIReadError>>>(
     bins: usize,
     missing: f64,
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
-) -> Result<(), BBIReadError> {
+) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
@@ -1088,10 +1095,10 @@ impl BBIRead {
         };
         let obj = if parse {
             let mut declarations = parse_autosql(&schema).map_err(|_| {
-                PyErr::new::<exceptions::PyException, _>("Unable to parse autosql.")
+                PyErr::new::<BBIReadError, _>("Unable to parse autosql.")
             })?;
             if declarations.len() > 1 {
-                return Err(PyErr::new::<exceptions::PyException, _>(
+                return Err(PyErr::new::<BBIReadError, _>(
                     "Unexpected extra declarations.",
                 ));
             }
@@ -1305,7 +1312,7 @@ impl BBIRead {
             "min" => Summary::Min,
             "max" => Summary::Max,
             _ => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "Unrecognized summary. Only `mean`, `min`, and `max` are allowed."
                 )));
             }
@@ -1415,7 +1422,7 @@ impl BBIRead {
                     Err(_) => match names.extract::<isize>(py) {
                         Ok(col) => {
                             if col < 0 {
-                                return Err(PyErr::new::<exceptions::PyException, _>(
+                                return Err(PyErr::new::<exceptions::PyValueError, _>(
                                     "Invalid names argument. Must be >= 0.",
                                 ));
                             }
@@ -1426,7 +1433,7 @@ impl BBIRead {
                             }
                         }
                         Err(_) => {
-                            return Err(PyErr::new::<exceptions::PyException, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
+                            return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
                         }
                     },
                 },
@@ -1499,7 +1506,7 @@ impl BBIRead {
 
 #[pyclass(module = "pybigtools")]
 struct ZoomIntervalIterator {
-    iter: Box<dyn Iterator<Item = Result<ZoomRecord, BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send>,
 }
 
 #[pymethods]
@@ -1536,7 +1543,7 @@ impl ZoomIntervalIterator {
 /// any missing intervals.
 #[pyclass(module = "pybigtools")]
 struct BigWigIntervalIterator {
-    iter: Box<dyn Iterator<Item = Result<Value, BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<Value, _BBIReadError>> + Send>,
 }
 
 #[pymethods]
@@ -1557,7 +1564,7 @@ impl BigWigIntervalIterator {
 /// This class is an interator for the entries in a bigBed file.
 #[pyclass(module = "pybigtools")]
 struct BigBedEntriesIterator {
-    iter: Box<dyn Iterator<Item = Result<BedEntry, BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<BedEntry, _BBIReadError>> + Send>,
 }
 
 #[pymethods]
@@ -1608,7 +1615,7 @@ impl BigWigWrite {
         let bigwig = self
             .bigwig
             .take()
-            .ok_or_else(|| PyErr::new::<exceptions::PyException, _>("File already closed."))?;
+            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
@@ -1746,7 +1753,7 @@ impl BigBedWrite {
         let bigbed = self
             .bigbed
             .take()
-            .ok_or_else(|| PyErr::new::<exceptions::PyException, _>("File already closed."))?;
+            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
@@ -1933,7 +1940,7 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
         Some(mode) if mode == "r" => false,
         None => false,
         Some(mode) => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+            return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                 "Invalid mode: `{}`",
                 mode
             )));
@@ -1946,13 +1953,13 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
     }
 
     if iswrite {
-        return Err(PyErr::new::<exceptions::PyException, _>(format!(
+        return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
             "Writing only supports file names",
         )));
     }
     let file_like = match PyFileLikeObject::new(path_url_or_file_like, true, false, true) {
         Ok(file_like) => file_like,
-        Err(_) => return Err(PyErr::new::<exceptions::PyException, _>(format!(
+        Err(_) => return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
             "Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.",
         ))),
     };
@@ -1967,7 +1974,7 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
             }
             .into_py(py),
             Err(e) => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                return Err(PyErr::new::<BBIReadError, _>(format!(
                     "File-like object is not a bigWig or bigBed. Or there was just a problem reading: {e}",
                 )))
             }
@@ -1987,13 +1994,13 @@ fn open_path_or_url(
     {
         Some(e) => e.to_string(),
         None => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+            return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
         }
     };
     let res = if iswrite {
         match Url::parse(&path_url_or_file_like) {
             Ok(_) => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "Invalid file path. Writing does not support urls."
                 )))
             }
@@ -2009,7 +2016,7 @@ fn open_path_or_url(
             }
             .into_py(py),
             _ => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
             }
         }
     } else {
@@ -2018,8 +2025,8 @@ fn open_path_or_url(
             match Url::parse(&path_url_or_file_like) {
                 Ok(_) => {}
                 Err(_) => {
-                    return Err(PyErr::new::<exceptions::PyException, _>(format!(
-                        "Invalid file path. The file does not exists and it is not a url."
+                    return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                        "Invalid file path. The file does not exist and it is not a url."
                     )))
                 }
             }
@@ -2033,7 +2040,7 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            return Err(PyErr::new::<BBIReadError, _>(format!(
                                 "Error opening bigWig."
                             )))
                         }
@@ -2046,7 +2053,7 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            return Err(PyErr::new::<BBIReadError, _>(format!(
                                 "Error opening bigWig."
                             )))
                         }
@@ -2054,7 +2061,7 @@ fn open_path_or_url(
 
                     #[cfg(not(feature = "remote"))]
                     {
-                        return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                        return Err(PyErr::new::<exceptions::PyOSError, _>(format!(
                             "Builtin support for remote files is not supported on this platform."
                         )));
                     }
@@ -2068,7 +2075,7 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            return Err(PyErr::new::<BBIReadError, _>(format!(
                                 "Error opening bigBed."
                             )))
                         }
@@ -2081,7 +2088,7 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                            return Err(PyErr::new::<BBIReadError, _>(format!(
                                 "Error opening bigBed."
                             )))
                         }
@@ -2089,14 +2096,14 @@ fn open_path_or_url(
 
                     #[cfg(not(feature = "remote"))]
                     {
-                        return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                        return Err(PyErr::new::<exceptions::PyOSError, _>(format!(
                             "Builtin support for remote files is not supported on this platform."
                         )));
                     }
                 }
             }
             _ => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
             }
         }
     };
@@ -2133,7 +2140,7 @@ fn bigWigAverageOverBed(
     let extension = match &Path::new(&bigwig).extension().map(|e| e.to_string_lossy()) {
         Some(e) => e.to_string(),
         None => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+            return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                 "Invalid file type. Must be a bigWig (.bigWig, .bw)."
             )));
         }
@@ -2143,7 +2150,7 @@ fn bigWigAverageOverBed(
         match Url::parse(&bigwig) {
             Ok(_) => {}
             Err(_) => {
-                return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "Invalid file path. The file does not exists and it is not a url."
                 )))
             }
@@ -2162,7 +2169,7 @@ fn bigWigAverageOverBed(
                 Err(_) => match names.extract::<isize>(py) {
                     Ok(col) => {
                         if col < 0 {
-                            return Err(PyErr::new::<exceptions::PyException, _>(
+                            return Err(PyErr::new::<exceptions::PyValueError, _>(
                                 "Invalid names argument. Must be >= 0.",
                             ));
                         }
@@ -2173,7 +2180,7 @@ fn bigWigAverageOverBed(
                         }
                     }
                     Err(_) => {
-                        return Err(PyErr::new::<exceptions::PyException, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
+                        return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
                     }
                 },
             },
@@ -2185,7 +2192,7 @@ fn bigWigAverageOverBed(
             if isfile {
                 let read = BigWigReadRaw::open_file(&bigwig)
                     .map_err(|_| {
-                        PyErr::new::<exceptions::PyException, _>(format!("Error opening bigWig."))
+                        PyErr::new::<BBIReadError, _>(format!("Error opening bigWig."))
                     })?
                     .cached();
                 let bedin = BufReader::new(File::open(bed)?);
@@ -2197,7 +2204,7 @@ fn bigWigAverageOverBed(
                 {
                     let read = BigWigReadRaw::open(RemoteFile::new(&bigwig))
                         .map_err(|_| {
-                            PyErr::new::<exceptions::PyException, _>(format!(
+                            PyErr::new::<BBIReadError, _>(format!(
                                 "Error opening bigBed."
                             ))
                         })?
@@ -2210,14 +2217,14 @@ fn bigWigAverageOverBed(
 
                 #[cfg(not(feature = "remote"))]
                 {
-                    return Err(PyErr::new::<exceptions::PyException, _>(format!(
+                    return Err(PyErr::new::<exceptions::PyOSError, _>(format!(
                         "Builtin support for remote files is not available on this platform."
                     )));
                 }
             }
         }
         _ => {
-            return Err(PyErr::new::<exceptions::PyException, _>(format!(
+            return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                 "Invalid file type. Must be a bigWig (.bigWig, .bw)."
             )));
         }
@@ -2231,6 +2238,7 @@ fn bigWigAverageOverBed(
 fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
+    m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
 
     m.add_wrapped(wrap_pyfunction!(open))?;
     m.add_wrapped(wrap_pyfunction!(bigWigAverageOverBed))?;
