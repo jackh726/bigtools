@@ -74,9 +74,9 @@ def test_chroms(bw, bb):
     assert bw.chroms("chr17") == 83257441
     assert bb.chroms("chr21") == 48129895
 
-    # Missing chrom => None
-    assert bw.chroms("chr11") is None
-    assert bb.chroms("chr11") is None
+    # Missing chrom => KeyError
+    pytest.raises(KeyError, bw.chroms, "chr11")
+    pytest.raises(KeyError, bb.chroms, "chr11")
 
 
 def test_zooms(bw, bb):
