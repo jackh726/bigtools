@@ -25,7 +25,7 @@ use bigtools::utils::reopen::Reopen;
 use file_like::PyFileLikeObject;
 use numpy::ndarray::ArrayViewMut;
 use numpy::PyArray1;
-use pyo3::exceptions::{self, PyTypeError};
+use pyo3::exceptions::{self, PyKeyError, PyTypeError};
 use pyo3::types::{IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyString, PyTuple};
 use pyo3::{create_exception, wrap_pyfunction};
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
@@ -1474,30 +1474,40 @@ impl BBIRead {
     /// -------
     /// int or Dict[str, int] or None:
     ///     Chromosome length or a dictionary of chromosome lengths.
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Option<PyObject>> {
+    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<PyObject> {
         fn get_chrom_obj<B: bigtools::BBIRead>(
             b: &B,
             py: Python,
             chrom: Option<String>,
-        ) -> Option<PyObject> {
+        ) -> PyResult<PyObject> {
             match chrom {
-                Some(chrom) => b
-                    .chroms()
-                    .into_iter()
-                    .find(|c| c.name == chrom)
-                    .map(|c| c.length)
-                    .map(|c| c.to_object(py)),
-                None => Some(
-                    b.chroms()
+                Some(chrom) => {
+                    let chrom_length = b
+                        .chroms()
+                        .into_iter()
+                        .find(|c| c.name == chrom)
+                        .ok_or_else(|| {
+                            PyErr::new::<PyKeyError, _>(
+                                "No chromosome found with the specified name",
+                            )
+                        })
+                        .map(|c| c.length.to_object(py))?;
+                    Ok(chrom_length)
+                }
+                None => {
+                    let chrom_dict: PyObject = b
+                        .chroms()
                         .into_iter()
                         .map(|c| (c.name.clone(), c.length))
                         .into_py_dict(py)
-                        .into(),
-                ),
+                        .into();
+                    Ok(chrom_dict)
+                }
             }
         }
-        Ok(match &self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+
+        match &self.bbi {
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => get_chrom_obj(b, py, chrom),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => get_chrom_obj(b, py, chrom),
@@ -1506,7 +1516,7 @@ impl BBIRead {
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
             BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
-        })
+        }
     }
 
     /// Gets the average values from a bigWig over the entries of a bed file.
