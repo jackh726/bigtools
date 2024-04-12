@@ -17,6 +17,12 @@ def test_open_close():
     b.close()
     assert pytest.raises(pybigtools.BBIFileClosed, b.chroms)
 
+    # Works with pathlib.Path
+    path = REPO_ROOT / "bigtools/resources/test/valid.bigWig"
+    b = pybigtools.open(path, "r")
+    b.close()
+    assert pytest.raises(pybigtools.BBIFileClosed, b.chroms)
+
     # Files are closed when exiting a context manager
     with pybigtools.open(path, "r") as b:
         pass
