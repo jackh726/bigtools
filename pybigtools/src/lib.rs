@@ -2123,6 +2123,13 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
         return open_path_or_url(py, string_ref.to_str().unwrap().to_owned(), iswrite);
     }
 
+    // If pathlib.Path, convert to string and try to open
+    let path_class = py.import("pathlib")?.getattr("Path")?;
+    if path_url_or_file_like.as_ref(py).is_instance(path_class)? {
+        let path_str = path_url_or_file_like.as_ref(py).str()?.to_str()?;
+        return open_path_or_url(py, path_str.to_owned(), iswrite);
+    }
+
     if iswrite {
         return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
             "Writing only supports file names",
