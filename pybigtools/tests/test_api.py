@@ -4,6 +4,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+import smart_open
 
 import pybigtools
 
@@ -17,12 +18,6 @@ def test_open_close():
     b.close()
     assert pytest.raises(pybigtools.BBIFileClosed, b.chroms)
 
-    # Works with pathlib.Path
-    path = REPO_ROOT / "bigtools/resources/test/valid.bigWig"
-    b = pybigtools.open(path, "r")
-    b.close()
-    assert pytest.raises(pybigtools.BBIFileClosed, b.chroms)
-
     # Files are closed when exiting a context manager
     with pybigtools.open(path, "r") as b:
         pass
@@ -31,6 +26,39 @@ def test_open_close():
     # Invalid file-like object
     s = BytesIO()
     assert pytest.raises(pybigtools.BBIReadError, pybigtools.open, s, "r")
+
+
+def test_open_pathlib_path():
+    path = REPO_ROOT / "bigtools/resources/test/valid.bigWig"
+    with pybigtools.open(path, "r") as b:
+        assert b.chroms() == {"chr17": 83_257_441}
+
+
+def test_open_raw_url():
+    url = "http://genome.ucsc.edu/goldenPath/help/examples/bigLollyExample2.bb"
+    with pybigtools.open(url, "r") as b:
+        assert b.chroms() == {'chr21': 46_709_983}
+
+
+def test_open_filelike():
+    # Regular file
+    with open(REPO_ROOT / "bigtools/resources/test/valid.bigWig", "rb") as f:
+        with pybigtools.open(f, "r") as b:
+            assert b.chroms() == {"chr17": 83_257_441}
+
+    # BytesIO
+    with open(REPO_ROOT / "bigtools/resources/test/valid.bigWig", "rb") as f:
+        bw_bytes = f.read()
+
+    with BytesIO(bw_bytes) as f:
+        with pybigtools.open(f, "r") as b:
+            assert b.chroms() == {"chr17": 83_257_441}
+
+    # Other file-like objects
+    url = "http://genome.ucsc.edu/goldenPath/help/examples/bigWigExample.bw"
+    with smart_open.open(url, "rb") as f:
+        with pybigtools.open(f, "r") as b:
+            assert b.chroms() == {'chr21': 48_129_895}
 
 
 @pytest.fixture
@@ -77,8 +105,8 @@ def test_chroms(bw, bb):
     assert bb.chroms() == {"chr21": 48_129_895}
 
     # Arg with chrom name => length
-    assert bw.chroms("chr17") == 83257441
-    assert bb.chroms("chr21") == 48129895
+    assert bw.chroms("chr17") == 83_257_441
+    assert bb.chroms("chr21") == 48_129_895
 
     # Missing chrom => KeyError
     pytest.raises(KeyError, bw.chroms, "chr11")
