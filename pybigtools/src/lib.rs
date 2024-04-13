@@ -1425,7 +1425,7 @@ impl BBIRead {
     /// records : Get the records of a given range on a chromosome.
     /// zoom_records : Get the zoom records of a given range on a chromosome.
     #[pyo3(
-        signature = (chrom, start, end, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
+        signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
         text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
     )]
     fn values(
