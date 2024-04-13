@@ -37,8 +37,18 @@ mod file_like;
 
 type ValueTuple = (u32, u32, f32);
 
-create_exception!(pybigtools, BBIFileClosed, exceptions::PyException);
-create_exception!(pybigtools, BBIReadError, exceptions::PyException);
+create_exception!(
+    pybigtools,
+    BBIFileClosed,
+    exceptions::PyException,
+    "BBI File is closed."
+);
+create_exception!(
+    pybigtools,
+    BBIReadError,
+    exceptions::PyException,
+    "Error reading BBI file."
+);
 
 fn start_end(
     bbi: &BBIReadRaw,
@@ -209,7 +219,7 @@ fn intervals_to_array<R: BBIFileRead>(
         Some(bins) => {
             if v.len() != bins {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "`arr` does not the expected size (expected `{}`, found `{}`), if passed.",
+                    "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     bins,
                     v.len(),
                 )));
@@ -303,6 +313,7 @@ fn intervals_to_array<R: BBIFileRead>(
 
     Ok(arr)
 }
+
 fn entries_to_array<R: BBIFileRead>(
     py: Python<'_>,
     b: &mut BigBedReadRaw<R>,
@@ -458,6 +469,7 @@ fn to_array<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     }
     Ok(())
 }
+
 fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     start: i32,
     end: i32,
@@ -564,6 +576,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     }
     Ok(())
 }
+
 fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     start: i32,
     end: i32,
@@ -681,6 +694,7 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     }
     Ok(())
 }
+
 fn to_entry_array<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     start: i32,
     end: i32,
@@ -700,6 +714,7 @@ fn to_entry_array<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     }
     Ok(())
 }
+
 fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     start: i32,
     end: i32,
