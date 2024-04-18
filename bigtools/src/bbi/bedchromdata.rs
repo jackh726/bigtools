@@ -12,12 +12,14 @@ use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
+use tokio::runtime::Handle;
+
 use crate::bed::bedparser::{
     BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
 };
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
+use crate::{ChromData, ChromData2, ChromDataState, ChromProcessingKey, ProcessChromError};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: BedParser<S>,
@@ -72,6 +74,51 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
     }
 }
 
+impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
+    type Values = BedChromData<S>;
+
+    fn process_to_bbi<
+        Fut: futures::prelude::Future<
+            Output = Result<
+                crate::ChromProcessedData,
+                ProcessChromError<<Self::Values as ChromValues>::Error>,
+            >,
+        >,
+        StartProcessing: FnMut(
+            String,
+            Self::Values,
+        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        Advance: FnMut(crate::ChromProcessedData),
+    >(
+        &mut self,
+        runtime: &Handle,
+        start_processing: &mut StartProcessing,
+        advance: &mut Advance,
+    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+        loop {
+            match self.bed_data.next_chrom() {
+                Some(Ok((chrom, group))) => {
+                    // First, if we don't want to allow out of order chroms, error here
+                    let last = self.last_chrom.replace(chrom.clone());
+                    if let Some(c) = last {
+                        // TODO: test this correctly fails
+                        if !self.allow_out_of_order_chroms && c >= chrom {
+                            return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                        }
+                    }
+
+                    let read = start_processing(chrom, group)?;
+                    let data = runtime.block_on(read)?;
+                    advance(data);
+                }
+                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                None => break,
+            }
+        }
+
+        Ok(())
+    }
+}
 pub struct BedParserParallelStreamingIterator<V, E, ChromError> {
     allow_out_of_order_chroms: bool,
     last_chrom: Option<String>,
