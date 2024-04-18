@@ -26,9 +26,9 @@ use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use crate::bbi::{Summary, ZoomHeader, ZoomRecord, CHROM_TREE_MAGIC, CIR_TREE_MAGIC};
 
 pub(crate) struct ZoomInfo {
-    resolution: u32,
-    data: TempFileBuffer<File>,
-    sections: Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
+    pub(crate) resolution: u32,
+    pub(crate) data: TempFileBuffer<File>,
+    pub(crate) sections: Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
 }
 
 #[derive(Debug)]
@@ -555,6 +555,8 @@ pub enum ChromDataState<ChromOutput, Error> {
 /// An opaque key to indicate an processing chromosome
 pub struct ChromProcessingKey(pub(crate) u32);
 
+pub struct ChromProcessedData(pub(crate) Summary);
+
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
     type Values: ChromValues;
@@ -579,8 +581,31 @@ pub trait ChromData: Sized {
     >;
 }
 
+pub trait ChromData2: Sized {
+    type Values: ChromValues;
+
+    fn process_to_bbi<
+        Fut: Future<
+            Output = Result<
+                ChromProcessedData,
+                ProcessChromError<<Self::Values as ChromValues>::Error>,
+            >,
+        >,
+        StartProcessing: FnMut(
+            String,
+            Self::Values,
+        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        Advance: FnMut(ChromProcessedData),
+    >(
+        &mut self,
+        runtime: &Handle,
+        start_processing: &mut StartProcessing,
+        advance: &mut Advance,
+    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>;
+}
+
 // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
-type ZoomValue = (
+pub(crate) type ZoomValue = (
     Vec<crossbeam_channel::IntoIter<Section>>,
     TempFileBuffer<File>,
     Option<TempFileBufferWriter<File>>,
@@ -597,7 +622,7 @@ type DataWithoutzooms<Error> = (
     futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
 );
 
-async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
+pub(crate) async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
     mut file: BufWriter<File>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
     mut receiver: futures_mpsc::UnboundedReceiver<Data<Err>>,
