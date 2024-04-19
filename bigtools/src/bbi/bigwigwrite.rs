@@ -246,7 +246,8 @@ impl BigWigWrite {
             Ok(BigWigFullProcess::create(internal_data))
         };
 
-        let mut advance = |data: ChromProcessedData| {
+        let mut advance = |p: BigWigFullProcess| {
+            let data = p.destroy();
             let ChromProcessedData(chrom_summary) = data;
             match &mut summary {
                 None => summary = Some(chrom_summary),
@@ -375,7 +376,8 @@ impl BigWigWrite {
             Ok(BigWigFullProcess::create(internal_data))
         };
 
-        let mut advance = |data: ChromProcessedData| {
+        let mut advance = |p: BigWigFullProcess| {
+            let data = p.destroy();
             let ChromProcessedData(chrom_summary) = data;
             match &mut summary {
                 None => summary = Some(chrom_summary),
@@ -881,10 +883,10 @@ pub(crate) struct BigWigFullProcess {
 impl ChromProcess for BigWigFullProcess {
     type Value = Value;
     fn create(internal_data: InternalProcessData) -> Self {
-        let InternalProcessData(zooms_channels, mut ftx, chrom_id, options, runtime, chrom, length) =
+        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
             internal_data;
 
-        let mut summary = Summary {
+        let summary = Summary {
             total_items: 0,
             bases_covered: 0,
             min_val: f64::MAX,
@@ -893,8 +895,8 @@ impl ChromProcess for BigWigFullProcess {
             sum_squares: 0.0,
         };
 
-        let mut items = Vec::with_capacity(options.items_per_slot as usize);
-        let mut zoom_items: Vec<ZoomItem> = zooms_channels
+        let items = Vec::with_capacity(options.items_per_slot as usize);
+        let zoom_items: Vec<ZoomItem> = zooms_channels
             .into_iter()
             .map(|(size, channel)| ZoomItem {
                 size,
@@ -916,22 +918,45 @@ impl ChromProcess for BigWigFullProcess {
             length,
         }
     }
-
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        self,
-        mut data: Values,
-    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+    fn destroy(self) -> ChromProcessedData {
         let Self {
             mut summary,
-            mut items,
-            mut zoom_items,
-            mut ftx,
+            items,
+            zoom_items,
+            ..
+        } = self;
+
+        debug_assert!(items.is_empty());
+        for zoom_item in zoom_items.iter() {
+            debug_assert!(zoom_item.live_info.is_none());
+            debug_assert!(zoom_item.records.is_empty());
+        }
+
+        if summary.total_items == 0 {
+            summary.min_val = 0.0;
+            summary.max_val = 0.0;
+        }
+        ChromProcessedData(summary)
+    }
+
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        &mut self,
+        mut data: Values,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
+        let Self {
+            summary,
+            items,
+            zoom_items,
+            ftx,
             chrom_id,
             options,
             runtime,
             chrom,
             length,
         } = self;
+        let chrom_id = *chrom_id;
+        let options = *options;
+        let length = *length;
 
         while let Some(current_val) = data.next() {
             // If there is a source error, propogate that up
@@ -946,17 +971,17 @@ impl ChromProcess for BigWigFullProcess {
                 next_val,
                 length,
                 &chrom,
-                &mut summary,
-                &mut items,
+                summary,
+                items,
                 options,
                 &runtime,
-                &mut ftx,
+                ftx,
                 chrom_id,
             )
             .await?;
 
             BigWigWrite::process_val_zoom(
-                &mut zoom_items,
+                zoom_items,
                 options,
                 current_val,
                 &mut data,
@@ -966,17 +991,7 @@ impl ChromProcess for BigWigFullProcess {
             .await?;
         }
 
-        debug_assert!(items.is_empty());
-        for zoom_item in zoom_items.iter_mut() {
-            debug_assert!(zoom_item.live_info.is_none());
-            debug_assert!(zoom_item.records.is_empty());
-        }
-
-        if summary.total_items == 0 {
-            summary.min_val = 0.0;
-            summary.max_val = 0.0;
-        }
-        Ok(ChromProcessedData(summary))
+        Ok(())
     }
 }
 

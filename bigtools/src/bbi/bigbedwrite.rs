@@ -13,7 +13,7 @@ use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
-    write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
+    write_info, ChromData2, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
     InternalProcessData,
 };
 
@@ -41,7 +41,7 @@ impl BigBedWrite {
 
     pub fn write<
         Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData<Values = Values>,
+        V: ChromData2<Values = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
@@ -176,9 +176,9 @@ impl ChromProcess for BigBedFullProcess {
         let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
             internal_data;
 
-        let mut summary: Option<Summary> = None;
+        let summary: Option<Summary> = None;
 
-        let mut state_val = EntriesSection {
+        let state_val = EntriesSection {
             items: Vec::with_capacity(options.items_per_slot as usize),
             overlap: IndexList::new(),
             zoom_items: zooms_channels
@@ -192,7 +192,7 @@ impl ChromProcess for BigBedFullProcess {
                 })
                 .collect(),
         };
-        let mut total_items = 0;
+        let total_items = 0;
 
         BigBedFullProcess {
             summary,
@@ -206,21 +206,51 @@ impl ChromProcess for BigBedFullProcess {
             length,
         }
     }
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        self,
-        mut data: Values,
-    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+    fn destroy(self) -> ChromProcessedData {
         let Self {
-            mut summary,
-            mut total_items,
-            mut state_val,
-            mut ftx,
+            summary,
+            total_items,
+            state_val,
+            ..
+        } = self;
+
+        debug_assert!(state_val.items.is_empty());
+        for zoom_item in state_val.zoom_items.iter() {
+            debug_assert!(zoom_item.live_info.is_none());
+            debug_assert!(zoom_item.records.is_empty());
+        }
+
+        let mut summary_complete = match summary {
+            None => Summary {
+                total_items: 0,
+                bases_covered: 0,
+                min_val: 0.0,
+                max_val: 0.0,
+                sum: 0.0,
+                sum_squares: 0.0,
+            },
+            Some(summary) => summary,
+        };
+        summary_complete.total_items = total_items;
+        ChromProcessedData(summary_complete)
+    }
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        &mut self,
+        mut data: Values,
+    ) -> Result<(), ProcessChromError<Values::Error>> {
+        let Self {
+            summary,
+            total_items,
+            state_val,
+            ftx,
             chrom_id,
             options,
             runtime,
             chrom,
             length,
         } = self;
+        let chrom_id = *chrom_id;
+        let length = *length;
 
         while let Some(current_val) = data.next() {
             let current_val = match current_val {
@@ -231,7 +261,7 @@ impl ChromProcess for BigBedFullProcess {
                 None | Some(Err(_)) => None,
                 Some(Ok(v)) => Some(v),
             };
-            total_items += 1;
+            *total_items += 1;
             // TODO: test these correctly fails
             if current_val.start > current_val.end {
                 return Err(ProcessChromError::InvalidInput(format!(
@@ -350,7 +380,7 @@ impl ChromProcess for BigBedFullProcess {
 
             add_interval_to_summary(
                 &mut state_val.overlap,
-                &mut summary,
+                summary,
                 current_val.start,
                 current_val.end,
                 next_val.map(|v| v.start),
@@ -518,25 +548,7 @@ impl ChromProcess for BigBedFullProcess {
             }
         }
 
-        debug_assert!(state_val.items.is_empty());
-        for zoom_item in state_val.zoom_items.iter_mut() {
-            debug_assert!(zoom_item.live_info.is_none());
-            debug_assert!(zoom_item.records.is_empty());
-        }
-
-        let mut summary_complete = match summary {
-            None => Summary {
-                total_items: 0,
-                bases_covered: 0,
-                min_val: 0.0,
-                max_val: 0.0,
-                sum: 0.0,
-                sum_squares: 0.0,
-            },
-            Some(summary) => summary,
-        };
-        summary_complete.total_items = total_items;
-        Ok(ChromProcessedData(summary_complete))
+        Ok(())
     }
 }
 

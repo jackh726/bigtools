@@ -396,7 +396,7 @@ impl ChromData2 for ChromGroupReadImpl {
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(crate::ChromProcessedData),
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &runtime::Handle,
@@ -408,10 +408,10 @@ impl ChromData2 for ChromGroupReadImpl {
                 self.iter.next();
             match next {
                 Some(Ok((chrom, _, group))) => {
-                    let p = start_processing(chrom)?;
+                    let mut p = start_processing(chrom)?;
                     let read = p.do_process(group);
-                    let data = runtime.block_on(read)?;
-                    advance(data);
+                    runtime.block_on(read)?;
+                    advance(p);
                 }
                 Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
                 None => break,

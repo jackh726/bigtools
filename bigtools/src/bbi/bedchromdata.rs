@@ -82,7 +82,7 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(crate::ChromProcessedData),
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Handle,
@@ -101,10 +101,10 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
                         }
                     }
 
-                    let p = start_processing(chrom)?;
+                    let mut p = start_processing(chrom)?;
                     let read = p.do_process(group);
-                    let data = runtime.block_on(read)?;
-                    advance(data);
+                    runtime.block_on(read)?;
+                    advance(p);
                 }
                 Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
                 None => break,
@@ -220,15 +220,15 @@ impl<V> ChromData
     }
 }
 
-impl<V> ChromData2
+impl<V: Send + 'static> ChromData2
     for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError>
 {
     type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value> + Send + 'static,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(crate::ChromProcessedData),
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Handle,
@@ -267,9 +267,13 @@ impl<V> ChromData2
                             }
                         }
 
-                        let p = start_processing(chrom)?;
-                        let read = p.do_process(group);
-                        let data = runtime.spawn(read);
+                        let mut p = start_processing(chrom)?;
+                        let data: tokio::task::JoinHandle<
+                            Result<P, ProcessChromError<BedValueError>>,
+                        > = runtime.spawn(async move {
+                            p.do_process(group).await?;
+                            Ok(p)
+                        });
                         queued_reads.push_back(data);
                     }
                     Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
@@ -281,8 +285,8 @@ impl<V> ChromData2
             let Some(next_chrom) = queued_reads.pop_front() else {
                 break;
             };
-            let data = runtime.block_on(next_chrom).unwrap()?;
-            advance(data);
+            let p = runtime.block_on(next_chrom).unwrap()?;
+            advance(p);
         }
 
         Ok(())
