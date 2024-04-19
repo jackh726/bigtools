@@ -54,6 +54,7 @@ use futures::sink::SinkExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
+use crate::bbiwrite::process_internal::ChromProcessCreate;
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
@@ -590,7 +591,7 @@ impl BigWigWrite {
 
     async fn process_val<E: Error>(
         current_val: Value,
-        next_val: Option<Value>,
+        next_val: Option<&Value>,
         chrom_length: u32,
         chrom: &String,
         summary: &mut Summary,
@@ -654,14 +655,14 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<I: ChromValues<Value = Value>>(
+    async fn process_val_zoom<E: Error>(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
         current_val: Value,
-        chrom_values: &mut I,
+        next_val: Option<&Value>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -676,7 +677,7 @@ impl BigWigWrite {
                 // Write section if full; or if no next section, some items, and no current zoom record
                 if (add_start >= current_val.end
                     && zoom_item.live_info.is_none()
-                    && chrom_values.peek().is_none()
+                    && next_val.is_none()
                     && !zoom_item.records.is_empty())
                     || zoom_item.records.len() == options.items_per_slot as usize
                 {
@@ -691,7 +692,7 @@ impl BigWigWrite {
                         .expect("Couln't send");
                 }
                 if add_start >= current_val.end {
-                    if chrom_values.peek().is_none() {
+                    if next_val.is_none() {
                         if let Some(zoom2) = zoom_item.live_info.take() {
                             zoom_item.records.push(zoom2);
                             continue;
@@ -782,7 +783,7 @@ impl BigWigWrite {
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
             let next_val = match chrom_values.peek() {
                 None | Some(Err(_)) => None,
-                Some(Ok(v)) => Some(*v),
+                Some(Ok(v)) => Some(v),
             };
 
             BigWigWrite::process_val(
@@ -846,12 +847,16 @@ impl BigWigWrite {
         while let Some(current_val) = chrom_values.next() {
             // If there is a source error, propogate that up
             let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let next_val = match chrom_values.peek() {
+                None | Some(Err(_)) => None,
+                Some(Ok(v)) => Some(v),
+            };
 
             BigWigWrite::process_val_zoom(
                 &mut zoom_items,
                 options,
                 current_val,
-                &mut chrom_values,
+                next_val,
                 &runtime,
                 chrom_id,
             )
@@ -880,8 +885,7 @@ pub(crate) struct BigWigFullProcess {
     length: u32,
 }
 
-impl ChromProcess for BigWigFullProcess {
-    type Value = Value;
+impl ChromProcessCreate for BigWigFullProcess {
     fn create(internal_data: InternalProcessData) -> Self {
         let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
             internal_data;
@@ -938,11 +942,15 @@ impl ChromProcess for BigWigFullProcess {
         }
         ChromProcessedData(summary)
     }
+}
 
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+impl ChromProcess for BigWigFullProcess {
+    type Value = Value;
+    async fn do_process<E: Error + Send + 'static>(
         &mut self,
-        mut data: Values,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+        current_val: Value,
+        next_val: Option<&Value>,
+    ) -> Result<(), ProcessChromError<E>> {
         let Self {
             summary,
             items,
@@ -958,38 +966,29 @@ impl ChromProcess for BigWigFullProcess {
         let options = *options;
         let length = *length;
 
-        while let Some(current_val) = data.next() {
-            // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-            let next_val = match data.peek() {
-                None | Some(Err(_)) => None,
-                Some(Ok(v)) => Some(*v),
-            };
+        BigWigWrite::process_val(
+            current_val,
+            next_val,
+            length,
+            &chrom,
+            summary,
+            items,
+            options,
+            &runtime,
+            ftx,
+            chrom_id,
+        )
+        .await?;
 
-            BigWigWrite::process_val(
-                current_val,
-                next_val,
-                length,
-                &chrom,
-                summary,
-                items,
-                options,
-                &runtime,
-                ftx,
-                chrom_id,
-            )
-            .await?;
-
-            BigWigWrite::process_val_zoom(
-                zoom_items,
-                options,
-                current_val,
-                &mut data,
-                &runtime,
-                chrom_id,
-            )
-            .await?;
-        }
+        BigWigWrite::process_val_zoom(
+            zoom_items,
+            options,
+            current_val,
+            next_val,
+            &runtime,
+            chrom_id,
+        )
+        .await?;
 
         Ok(())
     }
