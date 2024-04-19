@@ -9,6 +9,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
+use std::future::Future;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
@@ -119,6 +120,7 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
         Ok(())
     }
 }
+
 pub struct BedParserParallelStreamingIterator<V, E, ChromError> {
     allow_out_of_order_chroms: bool,
     last_chrom: Option<String>,
@@ -221,6 +223,82 @@ impl<V> ChromData
             self.queued_reads.push_back(next);
         }
         self.queued_reads.pop_front().unwrap()
+    }
+}
+
+
+impl<V> ChromData2
+    for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError> {
+    type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
+
+    fn process_to_bbi<
+        Fut: Future<
+            Output = Result<
+                crate::ChromProcessedData,
+                ProcessChromError<<Self::Values as ChromValues>::Error>,
+            >,
+        >,
+        StartProcessing: FnMut(
+            String,
+            Self::Values,
+        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        Advance: FnMut(crate::ChromProcessedData),
+    >(
+        &mut self,
+        runtime: &Handle,
+        start_processing: &mut StartProcessing,
+        advance: &mut Advance,
+    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+        let mut remaining = true;
+        let mut queued_reads: VecDeque<_> = VecDeque::new();
+        loop {
+            while remaining && queued_reads.len() < (4 + 1) {
+                let curr = match self.chrom_indices.pop() {
+                    Some(c) => c,
+                    None => {
+                        remaining = false;
+                        break;
+                    }
+                };
+    
+                let mut file = match File::open(&self.path) {
+                    Ok(f) => f,
+                    Err(err) => return Err(ProcessChromError::SourceError(err.into())),
+                };
+                file.seek(SeekFrom::Start(curr.0))?;
+                let mut parser = BedParser::new(BedFileStream {
+                    bed: StreamingLineReader::new(BufReader::new(file)),
+                    parse: self.parse_fn,
+                });
+    
+                match parser.next_chrom() {
+                    Some(Ok((chrom, group))) => {
+                        let last = self.last_chrom.replace(chrom.clone());
+                        if let Some(c) = last {
+                            // TODO: test this correctly fails
+                            if !self.allow_out_of_order_chroms && c >= chrom {
+                                return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                            }
+                        }
+    
+                        let read = start_processing(chrom, group)?;
+                        let data = runtime.spawn(read);
+                        queued_reads.push_back(data);
+                    }
+                    Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                    None => {
+                        panic!("Unexpected end of file")
+                    }
+                }
+            }
+            let Some(next_chrom) = queued_reads.pop_front() else {
+                break
+            };
+            let data = runtime.block_on(next_chrom).unwrap()?;
+            advance(data);
+        }
+
+        Ok(())
     }
 }
 

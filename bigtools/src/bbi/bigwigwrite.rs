@@ -119,7 +119,7 @@ impl BigWigWrite {
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     pub fn write<
         Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Values = Values>,
+        V: ChromData2<Values = Values>,
     >(
         self,
         chrom_sizes: HashMap<String, u32>,
@@ -146,12 +146,13 @@ impl BigWigWrite {
 
         let mut chrom_ids = IdMap::default();
 
-        let mut key = 0;
-        let mut output: BTreeMap<u32, _> = BTreeMap::new();
-
         let mut summary: Option<Summary> = None;
         let (send, recv) = futures_mpsc::unbounded();
         let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
+        let (write_fut, write_fut_handle) = write_fut.remote_handle();
+        runtime.spawn(write_fut);
+
+        let handle = runtime.handle();
 
         let setup_chrom = || {
             let (ftx, sections_handle, buf, section_receiver) =
@@ -186,10 +187,7 @@ impl BigWigWrite {
 
             (zooms_channels, ftx)
         };
-        let mut do_read = |chrom: String,
-                           data: _,
-                           output: &mut BTreeMap<u32, _>|
-         -> Result<ChromProcessingKey, ProcessChromError<_>> {
+        let mut do_read = |chrom: String, data: _| -> Result<_, ProcessChromError<_>> {
             let length = match chrom_sizes.get(&chrom) {
                 Some(length) => *length,
                 None => {
@@ -209,44 +207,34 @@ impl BigWigWrite {
                 ftx,
                 chrom_id,
                 options,
-                runtime.handle().clone(),
+                handle.clone(),
                 data,
                 chrom,
                 length,
             );
-            let fut = runtime.spawn(fut).map(|f| f.unwrap());
 
-            let curr_key = key;
-            key += 1;
+            let fut = fut.map(|f| f.map(|s| ChromProcessedData(s)));
 
-            output.insert(curr_key, fut);
-
-            Ok(ChromProcessingKey(curr_key))
+            Ok(fut)
         };
 
-        let (write_fut, write_fut_handle) = write_fut.remote_handle();
-        runtime.spawn(write_fut);
-        loop {
-            match vals.advance(&mut do_read, &mut output)? {
-                ChromDataState::NewChrom(read) => {
-                    let fut = output.remove(&read.0).unwrap();
-                    let chrom_summary = runtime.block_on(fut)?;
-                    match &mut summary {
-                        None => summary = Some(chrom_summary),
-                        Some(summary) => {
-                            summary.total_items += chrom_summary.total_items;
-                            summary.bases_covered += chrom_summary.bases_covered;
-                            summary.min_val = summary.min_val.min(chrom_summary.min_val);
-                            summary.max_val = summary.max_val.max(chrom_summary.max_val);
-                            summary.sum += chrom_summary.sum;
-                            summary.sum_squares += chrom_summary.sum_squares;
-                        }
-                    }
+        let mut advance = |data: ChromProcessedData| {
+            let ChromProcessedData(chrom_summary) = data;
+            match &mut summary {
+                None => summary = Some(chrom_summary),
+                Some(summary) => {
+                    summary.total_items += chrom_summary.total_items;
+                    summary.bases_covered += chrom_summary.bases_covered;
+                    summary.min_val = summary.min_val.min(chrom_summary.min_val);
+                    summary.max_val = summary.max_val.max(chrom_summary.max_val);
+                    summary.sum += chrom_summary.sum;
+                    summary.sum_squares += chrom_summary.sum_squares;
                 }
-                ChromDataState::Finished => break,
-                ChromDataState::Error(err) => return Err(ProcessChromError::SourceError(err)),
             }
-        }
+        };
+
+        vals.process_to_bbi(handle, &mut do_read, &mut advance)?;
+
         drop(send);
 
         self.write_internal_post(
