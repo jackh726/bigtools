@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::File;
-use std::future::Future;
 use std::io::{self, BufRead, BufReader};
 
 use clap::Parser;
@@ -11,7 +10,7 @@ use thiserror::Error;
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::{BBIReadError, BigWigRead, BigWigWrite};
+use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess, InternalProcessData};
 use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 use crate::{ChromData2, Value};
 use tokio::runtime;
@@ -395,16 +394,13 @@ impl ChromData for ChromGroupReadImpl {
 impl ChromData2 for ChromGroupReadImpl {
     type Values = MergingValues;
     fn process_to_bbi<
-        Fut: Future<
-            Output = Result<
-                crate::ChromProcessedData,
-                ProcessChromError<<Self::Values as ChromValues>::Error>,
-            >,
-        >,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(
             String,
-            Self::Values,
-        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        ) -> Result<
+            InternalProcessData,
+            ProcessChromError<<Self::Values as ChromValues>::Error>,
+        >,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -417,7 +413,8 @@ impl ChromData2 for ChromGroupReadImpl {
                 self.iter.next();
             match next {
                 Some(Ok((chrom, _, group))) => {
-                    let read = start_processing(chrom, group)?;
+                    let internal_data = start_processing(chrom)?;
+                    let read = P::do_process(internal_data, group);
                     let data = runtime.block_on(read)?;
                     advance(data);
                 }

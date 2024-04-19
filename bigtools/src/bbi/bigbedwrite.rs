@@ -12,7 +12,10 @@ use tokio::runtime::{Handle, Runtime};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcess, ChromProcessingInputSectionChannel};
+use crate::{
+    write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
+    InternalProcessData,
+};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -507,26 +510,30 @@ pub(crate) struct BigBedFullProcess;
 impl ChromProcess for BigBedFullProcess {
     type Value = BedEntry;
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        data: Values,
-        chrom: String,
-        length: u32,
-    ) -> Result<Summary, ProcessChromError<Values::Error>> {
-        BigBedWrite::process_chrom(
+        InternalProcessData(
             zooms_channels,
             ftx,
             chrom_id,
             options,
             runtime,
-            data,
             chrom,
             length,
-        )
-        .await
+        ): InternalProcessData,
+        data: Values,
+    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+        Ok(ChromProcessedData(
+            BigBedWrite::process_chrom(
+                zooms_channels,
+                ftx,
+                chrom_id,
+                options,
+                runtime,
+                data,
+                chrom,
+                length,
+            )
+            .await?,
+        ))
     }
 }
 

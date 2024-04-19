@@ -586,16 +586,13 @@ pub trait ChromData2: Sized {
     type Values: ChromValues;
 
     fn process_to_bbi<
-        Fut: Future<
-            Output = Result<
-                ChromProcessedData,
-                ProcessChromError<<Self::Values as ChromValues>::Error>,
-            >,
-        >,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(
             String,
-            Self::Values,
-        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        ) -> Result<
+            InternalProcessData,
+            ProcessChromError<<Self::Values as ChromValues>::Error>,
+        >,
         Advance: FnMut(ChromProcessedData),
     >(
         &mut self,
@@ -719,18 +716,22 @@ async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
     Ok((file, max_uncompressed_buf_size, section_iter))
 }
 
+pub struct InternalProcessData(
+    pub(crate) Vec<(u32, ChromProcessingInputSectionChannel)>,
+    pub(crate) ChromProcessingInputSectionChannel,
+    pub(crate) u32,
+    pub(crate) BBIWriteOptions,
+    pub(crate) Handle,
+    pub(crate) String,
+    pub(crate) u32,
+);
+
 pub(crate) trait ChromProcess {
     type Value;
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
+        internal_data: InternalProcessData,
         data: Values,
-        chrom: String,
-        length: u32,
-    ) -> Result<Summary, ProcessChromError<Values::Error>>;
+    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>>;
 }
 
 pub(crate) fn write_vals<
@@ -827,16 +828,16 @@ pub(crate) fn write_vals<
 
         let (zooms_channels, ftx) = setup_chrom();
 
-        let fut = P::do_process(
+        let internal_data = InternalProcessData(
             zooms_channels,
             ftx,
             chrom_id,
             options,
             runtime.handle().clone(),
-            data,
             chrom,
             length,
         );
+        let fut = P::do_process(internal_data, data);
 
         let curr_key = key;
         key += 1;
@@ -852,7 +853,7 @@ pub(crate) fn write_vals<
         match vals_iter.advance(&mut do_read, &mut output)? {
             ChromDataState::NewChrom(read) => {
                 let fut = output.remove(&read.0).unwrap();
-                let chrom_summary = runtime.block_on(fut)?;
+                let chrom_summary = runtime.block_on(fut)?.0;
                 match &mut summary {
                     None => summary = Some(chrom_summary),
                     Some(summary) => {

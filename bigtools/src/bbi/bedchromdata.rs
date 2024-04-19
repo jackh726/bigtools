@@ -9,7 +9,6 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::future::Future;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
@@ -20,7 +19,10 @@ use crate::bed::bedparser::{
 };
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromData2, ChromDataState, ChromProcessingKey, ProcessChromError};
+use crate::{
+    ChromData, ChromData2, ChromDataState, ChromProcess, ChromProcessingKey, InternalProcessData,
+    ProcessChromError,
+};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: BedParser<S>,
@@ -79,16 +81,13 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
     type Values = BedChromData<S>;
 
     fn process_to_bbi<
-        Fut: futures::prelude::Future<
-            Output = Result<
-                crate::ChromProcessedData,
-                ProcessChromError<<Self::Values as ChromValues>::Error>,
-            >,
-        >,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(
             String,
-            Self::Values,
-        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        ) -> Result<
+            InternalProcessData,
+            ProcessChromError<<Self::Values as ChromValues>::Error>,
+        >,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -108,7 +107,8 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
                         }
                     }
 
-                    let read = start_processing(chrom, group)?;
+                    let internal_data = start_processing(chrom)?;
+                    let read = P::do_process(internal_data, group);
                     let data = runtime.block_on(read)?;
                     advance(data);
                 }
@@ -232,16 +232,13 @@ impl<V> ChromData2
     type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn process_to_bbi<
-        Fut: Future<
-            Output = Result<
-                crate::ChromProcessedData,
-                ProcessChromError<<Self::Values as ChromValues>::Error>,
-            >,
-        >,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(
             String,
-            Self::Values,
-        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        ) -> Result<
+            InternalProcessData,
+            ProcessChromError<<Self::Values as ChromValues>::Error>,
+        >,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -281,7 +278,8 @@ impl<V> ChromData2
                             }
                         }
 
-                        let read = start_processing(chrom, group)?;
+                        let internal_data = start_processing(chrom)?;
+                        let read = P::do_process(internal_data, group);
                         let data = runtime.spawn(read);
                         queued_reads.push_back(data);
                     }

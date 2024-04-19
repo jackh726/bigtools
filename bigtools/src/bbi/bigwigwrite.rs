@@ -60,8 +60,8 @@ use crate::utils::tell::Tell;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use crate::{
     future_channel, write_chroms_with_zooms, write_info, ChromData, ChromData2, ChromProcess,
-    ChromProcessedData, ChromProcessingInputSectionChannel, Section, TempZoomInfo, ZoomInfo,
-    ZoomValue,
+    ChromProcessedData, ChromProcessingInputSectionChannel, InternalProcessData, Section,
+    TempZoomInfo, ZoomInfo, ZoomValue,
 };
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
@@ -219,7 +219,7 @@ impl BigWigWrite {
 
             (zooms_channels, ftx)
         };
-        let mut do_read = |chrom: String, data: _| -> Result<_, ProcessChromError<_>> {
+        let mut do_read = |chrom: String| -> Result<_, ProcessChromError<_>> {
             let length = match chrom_sizes.get(&chrom) {
                 Some(length) => *length,
                 None => {
@@ -234,20 +234,16 @@ impl BigWigWrite {
 
             let (zooms_channels, ftx) = setup_chrom();
 
-            let fut = BigWigWrite::process_chrom(
+            let internal_data = crate::InternalProcessData(
                 zooms_channels,
                 ftx,
                 chrom_id,
                 options,
-                handle.clone(),
-                data,
+                runtime.handle().clone(),
                 chrom,
                 length,
             );
-
-            let fut = fut.map(|f| f.map(|s| ChromProcessedData(s)));
-
-            Ok(fut)
+            Ok(internal_data)
         };
 
         let mut advance = |data: ChromProcessedData| {
@@ -265,7 +261,7 @@ impl BigWigWrite {
             }
         };
 
-        vals.process_to_bbi(handle, &mut do_read, &mut advance)?;
+        vals.process_to_bbi::<BigWigFullProcess, _, _>(handle, &mut do_read, &mut advance)?;
 
         drop(send);
 
@@ -352,7 +348,7 @@ impl BigWigWrite {
 
             (zooms_channels, ftx)
         };
-        let mut do_read = |chrom: String, data: _| -> Result<_, ProcessChromError<_>> {
+        let mut do_read = |chrom: String| -> Result<_, ProcessChromError<_>> {
             let length = match chrom_sizes.get(&chrom) {
                 Some(length) => *length,
                 None => {
@@ -367,20 +363,16 @@ impl BigWigWrite {
 
             let (zooms_channels, ftx) = setup_chrom();
 
-            let fut = BigWigWrite::process_chrom(
+            let internal_data = crate::InternalProcessData(
                 zooms_channels,
                 ftx,
                 chrom_id,
                 options,
-                handle.clone(),
-                data,
+                runtime.handle().clone(),
                 chrom,
                 length,
             );
-
-            let fut = fut.map(|f| f.map(|s| ChromProcessedData(s)));
-
-            Ok(fut)
+            Ok(internal_data)
         };
 
         let mut advance = |data: ChromProcessedData| {
@@ -398,7 +390,7 @@ impl BigWigWrite {
             }
         };
 
-        vals.process_to_bbi(handle, &mut do_read, &mut advance)?;
+        vals.process_to_bbi::<BigWigFullProcess, _, _>(handle, &mut do_read, &mut advance)?;
 
         drop(send);
 
@@ -946,26 +938,30 @@ pub(crate) struct BigWigFullProcess;
 impl ChromProcess for BigWigFullProcess {
     type Value = Value;
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        data: Values,
-        chrom: String,
-        length: u32,
-    ) -> Result<Summary, ProcessChromError<Values::Error>> {
-        BigWigWrite::process_chrom(
+        InternalProcessData(
             zooms_channels,
             ftx,
             chrom_id,
             options,
             runtime,
-            data,
             chrom,
             length,
-        )
-        .await
+        ): InternalProcessData,
+        data: Values,
+    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+        Ok(ChromProcessedData(
+            BigWigWrite::process_chrom(
+                zooms_channels,
+                ftx,
+                chrom_id,
+                options,
+                runtime,
+                data,
+                chrom,
+                length,
+            )
+            .await?,
+        ))
     }
 }
 
