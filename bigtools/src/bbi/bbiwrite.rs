@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::File;
+use std::future::Future;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::iter::Flatten;
 use std::pin::Pin;
@@ -12,7 +13,7 @@ use thiserror::Error;
 
 use futures::channel::mpsc as futures_mpsc;
 use futures::channel::mpsc::channel;
-use futures::future::{Future, FutureExt};
+use futures::future::FutureExt;
 use futures::stream::StreamExt;
 
 use serde::{Deserialize, Serialize};
@@ -718,25 +719,29 @@ async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
     Ok((file, max_uncompressed_buf_size, section_iter))
 }
 
+pub(crate) trait ChromProcess {
+    type Value;
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+        ftx: ChromProcessingInputSectionChannel,
+        chrom_id: u32,
+        options: BBIWriteOptions,
+        runtime: Handle,
+        data: Values,
+        chrom: String,
+        length: u32,
+    ) -> Result<Summary, ProcessChromError<Values::Error>>;
+}
+
 pub(crate) fn write_vals<
     Values: ChromValues,
     V: ChromData<Values = Values>,
-    Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>>,
-    G: Fn(
-        Vec<(u32, ChromProcessingInputSectionChannel)>,
-        ChromProcessingInputSectionChannel,
-        u32,
-        BBIWriteOptions,
-        Handle,
-        Values,
-        String,
-        u32,
-    ) -> Fut,
+    P: ChromProcess<Value = Values::Value>,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
     options: BBIWriteOptions,
-    process_chrom: G,
+    process_chrom: P,
     runtime: Runtime,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
@@ -822,7 +827,7 @@ pub(crate) fn write_vals<
 
         let (zooms_channels, ftx) = setup_chrom();
 
-        let fut = process_chrom(
+        let fut = P::do_process(
             zooms_channels,
             ftx,
             chrom_id,

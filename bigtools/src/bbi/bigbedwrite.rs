@@ -14,7 +14,7 @@ use tokio::runtime::{Handle, Runtime};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
+use crate::{write_info, ChromData, ChromProcess, ChromProcessingInputSectionChannel};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -154,7 +154,7 @@ impl BigBedWrite {
             vals,
             file,
             self.options,
-            process_chrom,
+            BigBedFullProcess,
             runtime,
             chrom_sizes.clone(),
         );
@@ -856,6 +856,34 @@ struct ZoomItem {
 struct EntriesSection {
     items: Vec<BedEntry>,
     overlap: IndexList<Value>,
+}
+
+pub(crate) struct BigBedFullProcess;
+
+impl ChromProcess for BigBedFullProcess {
+    type Value = BedEntry;
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+        ftx: ChromProcessingInputSectionChannel,
+        chrom_id: u32,
+        options: BBIWriteOptions,
+        runtime: Handle,
+        data: Values,
+        chrom: String,
+        length: u32,
+    ) -> Result<Summary, ProcessChromError<Values::Error>> {
+        BigBedWrite::process_chrom(
+            zooms_channels,
+            ftx,
+            chrom_id,
+            options,
+            runtime,
+            data,
+            chrom,
+            length,
+        )
+        .await
+    }
 }
 
 async fn encode_section(
