@@ -211,7 +211,7 @@ impl BigWigWrite {
                 chrom,
                 length,
             );
-            Ok(internal_data)
+            Ok(BigWigFullProcess::create(internal_data))
         };
 
         let mut advance = |data: ChromProcessedData| {
@@ -229,7 +229,7 @@ impl BigWigWrite {
             }
         };
 
-        vals.process_to_bbi::<BigWigFullProcess, _, _>(handle, &mut do_read, &mut advance)?;
+        vals.process_to_bbi(handle, &mut do_read, &mut advance)?;
 
         drop(send);
 
@@ -340,7 +340,7 @@ impl BigWigWrite {
                 chrom,
                 length,
             );
-            Ok(internal_data)
+            Ok(BigWigFullProcess::create(internal_data))
         };
 
         let mut advance = |data: ChromProcessedData| {
@@ -358,7 +358,7 @@ impl BigWigWrite {
             }
         };
 
-        vals.process_to_bbi::<BigWigFullProcess, _, _>(handle, &mut do_read, &mut advance)?;
+        vals.process_to_bbi(handle, &mut do_read, &mut advance)?;
 
         drop(send);
 
@@ -901,22 +901,20 @@ impl BigWigWrite {
     }
 }
 
-pub(crate) struct BigWigFullProcess;
+pub(crate) struct BigWigFullProcess(InternalProcessData);
 
 impl ChromProcess for BigWigFullProcess {
     type Value = Value;
+    fn create(internal_data: InternalProcessData) -> Self {
+        BigWigFullProcess(internal_data)
+    }
+
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        InternalProcessData(
-            zooms_channels,
-            ftx,
-            chrom_id,
-            options,
-            runtime,
-            chrom,
-            length,
-        ): InternalProcessData,
+        self,
         data: Values,
     ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
+            self.0;
         Ok(ChromProcessedData(
             BigWigWrite::process_chrom(
                 zooms_channels,

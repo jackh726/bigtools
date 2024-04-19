@@ -20,8 +20,7 @@ use crate::bed::bedparser::{
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::{
-    ChromData, ChromData2, ChromDataState, ChromProcess, ChromProcessingKey, InternalProcessData,
-    ProcessChromError,
+    ChromData, ChromData2, ChromDataState, ChromProcess, ChromProcessingKey, ProcessChromError,
 };
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
@@ -82,12 +81,7 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
 
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(
-            String,
-        ) -> Result<
-            InternalProcessData,
-            ProcessChromError<<Self::Values as ChromValues>::Error>,
-        >,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -107,8 +101,8 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
                         }
                     }
 
-                    let internal_data = start_processing(chrom)?;
-                    let read = P::do_process(internal_data, group);
+                    let p = start_processing(chrom)?;
+                    let read = p.do_process(group);
                     let data = runtime.block_on(read)?;
                     advance(data);
                 }
@@ -233,12 +227,7 @@ impl<V> ChromData2
 
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(
-            String,
-        ) -> Result<
-            InternalProcessData,
-            ProcessChromError<<Self::Values as ChromValues>::Error>,
-        >,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -278,8 +267,8 @@ impl<V> ChromData2
                             }
                         }
 
-                        let internal_data = start_processing(chrom)?;
-                        let read = P::do_process(internal_data, group);
+                        let p = start_processing(chrom)?;
+                        let read = p.do_process(group);
                         let data = runtime.spawn(read);
                         queued_reads.push_back(data);
                     }

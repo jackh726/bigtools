@@ -587,12 +587,7 @@ pub trait ChromData2: Sized {
 
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(
-            String,
-        ) -> Result<
-            InternalProcessData,
-            ProcessChromError<<Self::Values as ChromValues>::Error>,
-        >,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
         Advance: FnMut(ChromProcessedData),
     >(
         &mut self,
@@ -728,8 +723,9 @@ pub struct InternalProcessData(
 
 pub(crate) trait ChromProcess {
     type Value;
+    fn create(internal_data: InternalProcessData) -> Self;
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        internal_data: InternalProcessData,
+        self,
         data: Values,
     ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>>;
 }
@@ -742,7 +738,6 @@ pub(crate) fn write_vals<
     mut vals_iter: V,
     file: BufWriter<File>,
     options: BBIWriteOptions,
-    process_chrom: P,
     runtime: Runtime,
     chrom_sizes: HashMap<String, u32>,
 ) -> Result<
@@ -837,7 +832,8 @@ pub(crate) fn write_vals<
             chrom,
             length,
         );
-        let fut = P::do_process(internal_data, data);
+        let mut p = P::create(internal_data);
+        let fut = p.do_process(data);
 
         let curr_key = key;
         key += 1;

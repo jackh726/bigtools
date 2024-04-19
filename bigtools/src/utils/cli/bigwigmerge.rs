@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess, InternalProcessData};
+use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess};
 use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
 use crate::{ChromData2, Value};
 use tokio::runtime;
@@ -395,12 +395,7 @@ impl ChromData2 for ChromGroupReadImpl {
     type Values = MergingValues;
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(
-            String,
-        ) -> Result<
-            InternalProcessData,
-            ProcessChromError<<Self::Values as ChromValues>::Error>,
-        >,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
         Advance: FnMut(crate::ChromProcessedData),
     >(
         &mut self,
@@ -413,8 +408,8 @@ impl ChromData2 for ChromGroupReadImpl {
                 self.iter.next();
             match next {
                 Some(Ok((chrom, _, group))) => {
-                    let internal_data = start_processing(chrom)?;
-                    let read = P::do_process(internal_data, group);
+                    let p = start_processing(chrom)?;
+                    let read = p.do_process(group);
                     let data = runtime.block_on(read)?;
                     advance(data);
                 }
