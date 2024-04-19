@@ -141,33 +141,40 @@ impl BigBedWrite {
 
         Ok(())
     }
+}
 
-    async fn process_chrom<I>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        mut ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        mut group: I,
-        chrom: String,
-        chrom_length: u32,
-    ) -> Result<Summary, ProcessChromError<I::Error>>
-    where
-        I: ChromValues<Value = BedEntry>,
-    {
-        // While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
-        struct ZoomItem {
-            size: u32,
-            live_info: Option<(ZoomRecord, u64)>,
-            overlap: IndexList<Value>,
-            records: Vec<ZoomRecord>,
-            channel: ChromProcessingInputSectionChannel,
-        }
-        struct EntriesSection {
-            items: Vec<BedEntry>,
-            overlap: IndexList<Value>,
-            zoom_items: Vec<ZoomItem>,
-        }
+// While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
+struct ZoomItem {
+    size: u32,
+    live_info: Option<(ZoomRecord, u64)>,
+    overlap: IndexList<Value>,
+    records: Vec<ZoomRecord>,
+    channel: ChromProcessingInputSectionChannel,
+}
+struct EntriesSection {
+    items: Vec<BedEntry>,
+    overlap: IndexList<Value>,
+    zoom_items: Vec<ZoomItem>,
+}
+
+pub(crate) struct BigBedFullProcess {
+    summary: Option<Summary>,
+    state_val: EntriesSection,
+    total_items: u64,
+
+    ftx: ChromProcessingInputSectionChannel,
+    chrom_id: u32,
+    options: BBIWriteOptions,
+    runtime: Handle,
+    chrom: String,
+    length: u32,
+}
+
+impl ChromProcess for BigBedFullProcess {
+    type Value = BedEntry;
+    fn create(internal_data: InternalProcessData) -> Self {
+        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
+            internal_data;
 
         let mut summary: Option<Summary> = None;
 
@@ -186,10 +193,43 @@ impl BigBedWrite {
                 .collect(),
         };
         let mut total_items = 0;
-        while let Some(current_val) = group.next() {
+
+        BigBedFullProcess {
+            summary,
+            state_val,
+            total_items,
+            ftx,
+            chrom_id,
+            options,
+            runtime,
+            chrom,
+            length,
+        }
+    }
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        self,
+        mut data: Values,
+    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+        let Self {
+            mut summary,
+            mut total_items,
+            mut state_val,
+            mut ftx,
+            chrom_id,
+            options,
+            runtime,
+            chrom,
+            length,
+        } = self;
+
+        while let Some(current_val) = data.next() {
             let current_val = match current_val {
                 Ok(v) => v,
                 Err(e) => return Err(ProcessChromError::SourceError(e)),
+            };
+            let next_val = match data.peek() {
+                None | Some(Err(_)) => None,
+                Some(Ok(v)) => Some(v),
             };
             total_items += 1;
             // TODO: test these correctly fails
@@ -199,13 +239,13 @@ impl BigBedWrite {
                     current_val.start, current_val.end
                 )));
             }
-            if current_val.start >= chrom_length {
+            if current_val.start >= length {
                 return Err(ProcessChromError::InvalidInput(format!(
                     "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
-                    current_val.start, chrom, chrom_length
+                    current_val.start, chrom, length
                 )));
             }
-            if let Some(Ok(next_val)) = group.peek() {
+            if let Some(next_val) = next_val {
                 if current_val.start > next_val.start {
                     return Err(ProcessChromError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
@@ -313,7 +353,7 @@ impl BigBedWrite {
                 &mut summary,
                 current_val.start,
                 current_val.end,
-                group.peek().and_then(|v| v.ok()).map(|v| v.start),
+                next_val.map(|v| v.start),
             );
 
             for zoom_item in state_val.zoom_items.iter_mut() {
@@ -360,11 +400,7 @@ impl BigBedWrite {
                     });
                 }
 
-                let next_start = group
-                    .peek()
-                    .and_then(|v| v.ok())
-                    .map(|v| v.start)
-                    .unwrap_or(u32::max_value());
+                let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
 
                 while overlap
                     .head()
@@ -385,7 +421,7 @@ impl BigBedWrite {
                     let mut add_start = removed_start;
                     loop {
                         if add_start >= removed_end {
-                            if group.peek().is_none() {
+                            if next_val.is_none() {
                                 if let Some((mut zoom2, total_items)) = zoom_item.live_info.take() {
                                     zoom2.summary.total_items = total_items;
                                     zoom_item.records.push(zoom2);
@@ -470,7 +506,7 @@ impl BigBedWrite {
             }
 
             state_val.items.push(current_val);
-            if group.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize {
+            if next_val.is_none() || state_val.items.len() >= options.items_per_slot as usize {
                 let items = std::mem::replace(
                     &mut state_val.items,
                     Vec::with_capacity(options.items_per_slot as usize),
@@ -500,36 +536,7 @@ impl BigBedWrite {
             Some(summary) => summary,
         };
         summary_complete.total_items = total_items;
-        Ok(summary_complete)
-    }
-}
-
-pub(crate) struct BigBedFullProcess(InternalProcessData);
-
-impl ChromProcess for BigBedFullProcess {
-    type Value = BedEntry;
-    fn create(internal_data: InternalProcessData) -> Self {
-        BigBedFullProcess(internal_data)
-    }
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        self,
-        data: Values,
-    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
-        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
-            self.0;
-        Ok(ChromProcessedData(
-            BigBedWrite::process_chrom(
-                zooms_channels,
-                ftx,
-                chrom_id,
-                options,
-                runtime,
-                data,
-                chrom,
-                length,
-            )
-            .await?,
-        ))
+        Ok(ChromProcessedData(summary_complete))
     }
 }
 
