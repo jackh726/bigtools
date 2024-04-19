@@ -226,9 +226,9 @@ impl<V> ChromData
     }
 }
 
-
 impl<V> ChromData2
-    for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError> {
+    for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError>
+{
     type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
 
     fn process_to_bbi<
@@ -260,7 +260,7 @@ impl<V> ChromData2
                         break;
                     }
                 };
-    
+
                 let mut file = match File::open(&self.path) {
                     Ok(f) => f,
                     Err(err) => return Err(ProcessChromError::SourceError(err.into())),
@@ -270,7 +270,7 @@ impl<V> ChromData2
                     bed: StreamingLineReader::new(BufReader::new(file)),
                     parse: self.parse_fn,
                 });
-    
+
                 match parser.next_chrom() {
                     Some(Ok((chrom, group))) => {
                         let last = self.last_chrom.replace(chrom.clone());
@@ -280,7 +280,7 @@ impl<V> ChromData2
                                 return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                             }
                         }
-    
+
                         let read = start_processing(chrom, group)?;
                         let data = runtime.spawn(read);
                         queued_reads.push_back(data);
@@ -292,7 +292,7 @@ impl<V> ChromData2
                 }
             }
             let Some(next_chrom) = queued_reads.pop_front() else {
-                break
+                break;
             };
             let data = runtime.block_on(next_chrom).unwrap()?;
             advance(data);

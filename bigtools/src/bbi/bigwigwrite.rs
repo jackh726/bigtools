@@ -59,9 +59,9 @@ use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
 use crate::{
-    future_channel, write_chroms_with_zooms, write_info, ChromData, ChromData2, ChromDataState,
-    ChromProcessedData, ChromProcessingInputSectionChannel, ChromProcessingKey, Section,
-    TempZoomInfo, ZoomInfo, ZoomValue,
+    future_channel, write_chroms_with_zooms, write_info, ChromData, ChromData2, ChromProcess,
+    ChromProcessedData, ChromProcessingInputSectionChannel, Section, TempZoomInfo, ZoomInfo,
+    ZoomValue,
 };
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
@@ -938,6 +938,34 @@ impl BigWigWrite {
         }
 
         Ok(())
+    }
+}
+
+pub(crate) struct BigWigFullProcess;
+
+impl ChromProcess for BigWigFullProcess {
+    type Value = Value;
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+        ftx: ChromProcessingInputSectionChannel,
+        chrom_id: u32,
+        options: BBIWriteOptions,
+        runtime: Handle,
+        data: Values,
+        chrom: String,
+        length: u32,
+    ) -> Result<Summary, ProcessChromError<Values::Error>> {
+        BigWigWrite::process_chrom(
+            zooms_channels,
+            ftx,
+            chrom_id,
+            options,
+            runtime,
+            data,
+            chrom,
+            length,
+        )
+        .await
     }
 }
 

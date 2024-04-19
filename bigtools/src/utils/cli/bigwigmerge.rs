@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fs::File;
+use std::future::Future;
 use std::io::{self, BufRead, BufReader};
 
 use clap::Parser;
@@ -10,9 +11,9 @@ use thiserror::Error;
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::Value;
 use crate::{BBIReadError, BigWigRead, BigWigWrite};
 use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
+use crate::{ChromData2, Value};
 use tokio::runtime;
 
 use super::BBIWriteArgs;
@@ -388,5 +389,43 @@ impl ChromData for ChromGroupReadImpl {
             }
             None => ChromDataState::Finished,
         })
+    }
+}
+
+impl ChromData2 for ChromGroupReadImpl {
+    type Values = MergingValues;
+    fn process_to_bbi<
+        Fut: Future<
+            Output = Result<
+                crate::ChromProcessedData,
+                ProcessChromError<<Self::Values as ChromValues>::Error>,
+            >,
+        >,
+        StartProcessing: FnMut(
+            String,
+            Self::Values,
+        ) -> Result<Fut, ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        Advance: FnMut(crate::ChromProcessedData),
+    >(
+        &mut self,
+        runtime: &runtime::Handle,
+        start_processing: &mut StartProcessing,
+        advance: &mut Advance,
+    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+        loop {
+            let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
+                self.iter.next();
+            match next {
+                Some(Ok((chrom, _, group))) => {
+                    let read = start_processing(chrom, group)?;
+                    let data = runtime.block_on(read)?;
+                    advance(data);
+                }
+                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                None => break,
+            }
+        }
+
+        Ok(())
     }
 }

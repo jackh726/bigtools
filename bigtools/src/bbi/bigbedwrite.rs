@@ -12,7 +12,7 @@ use tokio::runtime::{Handle, Runtime};
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
+use crate::{write_info, ChromData, ChromProcess, ChromProcessingInputSectionChannel};
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -80,7 +80,7 @@ impl BigBedWrite {
             vals,
             file,
             self.options,
-            BigBedWrite::process_chrom,
+            BigBedFullProcess,
             runtime,
             chrom_sizes.clone(),
         );
@@ -151,7 +151,7 @@ impl BigBedWrite {
         chrom_length: u32,
     ) -> Result<Summary, ProcessChromError<I::Error>>
     where
-        I: ChromValues<Value = BedEntry> + Send,
+        I: ChromValues<Value = BedEntry>,
     {
         // While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
         struct ZoomItem {
@@ -499,6 +499,34 @@ impl BigBedWrite {
         };
         summary_complete.total_items = total_items;
         Ok(summary_complete)
+    }
+}
+
+pub(crate) struct BigBedFullProcess;
+
+impl ChromProcess for BigBedFullProcess {
+    type Value = BedEntry;
+    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+        ftx: ChromProcessingInputSectionChannel,
+        chrom_id: u32,
+        options: BBIWriteOptions,
+        runtime: Handle,
+        data: Values,
+        chrom: String,
+        length: u32,
+    ) -> Result<Summary, ProcessChromError<Values::Error>> {
+        BigBedWrite::process_chrom(
+            zooms_channels,
+            ftx,
+            chrom_id,
+            options,
+            runtime,
+            data,
+            chrom,
+            length,
+        )
+        .await
     }
 }
 
