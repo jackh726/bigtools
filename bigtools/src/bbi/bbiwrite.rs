@@ -586,9 +586,9 @@ pub trait ChromData2: Sized {
     type Values: ChromValues;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
+        P: ChromProcess<Value = <Self::Values as ChromValues>::Value> + Send + 'static,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(ChromProcessedData),
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Handle,
@@ -724,16 +724,17 @@ pub struct InternalProcessData(
 pub(crate) trait ChromProcess {
     type Value;
     fn create(internal_data: InternalProcessData) -> Self;
+    fn destroy(self) -> ChromProcessedData;
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        self,
+        &mut self,
         data: Values,
-    ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>>;
+    ) -> Result<(), ProcessChromError<Values::Error>>;
 }
 
 pub(crate) fn write_vals<
     Values: ChromValues,
-    V: ChromData<Values = Values>,
-    P: ChromProcess<Value = Values::Value>,
+    V: ChromData2<Values = Values>,
+    P: ChromProcess<Value = Values::Value> + Send + 'static,
 >(
     mut vals_iter: V,
     file: BufWriter<File>,
@@ -765,12 +766,13 @@ pub(crate) fn write_vals<
 
     let mut chrom_ids = IdMap::default();
 
-    let mut key = 0;
-    let mut output: BTreeMap<u32, _> = BTreeMap::new();
-
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
+    let (write_fut, write_fut_handle) = write_fut.remote_handle();
+    runtime.spawn(write_fut);
+
+    let handle = runtime.handle();
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
@@ -805,10 +807,7 @@ pub(crate) fn write_vals<
 
         (zooms_channels, ftx)
     };
-    let mut do_read = |chrom: String,
-                       data: _,
-                       output: &mut BTreeMap<u32, _>|
-     -> Result<ChromProcessingKey, ProcessChromError<_>> {
+    let mut do_read = |chrom: String| -> Result<_, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
@@ -823,7 +822,7 @@ pub(crate) fn write_vals<
 
         let (zooms_channels, ftx) = setup_chrom();
 
-        let internal_data = InternalProcessData(
+        let internal_data = crate::InternalProcessData(
             zooms_channels,
             ftx,
             chrom_id,
@@ -832,40 +831,27 @@ pub(crate) fn write_vals<
             chrom,
             length,
         );
-        let mut p = P::create(internal_data);
-        let fut = p.do_process(data);
-
-        let curr_key = key;
-        key += 1;
-
-        output.insert(curr_key, fut);
-
-        Ok(ChromProcessingKey(curr_key))
+        Ok(P::create(internal_data))
     };
 
-    let (write_fut, write_fut_handle) = write_fut.remote_handle();
-    runtime.spawn(write_fut);
-    loop {
-        match vals_iter.advance(&mut do_read, &mut output)? {
-            ChromDataState::NewChrom(read) => {
-                let fut = output.remove(&read.0).unwrap();
-                let chrom_summary = runtime.block_on(fut)?.0;
-                match &mut summary {
-                    None => summary = Some(chrom_summary),
-                    Some(summary) => {
-                        summary.total_items += chrom_summary.total_items;
-                        summary.bases_covered += chrom_summary.bases_covered;
-                        summary.min_val = summary.min_val.min(chrom_summary.min_val);
-                        summary.max_val = summary.max_val.max(chrom_summary.max_val);
-                        summary.sum += chrom_summary.sum;
-                        summary.sum_squares += chrom_summary.sum_squares;
-                    }
-                }
+    let mut advance = |p: P| {
+        let data = p.destroy();
+        let ChromProcessedData(chrom_summary) = data;
+        match &mut summary {
+            None => summary = Some(chrom_summary),
+            Some(summary) => {
+                summary.total_items += chrom_summary.total_items;
+                summary.bases_covered += chrom_summary.bases_covered;
+                summary.min_val = summary.min_val.min(chrom_summary.min_val);
+                summary.max_val = summary.max_val.max(chrom_summary.max_val);
+                summary.sum += chrom_summary.sum;
+                summary.sum_squares += chrom_summary.sum_squares;
             }
-            ChromDataState::Finished => break,
-            ChromDataState::Error(err) => return Err(ProcessChromError::SourceError(err)),
         }
-    }
+    };
+
+    vals_iter.process_to_bbi(handle, &mut do_read, &mut advance)?;
+
     drop(send);
 
     let summary_complete = summary.unwrap_or(Summary {
