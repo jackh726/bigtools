@@ -6,7 +6,6 @@ use std::io::{self, BufWriter, Write};
 
 use futures::future::FutureExt;
 use futures::sink::SinkExt;
-use futures::Future;
 
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
@@ -81,71 +80,11 @@ impl BigBedWrite {
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
-    pub fn write<
-        Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData<Values = Values>,
-    >(
+    pub fn write<Values: ChromValues<Value = BedEntry>, V: ChromData<Values = Values>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
-        let process_chrom = |zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-                             ftx: ChromProcessingInputSectionChannel,
-                             chrom_id: u32,
-                             options: BBIWriteOptions,
-                             runtime: Handle,
-                             chrom_values: Values,
-                             chrom: String,
-                             chrom_length: u32| {
-            let fut = BigBedWrite::process_chrom(
-                zooms_channels,
-                ftx,
-                chrom_id,
-                options,
-                runtime.clone(),
-                chrom_values,
-                chrom,
-                chrom_length,
-            );
-            runtime.spawn(fut).map(|f| f.unwrap())
-        };
-        self.write_internal(chrom_sizes, vals, runtime, process_chrom)
-    }
-
-    /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values, but will read through values on the current thread.
-    pub fn write_singlethreaded<
-        Values: ChromValues<Value = BedEntry>,
-        V: ChromData<Values = Values>,
-    >(
-        self,
-        chrom_sizes: HashMap<String, u32>,
-        vals: V,
-        runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
-        self.write_internal(chrom_sizes, vals, runtime, BigBedWrite::process_chrom)
-    }
-
-    fn write_internal<
-        Values: ChromValues<Value = BedEntry>,
-        V: ChromData<Values = Values>,
-        Fut: Future<Output = Result<Summary, ProcessChromError<Values::Error>>>,
-        G: Fn(
-            Vec<(u32, ChromProcessingInputSectionChannel)>,
-            ChromProcessingInputSectionChannel,
-            u32,
-            BBIWriteOptions,
-            Handle,
-            Values,
-            String,
-            u32,
-        ) -> Fut,
-    >(
-        self,
-        chrom_sizes: HashMap<String, u32>,
-        vals: V,
-        runtime: Runtime,
-        process_chrom: G,
     ) -> Result<(), ProcessChromError<Values::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
@@ -227,7 +166,7 @@ impl BigBedWrite {
                              chrom_values: Values,
                              chrom: String,
                              chrom_length: u32| {
-            let fut = BigBedWrite::process_chrom_no_zooms(
+            let fut = process_chrom_no_zooms(
                 ftx,
                 chrom_id,
                 options,
@@ -267,7 +206,7 @@ impl BigBedWrite {
         let output = bbiwrite::write_zoom_vals(
             vals,
             self.options,
-            BigBedWrite::process_chrom_zoom,
+            process_chrom_zoom,
             &runtime,
             &chrom_ids,
             (summary.bases_covered as f64 / summary.total_items as f64) as u32,
@@ -306,7 +245,8 @@ impl BigBedWrite {
         chrom: &String,
         chrom_values: &mut I,
         summary: &mut Option<Summary>,
-        state_val: &mut EntriesSection,
+        items: &mut Vec<BedEntry>,
+        overlap: &mut IndexList<Value>,
         options: BBIWriteOptions,
         runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
@@ -439,7 +379,7 @@ impl BigBedWrite {
             };
 
         add_interval_to_summary(
-            &mut state_val.overlap,
+            overlap,
             summary,
             current_val.start,
             current_val.end,
@@ -447,13 +387,10 @@ impl BigBedWrite {
         );
 
         // Then, add the current item to the actual values, and encode if full, or last item
-        state_val.items.push(current_val);
-        if chrom_values.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize
-        {
-            let items = std::mem::replace(
-                &mut state_val.items,
-                Vec::with_capacity(options.items_per_slot as usize),
-            );
+        items.push(current_val);
+        if chrom_values.peek().is_none() || items.len() >= options.items_per_slot as usize {
+            let items =
+                std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
             let handle = runtime
                 .spawn(encode_section(options.compress, items, chrom_id))
                 .map(|f| f.unwrap());
@@ -626,227 +563,7 @@ impl BigBedWrite {
 
         Ok(())
     }
-
-    async fn process_chrom<I>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        mut ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        mut chrom_values: I,
-        chrom: String,
-        chrom_length: u32,
-    ) -> Result<Summary, ProcessChromError<I::Error>>
-    where
-        I: ChromValues<Value = BedEntry>,
-    {
-        let mut summary: Option<Summary> = None;
-
-        let mut state_val = EntriesSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
-            overlap: IndexList::new(),
-        };
-        let mut zoom_items = zooms_channels
-            .into_iter()
-            .map(|(size, channel)| ZoomItem {
-                size,
-                live_info: None,
-                overlap: IndexList::new(),
-                records: Vec::with_capacity(options.items_per_slot as usize),
-                channel,
-            })
-            .collect();
-        let mut total_items = 0;
-        while let Some(current_val) = chrom_values.next() {
-            // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-            total_items += 1;
-
-            let item_start = current_val.start;
-            let item_end = current_val.end;
-
-            BigBedWrite::process_val(
-                current_val,
-                chrom_length,
-                &chrom,
-                &mut chrom_values,
-                &mut summary,
-                &mut state_val,
-                options,
-                &runtime,
-                &mut ftx,
-                chrom_id,
-            )
-            .await?;
-
-            BigBedWrite::process_val_zoom(
-                &mut zoom_items,
-                options,
-                item_start,
-                item_end,
-                &mut chrom_values,
-                &runtime,
-                chrom_id,
-            )
-            .await?;
-        }
-
-        debug_assert!(state_val.items.is_empty());
-        for zoom_item in zoom_items.iter_mut() {
-            debug_assert!(zoom_item.live_info.is_none());
-            debug_assert!(zoom_item.records.is_empty());
-        }
-
-        let mut summary_complete = match summary {
-            None => Summary {
-                total_items: 0,
-                bases_covered: 0,
-                min_val: 0.0,
-                max_val: 0.0,
-                sum: 0.0,
-                sum_squares: 0.0,
-            },
-            Some(summary) => summary,
-        };
-        summary_complete.total_items = total_items;
-        Ok(summary_complete)
-    }
-
-    pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = BedEntry>>(
-        mut ftx: ChromProcessingInputSectionChannel,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        mut chrom_values: I,
-        chrom: String,
-        chrom_length: u32,
-    ) -> Result<(Summary, Vec<(u64, u64)>), ProcessChromError<I::Error>> {
-        #[derive(Debug, Copy, Clone)]
-        struct ZoomCounts {
-            resolution: u64,
-            current_end: u64,
-            counts: u64,
-        }
-
-        let mut summary: Option<Summary> = None;
-
-        let mut state_val = EntriesSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
-            overlap: IndexList::new(),
-        };
-        let mut zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
-            .take_while(|z| *z <= u64::MAX / 4 && *z <= chrom_length as u64 * 4)
-            .map(|z| ZoomCounts {
-                resolution: z,
-                current_end: 0,
-                counts: 0,
-            })
-            .collect();
-
-        let mut total_items = 0;
-        while let Some(current_val) = chrom_values.next() {
-            // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-            total_items += 1;
-
-            let item_start = current_val.start;
-            let item_end = current_val.end;
-
-            BigBedWrite::process_val(
-                current_val,
-                chrom_length,
-                &chrom,
-                &mut chrom_values,
-                &mut summary,
-                &mut state_val,
-                options,
-                &runtime,
-                &mut ftx,
-                chrom_id,
-            )
-            .await?;
-
-            for zoom in &mut zoom_counts {
-                if item_start as u64 >= zoom.current_end {
-                    zoom.counts += 1;
-                    zoom.current_end = item_start as u64 + zoom.resolution;
-                }
-                while item_end as u64 > zoom.current_end {
-                    zoom.counts += 1;
-                    zoom.current_end += zoom.resolution;
-                }
-            }
-        }
-
-        debug_assert!(state_val.items.is_empty());
-
-        let mut summary_complete = match summary {
-            None => Summary {
-                total_items: 0,
-                bases_covered: 0,
-                min_val: 0.0,
-                max_val: 0.0,
-                sum: 0.0,
-                sum_squares: 0.0,
-            },
-            Some(summary) => summary,
-        };
-        summary_complete.total_items = total_items;
-
-        let zoom_counts = zoom_counts
-            .into_iter()
-            .map(|z| (z.resolution, z.counts))
-            .collect();
-
-        Ok((summary_complete, zoom_counts))
-    }
-
-    pub(crate) async fn process_chrom_zoom<I: ChromValues<Value = BedEntry>>(
-        zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
-        chrom_id: u32,
-        options: BBIWriteOptions,
-        runtime: Handle,
-        mut chrom_values: I,
-    ) -> Result<(), ProcessChromError<I::Error>> {
-        let mut zoom_items: Vec<ZoomItem> = zooms_channels
-            .into_iter()
-            .map(|(size, channel)| ZoomItem {
-                size,
-                live_info: None,
-                overlap: IndexList::new(),
-                records: Vec::with_capacity(options.items_per_slot as usize),
-                channel,
-            })
-            .collect();
-
-        while let Some(current_val) = chrom_values.next() {
-            // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-
-            let item_start = current_val.start;
-            let item_end = current_val.end;
-
-            BigBedWrite::process_val_zoom(
-                &mut zoom_items,
-                options,
-                item_start,
-                item_end,
-                &mut chrom_values,
-                &runtime,
-                chrom_id,
-            )
-            .await?;
-        }
-
-        for zoom_item in zoom_items.iter_mut() {
-            debug_assert!(zoom_item.live_info.is_none());
-            debug_assert!(zoom_item.records.is_empty());
-        }
-
-        Ok(())
-    }
 }
-
 // While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
 struct ZoomItem {
     size: u32,
@@ -858,35 +575,262 @@ struct ZoomItem {
 struct EntriesSection {
     items: Vec<BedEntry>,
     overlap: IndexList<Value>,
+    zoom_items: Vec<ZoomItem>,
 }
 
-pub(crate) struct BigBedFullProcess(InternalProcessData);
+pub(crate) struct BigBedFullProcess {
+    summary: Option<Summary>,
+    state_val: EntriesSection,
+    total_items: u64,
+
+    ftx: ChromProcessingInputSectionChannel,
+    chrom_id: u32,
+    options: BBIWriteOptions,
+    runtime: Handle,
+    chrom: String,
+    length: u32,
+}
 
 impl ChromProcess for BigBedFullProcess {
     type Value = BedEntry;
     fn create(internal_data: InternalProcessData) -> Self {
-        BigBedFullProcess(internal_data)
+        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
+            internal_data;
+
+        let mut summary: Option<Summary> = None;
+
+        let mut zoom_items = zooms_channels
+            .into_iter()
+            .map(|(size, channel)| ZoomItem {
+                size,
+                live_info: None,
+                overlap: IndexList::new(),
+                records: Vec::with_capacity(options.items_per_slot as usize),
+                channel,
+            })
+            .collect();
+        let mut state_val = EntriesSection {
+            zoom_items,
+            items: Vec::with_capacity(options.items_per_slot as usize),
+            overlap: IndexList::new(),
+        };
+        let mut total_items = 0;
+        BigBedFullProcess {
+            summary,
+            state_val,
+            total_items,
+            ftx,
+            chrom_id,
+            options,
+            runtime,
+            chrom,
+            length,
+        }
     }
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
         self,
-        data: Values,
+        mut data: Values,
     ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
-        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
-            self.0;
-        Ok(ChromProcessedData(
-            BigBedWrite::process_chrom(
-                zooms_channels,
-                ftx,
-                chrom_id,
-                options,
-                runtime,
-                data,
-                chrom,
+        let Self {
+            mut summary,
+            mut total_items,
+            mut state_val,
+            mut ftx,
+            chrom_id,
+            options,
+            runtime,
+            chrom,
+            length,
+        } = self;
+
+        while let Some(current_val) = data.next() {
+            // If there is a source error, propogate that up
+            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            total_items += 1;
+
+            let item_start = current_val.start;
+            let item_end = current_val.end;
+
+            BigBedWrite::process_val(
+                current_val,
                 length,
+                &chrom,
+                &mut data,
+                &mut summary,
+                &mut state_val.items,
+                &mut state_val.overlap,
+                options,
+                &runtime,
+                &mut ftx,
+                chrom_id,
             )
-            .await?,
-        ))
+            .await?;
+
+            BigBedWrite::process_val_zoom(
+                &mut state_val.zoom_items,
+                options,
+                item_start,
+                item_end,
+                &mut data,
+                &runtime,
+                chrom_id,
+            )
+            .await?;
+        }
+
+        debug_assert!(state_val.items.is_empty());
+        for zoom_item in state_val.zoom_items.iter_mut() {
+            debug_assert!(zoom_item.live_info.is_none());
+            debug_assert!(zoom_item.records.is_empty());
+        }
+
+        let mut summary_complete = match summary {
+            None => Summary {
+                total_items: 0,
+                bases_covered: 0,
+                min_val: 0.0,
+                max_val: 0.0,
+                sum: 0.0,
+                sum_squares: 0.0,
+            },
+            Some(summary) => summary,
+        };
+        summary_complete.total_items = total_items;
+        Ok(ChromProcessedData(summary_complete))
     }
+}
+
+pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = BedEntry>>(
+    mut ftx: ChromProcessingInputSectionChannel,
+    chrom_id: u32,
+    options: BBIWriteOptions,
+    runtime: Handle,
+    mut chrom_values: I,
+    chrom: String,
+    chrom_length: u32,
+) -> Result<(Summary, Vec<(u64, u64)>), ProcessChromError<I::Error>> {
+    #[derive(Debug, Copy, Clone)]
+    struct ZoomCounts {
+        resolution: u64,
+        current_end: u64,
+        counts: u64,
+    }
+
+    let mut summary: Option<Summary> = None;
+
+    let mut items = Vec::with_capacity(options.items_per_slot as usize);
+    let mut overlap = IndexList::new();
+    let mut zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
+        .take_while(|z| *z <= u64::MAX / 4 && *z <= chrom_length as u64 * 4)
+        .map(|z| ZoomCounts {
+            resolution: z,
+            current_end: 0,
+            counts: 0,
+        })
+        .collect();
+
+    let mut total_items = 0;
+    while let Some(current_val) = chrom_values.next() {
+        // If there is a source error, propogate that up
+        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+        total_items += 1;
+
+        let item_start = current_val.start;
+        let item_end = current_val.end;
+
+        BigBedWrite::process_val(
+            current_val,
+            chrom_length,
+            &chrom,
+            &mut chrom_values,
+            &mut summary,
+            &mut items,
+            &mut overlap,
+            options,
+            &runtime,
+            &mut ftx,
+            chrom_id,
+        )
+        .await?;
+
+        for zoom in &mut zoom_counts {
+            if item_start as u64 >= zoom.current_end {
+                zoom.counts += 1;
+                zoom.current_end = item_start as u64 + zoom.resolution;
+            }
+            while item_end as u64 > zoom.current_end {
+                zoom.counts += 1;
+                zoom.current_end += zoom.resolution;
+            }
+        }
+    }
+
+    debug_assert!(items.is_empty());
+
+    let mut summary_complete = match summary {
+        None => Summary {
+            total_items: 0,
+            bases_covered: 0,
+            min_val: 0.0,
+            max_val: 0.0,
+            sum: 0.0,
+            sum_squares: 0.0,
+        },
+        Some(summary) => summary,
+    };
+    summary_complete.total_items = total_items;
+
+    let zoom_counts = zoom_counts
+        .into_iter()
+        .map(|z| (z.resolution, z.counts))
+        .collect();
+
+    Ok((summary_complete, zoom_counts))
+}
+
+pub(crate) async fn process_chrom_zoom<I: ChromValues<Value = BedEntry>>(
+    zooms_channels: Vec<(u32, ChromProcessingInputSectionChannel)>,
+    chrom_id: u32,
+    options: BBIWriteOptions,
+    runtime: Handle,
+    mut chrom_values: I,
+) -> Result<(), ProcessChromError<I::Error>> {
+    let mut zoom_items: Vec<ZoomItem> = zooms_channels
+        .into_iter()
+        .map(|(size, channel)| ZoomItem {
+            size,
+            live_info: None,
+            overlap: IndexList::new(),
+            records: Vec::with_capacity(options.items_per_slot as usize),
+            channel,
+        })
+        .collect();
+
+    while let Some(current_val) = chrom_values.next() {
+        // If there is a source error, propogate that up
+        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+
+        let item_start = current_val.start;
+        let item_end = current_val.end;
+
+        BigBedWrite::process_val_zoom(
+            &mut zoom_items,
+            options,
+            item_start,
+            item_end,
+            &mut chrom_values,
+            &runtime,
+            chrom_id,
+        )
+        .await?;
+    }
+
+    for zoom_item in zoom_items.iter_mut() {
+        debug_assert!(zoom_item.live_info.is_none());
+        debug_assert!(zoom_item.records.is_empty());
+    }
+
+    Ok(())
 }
 
 async fn encode_section(
