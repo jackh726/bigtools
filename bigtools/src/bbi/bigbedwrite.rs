@@ -79,11 +79,10 @@ impl BigBedWrite {
 
         let pre_data = file.tell()?;
 
-        let output = bbiwrite::write_vals(
+        let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
             vals,
             file,
             self.options,
-            BigBedFullProcess,
             runtime,
             chrom_sizes.clone(),
         );
@@ -505,22 +504,19 @@ impl BigBedWrite {
     }
 }
 
-pub(crate) struct BigBedFullProcess;
+pub(crate) struct BigBedFullProcess(InternalProcessData);
 
 impl ChromProcess for BigBedFullProcess {
     type Value = BedEntry;
+    fn create(internal_data: InternalProcessData) -> Self {
+        BigBedFullProcess(internal_data)
+    }
     async fn do_process<Values: ChromValues<Value = Self::Value>>(
-        InternalProcessData(
-            zooms_channels,
-            ftx,
-            chrom_id,
-            options,
-            runtime,
-            chrom,
-            length,
-        ): InternalProcessData,
+        self,
         data: Values,
     ) -> Result<ChromProcessedData, ProcessChromError<Values::Error>> {
+        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
+            self.0;
         Ok(ChromProcessedData(
             BigBedWrite::process_chrom(
                 zooms_channels,
