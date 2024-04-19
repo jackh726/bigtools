@@ -10,6 +10,7 @@ use futures::sink::SinkExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
+use crate::bbiwrite::process_internal::ChromProcessCreate;
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
@@ -239,11 +240,11 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val<I: ChromValues<Value = BedEntry>>(
+    async fn process_val<E: Error + Send + 'static>(
         current_val: BedEntry,
+        next_val: Option<&BedEntry>,
         chrom_length: u32,
         chrom: &String,
-        chrom_values: &mut I,
         summary: &mut Option<Summary>,
         items: &mut Vec<BedEntry>,
         overlap: &mut IndexList<Value>,
@@ -251,7 +252,7 @@ impl BigBedWrite {
         runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Check a few preconditions:
         // - The current end is greater than or equal to the start
         // - The current end is at most the chromosome length
@@ -269,9 +270,9 @@ impl BigBedWrite {
                 current_val.start, chrom, chrom_length
             )));
         }
-        match chrom_values.peek() {
-            None | Some(Err(_)) => (),
-            Some(Ok(next_val)) => {
+        match next_val {
+            None => (),
+            Some(next_val) => {
                 if current_val.start > next_val.start {
                     return Err(ProcessChromError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
@@ -383,12 +384,12 @@ impl BigBedWrite {
             summary,
             current_val.start,
             current_val.end,
-            chrom_values.peek().and_then(|v| v.ok()).map(|v| v.start),
+            next_val.map(|v| v.start),
         );
 
         // Then, add the current item to the actual values, and encode if full, or last item
         items.push(current_val);
-        if chrom_values.peek().is_none() || items.len() >= options.items_per_slot as usize {
+        if next_val.is_none() || items.len() >= options.items_per_slot as usize {
             let items =
                 std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
             let handle = runtime
@@ -400,15 +401,15 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<I: ChromValues<Value = BedEntry>>(
+    async fn process_val_zoom<E: Error + Send + 'static>(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
         item_start: u32,
         item_end: u32,
-        chrom_values: &mut I,
+        next_val: Option<&BedEntry>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -452,11 +453,7 @@ impl BigBedWrite {
                 });
             }
 
-            let next_start = chrom_values
-                .peek()
-                .and_then(|v| v.ok())
-                .map(|v| v.start)
-                .unwrap_or(u32::max_value());
+            let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
 
             while overlap
                 .head()
@@ -477,7 +474,7 @@ impl BigBedWrite {
                 let mut add_start = removed_start;
                 loop {
                     if add_start >= removed_end {
-                        if chrom_values.peek().is_none() {
+                        if next_val.is_none() {
                             if let Some((mut zoom2, total_items)) = zoom_item.live_info.take() {
                                 zoom2.summary.total_items = total_items;
                                 zoom_item.records.push(zoom2);
@@ -591,8 +588,7 @@ pub(crate) struct BigBedFullProcess {
     length: u32,
 }
 
-impl ChromProcess for BigBedFullProcess {
-    type Value = BedEntry;
+impl ChromProcessCreate for BigBedFullProcess {
     fn destroy(self) -> ChromProcessedData {
         let Self {
             summary,
@@ -655,10 +651,14 @@ impl ChromProcess for BigBedFullProcess {
             length,
         }
     }
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+}
+impl ChromProcess for BigBedFullProcess {
+    type Value = BedEntry;
+    async fn do_process<E: Error + Send + 'static>(
         &mut self,
-        mut data: Values,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+        current_val: Self::Value,
+        next_val: Option<&Self::Value>,
+    ) -> Result<(), ProcessChromError<E>> {
         let Self {
             summary,
             total_items,
@@ -673,40 +673,36 @@ impl ChromProcess for BigBedFullProcess {
         let chrom_id = *chrom_id;
         let length = *length;
 
-        while let Some(current_val) = data.next() {
-            // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-            *total_items += 1;
+        *total_items += 1;
 
-            let item_start = current_val.start;
-            let item_end = current_val.end;
+        let item_start = current_val.start;
+        let item_end = current_val.end;
 
-            BigBedWrite::process_val(
-                current_val,
-                length,
-                &chrom,
-                &mut data,
-                summary,
-                &mut state_val.items,
-                &mut state_val.overlap,
-                *options,
-                &runtime,
-                ftx,
-                chrom_id,
-            )
-            .await?;
+        BigBedWrite::process_val(
+            current_val,
+            next_val,
+            length,
+            &chrom,
+            summary,
+            &mut state_val.items,
+            &mut state_val.overlap,
+            *options,
+            &runtime,
+            ftx,
+            chrom_id,
+        )
+        .await?;
 
-            BigBedWrite::process_val_zoom(
-                &mut state_val.zoom_items,
-                *options,
-                item_start,
-                item_end,
-                &mut data,
-                &runtime,
-                chrom_id,
-            )
-            .await?;
-        }
+        BigBedWrite::process_val_zoom(
+            &mut state_val.zoom_items,
+            *options,
+            item_start,
+            item_end,
+            next_val,
+            &runtime,
+            chrom_id,
+        )
+        .await?;
 
         Ok(())
     }
@@ -745,6 +741,10 @@ pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = BedEntry>>(
     while let Some(current_val) = chrom_values.next() {
         // If there is a source error, propogate that up
         let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+        let next_val = match chrom_values.peek() {
+            Some(Ok(v)) => Some(v),
+            _ => None,
+        };
         total_items += 1;
 
         let item_start = current_val.start;
@@ -752,9 +752,9 @@ pub(crate) async fn process_chrom_no_zooms<I: ChromValues<Value = BedEntry>>(
 
         BigBedWrite::process_val(
             current_val,
+            next_val,
             chrom_length,
             &chrom,
-            &mut chrom_values,
             &mut summary,
             &mut items,
             &mut overlap,
@@ -821,6 +821,10 @@ pub(crate) async fn process_chrom_zoom<I: ChromValues<Value = BedEntry>>(
     while let Some(current_val) = chrom_values.next() {
         // If there is a source error, propogate that up
         let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+        let next_val = match chrom_values.peek() {
+            Some(Ok(v)) => Some(v),
+            _ => None,
+        };
 
         let item_start = current_val.start;
         let item_end = current_val.end;
@@ -830,7 +834,7 @@ pub(crate) async fn process_chrom_zoom<I: ChromValues<Value = BedEntry>>(
             options,
             item_start,
             item_end,
-            &mut chrom_values,
+            next_val,
             &runtime,
             chrom_id,
         )

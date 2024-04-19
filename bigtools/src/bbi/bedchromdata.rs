@@ -91,7 +91,7 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
     ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
         loop {
             match self.bed_data.next_chrom() {
-                Some(Ok((chrom, group))) => {
+                Some(Ok((chrom, mut group))) => {
                     // First, if we don't want to allow out of order chroms, error here
                     let last = self.last_chrom.replace(chrom.clone());
                     if let Some(c) = last {
@@ -102,8 +102,19 @@ impl<S: StreamingBedValues> ChromData2 for BedParserStreamingIterator<S> {
                     }
 
                     let mut p = start_processing(chrom)?;
-                    let read = p.do_process(group);
-                    runtime.block_on(read)?;
+
+                    while let Some(current_val) = group.next() {
+                        // If there is a source error, propogate that up
+                        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+                        let next_val = match group.peek() {
+                            None | Some(Err(_)) => None,
+                            Some(Ok(v)) => Some(v),
+                        };
+
+                        let read = p.do_process(current_val, next_val);
+                        runtime.block_on(read)?;
+                    }
+
                     advance(p);
                 }
                 Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
@@ -234,7 +245,7 @@ impl<V: Send + 'static> ChromData2
         runtime: &Handle,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+    ) -> Result<(), ProcessChromError<BedValueError>> {
         let mut remaining = true;
         let mut queued_reads: VecDeque<_> = VecDeque::new();
         loop {
@@ -258,7 +269,7 @@ impl<V: Send + 'static> ChromData2
                 });
 
                 match parser.next_chrom() {
-                    Some(Ok((chrom, group))) => {
+                    Some(Ok((chrom, mut group))) => {
                         let last = self.last_chrom.replace(chrom.clone());
                         if let Some(c) = last {
                             // TODO: test this correctly fails
@@ -268,10 +279,22 @@ impl<V: Send + 'static> ChromData2
                         }
 
                         let mut p = start_processing(chrom)?;
+                        let runtime_handle = runtime.clone();
                         let data: tokio::task::JoinHandle<
                             Result<P, ProcessChromError<BedValueError>>,
                         > = runtime.spawn(async move {
-                            p.do_process(group).await?;
+                            while let Some(current_val) = group.next() {
+                                // If there is a source error, propogate that up
+                                let current_val =
+                                    current_val.map_err(ProcessChromError::SourceError)?;
+                                let next_val = match group.peek() {
+                                    None | Some(Err(_)) => None,
+                                    Some(Ok(v)) => Some(v),
+                                };
+
+                                let read = p.do_process(current_val, next_val);
+                                runtime_handle.block_on(read)?;
+                            }
                             Ok(p)
                         });
                         queued_reads.push_back(data);

@@ -721,14 +721,22 @@ pub struct InternalProcessData(
     pub(crate) u32,
 );
 
-pub(crate) trait ChromProcess {
-    type Value;
-    fn create(internal_data: InternalProcessData) -> Self;
-    fn destroy(self) -> ChromProcessedData;
-    async fn do_process<Values: ChromValues<Value = Self::Value>>(
+pub mod process_internal {
+    use super::*;
+
+    pub trait ChromProcessCreate {
+        fn create(internal_data: InternalProcessData) -> Self;
+        fn destroy(self) -> ChromProcessedData;
+    }
+}
+
+pub trait ChromProcess: process_internal::ChromProcessCreate {
+    type Value: Send + 'static;
+    fn do_process<E: Error + Send + 'static>(
         &mut self,
-        data: Values,
-    ) -> Result<(), ProcessChromError<Values::Error>>;
+        current_val: Self::Value,
+        next_val: Option<&Self::Value>,
+    ) -> impl Future<Output = Result<(), ProcessChromError<E>>>;
 }
 
 pub(crate) fn write_vals<

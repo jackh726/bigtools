@@ -407,10 +407,21 @@ impl ChromData2 for ChromGroupReadImpl {
             let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
                 self.iter.next();
             match next {
-                Some(Ok((chrom, _, group))) => {
+                Some(Ok((chrom, _, mut group))) => {
                     let mut p = start_processing(chrom)?;
-                    let read = p.do_process(group);
-                    runtime.block_on(read)?;
+
+                    while let Some(current_val) = group.next() {
+                        // If there is a source error, propogate that up
+                        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+                        let next_val = match group.peek() {
+                            None | Some(Err(_)) => None,
+                            Some(Ok(v)) => Some(v),
+                        };
+
+                        let read = p.do_process(current_val, next_val);
+                        runtime.block_on(read)?;
+                    }
+
                     advance(p);
                 }
                 Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
