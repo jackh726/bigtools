@@ -192,6 +192,5 @@ fn test_iter() {
 
     let tempfile = tempfile::NamedTempFile::new().unwrap();
     let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
-    outb.write_singlethreaded(chrom_map, vals_iter, runtime)
-        .unwrap();
+    outb.write(chrom_map, vals_iter, runtime).unwrap();
 }

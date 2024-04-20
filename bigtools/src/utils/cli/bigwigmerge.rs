@@ -11,9 +11,8 @@ use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
 use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess};
-use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
-use crate::{ChromData2, Value};
-use tokio::runtime;
+use crate::{ChromData, ProcessChromError, Value};
+use tokio::runtime::{self, Runtime};
 
 use super::BBIWriteArgs;
 
@@ -361,45 +360,13 @@ struct ChromGroupReadImpl {
 
 impl ChromData for ChromGroupReadImpl {
     type Values = MergingValues;
-
-    fn advance<
-        State,
-        F: FnMut(
-            String,
-            MergingValues,
-            &mut State,
-        ) -> Result<ChromProcessingKey, ProcessChromError<MergingValuesError>>,
-    >(
-        &mut self,
-        do_read: &mut F,
-        state: &mut State,
-    ) -> Result<
-        ChromDataState<ChromProcessingKey, MergingValuesError>,
-        ProcessChromError<MergingValuesError>,
-    > {
-        let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
-            self.iter.next();
-        Ok(match next {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, _, mergingvalues))) => {
-                let read = do_read(chrom, mergingvalues, state)?;
-
-                ChromDataState::NewChrom(read)
-            }
-            None => ChromDataState::Finished,
-        })
-    }
-}
-
-impl ChromData2 for ChromGroupReadImpl {
-    type Values = MergingValues;
     fn process_to_bbi<
         P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(P),
+        Advance: FnMut(P) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>,
     >(
         &mut self,
-        runtime: &runtime::Handle,
+        runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
     ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
@@ -422,7 +389,7 @@ impl ChromData2 for ChromGroupReadImpl {
                         runtime.block_on(read)?;
                     }
 
-                    advance(p);
+                    advance(p)?;
                 }
                 Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
                 None => break,
