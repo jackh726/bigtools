@@ -359,17 +359,19 @@ struct ChromGroupReadImpl {
 }
 
 impl ChromData for ChromGroupReadImpl {
-    type Values = MergingValues;
+    type Value = Value;
+    type Error = MergingValuesError;
+
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        P: ChromProcess<Value = Self::Value>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+    ) -> Result<(), ProcessChromError<Self::Error>> {
         loop {
             let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
                 self.iter.next();

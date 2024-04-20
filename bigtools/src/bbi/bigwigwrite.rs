@@ -53,7 +53,6 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::bbiwrite::process_internal::ChromProcessCreate;
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
 use crate::{
     write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
@@ -146,19 +145,19 @@ impl BigWigWrite {
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
-    pub fn write<Values: ChromValues<Value = Value>, V: ChromData<Values = Values>>(
+    pub fn write<V: ChromData<Value = Value>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<V::Error>> {
         let options = self.options;
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
 
-        let output = bbiwrite::write_vals::<_, _, BigWigFullProcess>(
+        let output = bbiwrite::write_vals::<_, BigWigFullProcess>(
             vals,
             file,
             options,
@@ -211,15 +210,12 @@ impl BigWigWrite {
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
     /// high resolution zooms takes up a substantial portion of total processing time.
-    pub fn write_multipass<
-        Values: ChromValues<Value = Value> + Send + 'static,
-        V: ChromData<Values = Values>,
-    >(
+    pub fn write_multipass<V: ChromData<Value = Value>>(
         self,
-        make_vals: impl Fn() -> Result<V, ProcessChromError<Values::Error>>,
+        make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -227,7 +223,7 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_vals_no_zoom::<_, _, BigWigNoZoomsProcess>(
+        let output = bbiwrite::write_vals_no_zoom::<_, BigWigNoZoomsProcess>(
             vals,
             file,
             self.options,
@@ -249,7 +245,7 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_zoom_vals::<_, _, BigWigZoomsProcess<_>>(
+        let output = bbiwrite::write_zoom_vals::<_, BigWigZoomsProcess<_>>(
             vals,
             self.options,
             &runtime,

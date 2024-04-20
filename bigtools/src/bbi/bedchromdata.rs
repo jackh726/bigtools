@@ -39,18 +39,19 @@ impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
 }
 
 impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
-    type Values = BedChromData<S>;
+    type Value = S::Value;
+    type Error = BedValueError;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        P: ChromProcess<Value = Self::Value>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>> {
+    ) -> Result<(), ProcessChromError<Self::Error>> {
         loop {
             match self.bed_data.next_chrom() {
                 Some(Ok((chrom, mut group))) => {
@@ -120,18 +121,19 @@ impl<V> BedParserParallelStreamingIterator<V> {
 }
 
 impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
-    type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
+    type Value = V;
+    type Error = BedValueError;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        P: ChromProcess<Value = Self::Value> + Send + 'static,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<BedValueError>> {
+    ) -> Result<(), ProcessChromError<Self::Error>> {
         let mut remaining = true;
         let mut queued_reads: VecDeque<_> = VecDeque::new();
         loop {

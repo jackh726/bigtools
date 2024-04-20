@@ -11,7 +11,6 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::bbiwrite::process_internal::ChromProcessCreate;
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
@@ -41,12 +40,12 @@ impl BigBedWrite {
         }
     }
 
-    pub fn write<Values: ChromValues<Value = BedEntry>, V: ChromData<Values = Values>>(
+    pub fn write<V: ChromData<Value = BedEntry>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -78,7 +77,7 @@ impl BigBedWrite {
 
         let pre_data = file.tell()?;
 
-        let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
+        let output = bbiwrite::write_vals::<_, BigBedFullProcess>(
             vals,
             file,
             self.options,
