@@ -19,7 +19,6 @@ use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::idmap::IdMap;
 use crate::utils::tell::Tell;
 use crate::utils::tempfilebuffer::{TempFileBuffer, TempFileBufferWriter};
@@ -557,18 +556,19 @@ pub struct ChromProcessedData(pub(crate) Summary);
 
 /// Effectively like an Iterator of chromosome data
 pub trait ChromData: Sized {
-    type Values: ChromValues;
+    type Value;
+    type Error: Error + Send + 'static;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = <Self::Values as ChromValues>::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<<Self::Values as ChromValues>::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>,
+        P: ChromProcess<Value = Self::Value> + Send + 'static,
+        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<<Self::Values as ChromValues>::Error>>;
+    ) -> Result<(), ProcessChromError<Self::Error>>;
 }
 
 // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
@@ -714,9 +714,8 @@ pub trait ChromProcess: process_internal::ChromProcessCreate {
 }
 
 pub(crate) fn write_vals<
-    Values: ChromValues,
-    V: ChromData<Values = Values>,
-    P: ChromProcess<Value = Values::Value>
+    V: ChromData,
+    P: ChromProcess<Value = V::Value>
         + process_internal::ChromProcessCreate<I = InternalProcessData, Out = ChromProcessedData>
         + Send
         + 'static,
@@ -735,7 +734,7 @@ pub(crate) fn write_vals<
         Vec<ZoomInfo>,
         usize,
     ),
-    ProcessChromError<Values::Error>,
+    ProcessChromError<V::Error>,
 > {
     let zooms_map: BTreeMap<u32, ZoomValue> =
         std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
@@ -884,9 +883,8 @@ pub(crate) struct NoZoomsInternalProcessData(
 pub(crate) struct NoZoomsInternalProcessedData(pub(crate) Summary, pub(crate) Vec<(u64, u64)>);
 
 pub(crate) fn write_vals_no_zoom<
-    Values: ChromValues,
-    V: ChromData<Values = Values>,
-    P: ChromProcess<Value = Values::Value>
+    V: ChromData,
+    P: ChromProcess<Value = V::Value>
         + process_internal::ChromProcessCreate<
             I = NoZoomsInternalProcessData,
             Out = NoZoomsInternalProcessedData,
@@ -907,7 +905,7 @@ pub(crate) fn write_vals_no_zoom<
         Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         usize,
     ),
-    ProcessChromError<Values::Error>,
+    ProcessChromError<V::Error>,
 > {
     let total_zoom_counts = std::iter::successors(Some(10), |z: &u64| Some((*z).saturating_mul(4)))
         .take_while(|z| *z < u64::MAX)
@@ -918,7 +916,7 @@ pub(crate) fn write_vals_no_zoom<
 
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
-    let write_fut = write_chroms_without_zooms::<Values::Error>(file, recv);
+    let write_fut = write_chroms_without_zooms::<V::Error>(file, recv);
     let (write_fut, write_fut_handle) = write_fut.remote_handle();
     runtime.spawn(write_fut);
 
@@ -1035,12 +1033,11 @@ pub(crate) struct ZoomsInternalProcessData<E: Error>(
 pub(crate) struct ZoomsInternalProcessedData<E: Error>(pub(crate) Vec<InternalTempZoomInfo<E>>);
 
 pub(crate) fn write_zoom_vals<
-    Values: ChromValues,
-    V: ChromData<Values = Values>,
-    P: ChromProcess<Value = Values::Value>
+    V: ChromData,
+    P: ChromProcess<Value = V::Value>
         + process_internal::ChromProcessCreate<
-            I = ZoomsInternalProcessData<Values::Error>,
-            Out = ZoomsInternalProcessedData<Values::Error>,
+            I = ZoomsInternalProcessData<V::Error>,
+            Out = ZoomsInternalProcessedData<V::Error>,
         > + Send
         + 'static,
 >(
@@ -1052,7 +1049,7 @@ pub(crate) fn write_zoom_vals<
     zoom_counts: BTreeMap<u64, u64>,
     mut file: BufWriter<File>,
     data_size: u64,
-) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), ProcessChromError<Values::Error>> {
+) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), ProcessChromError<V::Error>> {
     let min_first_zoom_size = average_size.max(10) * 4;
     let mut zooms_map: BTreeMap<u32, InternalZoomValue> = zoom_counts
         .into_iter()
@@ -1083,7 +1080,7 @@ pub(crate) fn write_zoom_vals<
 
     let mut max_uncompressed_buf_size = 0;
 
-    let mut do_read = |chrom: String| -> Result<P, ProcessChromError<Values::Error>> {
+    let mut do_read = |chrom: String| -> Result<P, ProcessChromError<V::Error>> {
         // Make a new id for the chromosome
         let chrom_id = *chrom_ids
             .get(&chrom)

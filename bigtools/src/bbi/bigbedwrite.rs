@@ -11,7 +11,6 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::bbiwrite::process_internal::ChromProcessCreate;
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
@@ -82,19 +81,19 @@ impl BigBedWrite {
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
-    pub fn write<Values: ChromValues<Value = BedEntry>, V: ChromData<Values = Values>>(
+    pub fn write<V: ChromData<Value = BedEntry>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
         let (autosql_offset, total_summary_offset, full_data_offset, pre_data) =
             BigBedWrite::write_pre(&mut file, &self.autosql)?;
 
-        let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
+        let output = bbiwrite::write_vals::<_, BigBedFullProcess>(
             vals,
             file,
             self.options,
@@ -142,15 +141,12 @@ impl BigBedWrite {
     /// Write the values from `V` as a bigBed. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
     /// high resolution zooms takes up a substantial portion of total processing time.
-    pub fn write_multipass<
-        Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData<Values = Values>,
-    >(
+    pub fn write_multipass<V: ChromData<Value = BedEntry>>(
         self,
-        make_vals: impl Fn() -> Result<V, ProcessChromError<Values::Error>>,
+        make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<Values::Error>> {
+    ) -> Result<(), ProcessChromError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -159,7 +155,7 @@ impl BigBedWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_vals_no_zoom::<_, _, BigBedNoZoomsProcess>(
+        let output = bbiwrite::write_vals_no_zoom::<_, BigBedNoZoomsProcess>(
             vals,
             file,
             self.options,
@@ -181,7 +177,7 @@ impl BigBedWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_zoom_vals::<_, _, BigBedZoomsProcess<_>>(
+        let output = bbiwrite::write_zoom_vals::<_, BigBedZoomsProcess<_>>(
             vals,
             self.options,
             &runtime,
