@@ -107,11 +107,10 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
 
     let autosql = match args.autosql.as_ref() {
         None => {
-            use crate::utils::chromvalues::ChromValues;
             let infile = File::open(&bedpath)?;
             let mut vals_iter = BedParser::from_bed_file(infile);
             let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-            let first = group.peek().unwrap().unwrap();
+            let first = group.peek_val().unwrap();
             crate::bed::autosql::bed_autosql(&first.rest)
         }
         Some(file) => std::fs::read_to_string(file)?,

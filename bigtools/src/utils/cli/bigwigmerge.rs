@@ -7,7 +7,6 @@ use clap::Parser;
 use crossbeam_channel::unbounded;
 use thiserror::Error;
 
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
 use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess};
@@ -146,8 +145,13 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
 
             for v in iter {
                 let (chrom, _, mut values) = v?;
-                while let Some(val) = values.next() {
-                    let val = val?;
+
+                loop {
+                    let val = match values.iter.next() {
+                        Some(Ok(v)) => v,
+                        Some(Err(e)) => Err(e)?,
+                        None => break,
+                    };
                     writer.write_fmt(format_args!(
                         "{}\t{}\t{}\t{}\n",
                         chrom, val.start, val.end, val.value
@@ -206,27 +210,6 @@ pub enum MergingValuesError {
     Other(String),
     #[error("{}", .0)]
     IoError(#[from] io::Error),
-}
-
-impl ChromValues for MergingValues {
-    type Value = Value;
-    type Error = MergingValuesError;
-
-    fn next(&mut self) -> Option<Result<Value, MergingValuesError>> {
-        match self.iter.next() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(e)) => Some(Err(e.into())),
-            None => None,
-        }
-    }
-
-    fn peek(&mut self) -> Option<Result<&Value, &MergingValuesError>> {
-        match self.iter.peek() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
-        }
-    }
 }
 
 pub fn get_merged_vals(
@@ -323,8 +306,12 @@ pub fn get_merged_vals(
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
                         let mut mergingvalues = MergingValues::new(chunk, threshold, adjust, clip);
                         let (sender, receiver) = unbounded::<Value>();
-                        while let Some(val) = mergingvalues.next() {
-                            let val = val?;
+                        loop {
+                            let val = match mergingvalues.iter.next() {
+                                Some(Ok(v)) => v,
+                                Some(Err(e)) => Err(e)?,
+                                None => break,
+                            };
                             sender.send(val).unwrap();
                         }
 
@@ -379,14 +366,16 @@ impl ChromData for ChromGroupReadImpl {
                 Some(Ok((chrom, _, mut group))) => {
                     let mut p = start_processing(chrom)?;
 
-                    while let Some(current_val) = group.next() {
-                        // If there is a source error, propogate that up
-                        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-                        let next_val = match group.peek() {
-                            None | Some(Err(_)) => None,
-                            Some(Ok(v)) => Some(v),
+                    loop {
+                        let current_val = match group.iter.next() {
+                            Some(Ok(v)) => v,
+                            Some(Err(e)) => Err(ProcessChromError::SourceError(e))?,
+                            None => break,
                         };
-
+                        let next_val = match group.iter.peek() {
+                            Some(Ok(v)) => Some(v),
+                            Some(Err(_)) | None => None,
+                        };
                         let read = p.do_process(current_val, next_val);
                         runtime.block_on(read)?;
                     }

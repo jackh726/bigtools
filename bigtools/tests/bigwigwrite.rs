@@ -8,7 +8,6 @@ use tempfile;
 
 use bigtools::bed::bedparser::BedParser;
 use bigtools::bedchromdata::BedParserStreamingIterator;
-use bigtools::utils::chromvalues::ChromValues;
 use bigtools::{BigWigRead, BigWigWrite, Value};
 use tokio::runtime;
 
