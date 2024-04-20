@@ -12,7 +12,6 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     use tempfile;
 
     use bigtools::bed::bedparser::BedParser;
-    use bigtools::utils::chromvalues::ChromValues;
     use bigtools::{BigBedRead, BigBedWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -39,7 +38,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
     outb.autosql = {
         let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        let first = group.peek().unwrap().unwrap();
+        let first = group.peek_val().unwrap();
         Some(bigtools::bed::autosql::bed_autosql(&first.rest))
     };
     outb.options.compress = false;

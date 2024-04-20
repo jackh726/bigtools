@@ -422,13 +422,11 @@ impl<S: StreamingBedValues> Drop for BedChromData<S> {
     }
 }
 
-#[cfg(all(test, features = "write"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
     use std::path::PathBuf;
-
-    use crate::utils::chromvalues::ChromValues;
 
     #[test]
     fn test_bed_works() {
@@ -452,7 +450,7 @@ mod tests {
                         end: $end,
                         rest: $rest.to_string()
                     },
-                    $group.peek().unwrap().unwrap()
+                    $group.peek_val().unwrap()
                 );
             };
             (next $group:expr, $start:literal $end:literal $rest:expr) => {
@@ -482,29 +480,29 @@ mod tests {
             check_value!(peek next group, 1 100 "test1\t0");
             check_value!(peek next group, 101 200 "test2\t0");
             check_value!(peek next group, 201 300 "test3\t0");
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         {
             let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100 "test4\t0");
             check_value!(peek next group, 101 200 "test5\t0");
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         {
             let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100 "test6\t0");
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         assert!(matches!(bgp.next_chrom(), None));
     }
@@ -531,7 +529,7 @@ mod tests {
                         end: $end,
                         value: 0.5,
                     },
-                    $group.peek().unwrap().unwrap()
+                    $group.peek_val().unwrap()
                 );
             };
             (next $group:expr, $start:literal $end:literal) => {
@@ -561,29 +559,29 @@ mod tests {
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
             check_value!(peek next group, 201 300);
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         {
             let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr18");
             check_value!(peek next group, 1 100);
             check_value!(peek next group, 101 200);
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         {
             let (chrom, mut group) = bgp.next_chrom().unwrap().unwrap();
             check_value!(chrom "chr19");
             check_value!(peek next group, 1 100);
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
 
             assert!(group.next().is_none());
-            assert!(group.peek().is_none());
+            assert!(group.peek_val().is_none());
         }
         assert!(matches!(bgp.next_chrom(), None));
     }

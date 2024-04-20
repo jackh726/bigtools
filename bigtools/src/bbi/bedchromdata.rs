@@ -17,7 +17,6 @@ use tokio::runtime::Runtime;
 use crate::bed::bedparser::{
     BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
 };
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::{ChromData, ChromProcess, ProcessChromError};
@@ -69,10 +68,7 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
                     while let Some(current_val) = group.next() {
                         // If there is a source error, propogate that up
                         let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-                        let next_val = match group.peek() {
-                            None | Some(Err(_)) => None,
-                            Some(Ok(v)) => Some(v),
-                        };
+                        let next_val = group.peek_val();
 
                         let read = p.do_process(current_val, next_val);
                         runtime.block_on(read)?;
@@ -174,10 +170,7 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
                                 // If there is a source error, propogate that up
                                 let current_val =
                                     current_val.map_err(ProcessChromError::SourceError)?;
-                                let next_val = match group.peek() {
-                                    None | Some(Err(_)) => None,
-                                    Some(Ok(v)) => Some(v),
-                                };
+                                let next_val = group.peek_val();
 
                                 let read = p.do_process::<BedValueError>(current_val, next_val);
                                 read.await?;
@@ -203,11 +196,8 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
     }
 }
 
-impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
-    type Value = S::Value;
-    type Error = BedValueError;
-
-    fn next(&mut self) -> Option<Result<Self::Value, Self::Error>> {
+impl<S: StreamingBedValues> BedChromData<S> {
+    pub fn next(&mut self) -> Option<Result<S::Value, BedValueError>> {
         let state = self.load_state()?;
         let ret = state.load_state_and_take_value();
         if matches!(state.state_value, StateValue::DiffChrom(..)) {
@@ -216,15 +206,15 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
         ret
     }
 
-    fn peek(&mut self) -> Option<Result<&S::Value, &Self::Error>> {
+    pub fn peek_val(&mut self) -> Option<&S::Value> {
         let state = self.load_state()?;
         state.load_state(false);
         let ret = match &state.state_value {
             StateValue::Empty => None,
-            StateValue::Value(_, val) => Some(Ok(val)),
+            StateValue::Value(_, val) => Some(val),
             StateValue::EmptyValue(_) => None,   // Shouldn't occur
             StateValue::DiffChrom(_, _) => None, // Only `Value` is peekable
-            StateValue::Error(err) => Some(Err(err)),
+            StateValue::Error(_) => None,
             StateValue::Done => None,
         };
         ret
