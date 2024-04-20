@@ -710,7 +710,7 @@ pub trait ChromProcess: process_internal::ChromProcessCreate {
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> impl Future<Output = Result<(), ProcessChromError<E>>> + Send + 'static;
+    ) -> impl Future<Output = Result<(), ProcessChromError<E>>> + Send;
 }
 
 pub(crate) fn write_vals<

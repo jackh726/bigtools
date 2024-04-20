@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Runtime;
 
 use crate::bed::bedparser::{
     BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
@@ -164,7 +164,6 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
                         }
 
                         let mut p = start_processing(chrom)?;
-                        let runtime_handle = runtime.handle().clone();
                         let data: tokio::task::JoinHandle<
                             Result<P, ProcessChromError<BedValueError>>,
                         > = runtime.spawn(async move {
@@ -177,8 +176,8 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
                                     Some(Ok(v)) => Some(v),
                                 };
 
-                                let read = p.do_process(current_val, next_val);
-                                runtime_handle.block_on(read)?;
+                                let read = p.do_process::<BedValueError>(current_val, next_val);
+                                read.await?;
                             }
                             Ok(p)
                         });
@@ -275,24 +274,19 @@ mod tests {
                 _next_val: Option<&Self::Value>,
             ) -> Result<(), ProcessChromError<E>> {
                 self.count += 1;
-                dbg!(self.count);
 
                 Ok(())
             }
         }
-        let mut start_processing = |chrom: String| {
-            dbg!(chrom);
-            Ok(TestChromProcess::create(()))
-        };
+        let mut start_processing = |_: String| Ok(TestChromProcess::create(()));
         let mut advance = |p: TestChromProcess| {
-            dbg!(p.count);
             counts.push(p.count);
             let _ = p.destroy();
             Ok(())
         };
         chsi.process_to_bbi(&runtime, &mut start_processing, &mut advance)
             .unwrap();
-        assert_eq!(counts, vec![]);
+        assert_eq!(counts, vec![200, 200, 200, 200, 200, 2000]);
 
         Ok(())
     }
