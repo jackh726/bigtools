@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 use tokio::runtime::Runtime;
@@ -18,6 +18,7 @@ use crate::bed::bedparser::{
     BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
 };
 use crate::utils::chromvalues::ChromValues;
+use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
 use crate::{ChromData, ChromProcess, ProcessChromError};
 
@@ -135,19 +136,19 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
         let mut queued_reads: VecDeque<_> = VecDeque::new();
         loop {
             while remaining && queued_reads.len() < (4 + 1) {
-                let curr = match self.chrom_indices.pop() {
-                    Some(c) => c,
+                let (curr, next) = match self.chrom_indices.pop() {
+                    Some(c) => (c, self.chrom_indices.get(0)),
                     None => {
                         remaining = false;
                         break;
                     }
                 };
 
-                let mut file = match File::open(&self.path) {
+                let file = match File::open(&self.path) {
                     Ok(f) => f,
                     Err(err) => return Err(ProcessChromError::SourceError(err.into())),
                 };
-                file.seek(SeekFrom::Start(curr.0))?;
+                let file = FileView::new(file, curr.0, next.map(|n| n.0).unwrap_or(u64::MAX))?;
                 let mut parser = BedParser::new(BedFileStream {
                     bed: StreamingLineReader::new(BufReader::new(file)),
                     parse: self.parse_fn,
