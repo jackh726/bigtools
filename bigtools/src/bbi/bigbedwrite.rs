@@ -15,7 +15,7 @@ use crate::utils::chromvalues::ChromValues;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
-    write_info, ChromData2, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
+    write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
     InternalProcessData,
 };
 
@@ -41,10 +41,7 @@ impl BigBedWrite {
         }
     }
 
-    pub fn write<
-        Values: ChromValues<Value = BedEntry> + Send + 'static,
-        V: ChromData2<Values = Values>,
-    >(
+    pub fn write<Values: ChromValues<Value = BedEntry>, V: ChromData<Values = Values>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
@@ -173,6 +170,8 @@ pub(crate) struct BigBedFullProcess {
 }
 
 impl ChromProcessCreate for BigBedFullProcess {
+    type I = InternalProcessData;
+    type Out = ChromProcessedData;
     fn create(internal_data: InternalProcessData) -> Self {
         let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
             internal_data;

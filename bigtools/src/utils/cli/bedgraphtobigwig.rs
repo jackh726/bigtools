@@ -101,7 +101,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         let vals_iter = BedParser::from_bedgraph_file(stdin);
 
         let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-        outb.write_singlethreaded(chrom_map, chsi, runtime)?;
+        outb.write(chrom_map, chsi, runtime)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
