@@ -696,7 +696,7 @@ impl<E: Error> ChromProcessCreate for BigWigZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error> ChromProcess for BigWigZoomsProcess<Er> {
+impl<Er: Error + Send> ChromProcess for BigWigZoomsProcess<Er> {
     type Value = Value;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
