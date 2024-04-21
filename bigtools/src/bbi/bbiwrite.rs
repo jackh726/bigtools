@@ -232,13 +232,10 @@ pub(crate) fn write_chrom_tree(
         key_bytes[..chrom_bytes.len()].copy_from_slice(chrom_bytes);
         file.write_all(key_bytes)?;
         file.write_u32::<NativeEndian>(*id)?;
-        let length = chrom_sizes.get(&chrom[..]);
-        match length {
-            None => panic!("Expected length for chrom: {}", chrom),
-            Some(l) => {
-                file.write_u32::<NativeEndian>(*l)?;
-            }
-        }
+        let length = chrom_sizes
+            .get(&chrom[..])
+            .expect(&format!("Expected length for chrom: {}", chrom));
+        file.write_u32::<NativeEndian>(*length)?;
     }
     Ok(())
 }
@@ -602,9 +599,8 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
     let mut max_uncompressed_buf_size = 0;
     loop {
         let read = receiver.next().await;
-        let (sections, mut data, data_write_future, mut zooms) = match read {
-            None => break,
-            Some(read) => read,
+        let Some((sections, mut data, data_write_future, mut zooms)) = read else {
+            break;
         };
         // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
         // Switch that processing output to the real file
@@ -635,10 +631,7 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
         {
             let zoom = zooms_map.get_mut(&resolution).unwrap();
             let data_write_data = data_write_future.await;
-            let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
-                Ok(d) => d,
-                Err(e) => return Err(e),
-            };
+            let (_num_sections, uncompressed_buf_size) = data_write_data.unwrap()?;
             max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
             zoom.0.push(sections.into_iter());
             zoom.2.replace(data.await_real_file());
@@ -663,9 +656,8 @@ async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
     let mut max_uncompressed_buf_size = 0;
     loop {
         let read = receiver.next().await;
-        let (sections, mut data, data_write_future) = match read {
-            None => break,
-            Some(read) => read,
+        let Some((sections, mut data, data_write_future)) = read else {
+            break;
         };
         // If we concurrently processing multiple chromosomes, the section buffer might have written some or all to a separate file
         // Switch that processing output to the real file
@@ -789,10 +781,8 @@ pub(crate) fn write_vals<
             (zoom_infos, zooms_channels)
         };
 
-        match send.unbounded_send((section_receiver, buf, sections_handle, zoom_infos)) {
-            Ok(_) => {}
-            Err(_) => panic!("Expected to always send."),
-        }
+        send.unbounded_send((section_receiver, buf, sections_handle, zoom_infos))
+            .expect("Expected to always send.");
 
         (zooms_channels, ftx)
     }
@@ -930,10 +920,8 @@ pub(crate) fn write_vals_no_zoom<
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, runtime.handle(), options.inmemory);
 
-        match send.unbounded_send((section_receiver, buf, sections_handle)) {
-            Ok(_) => {}
-            Err(_) => panic!("Expected to always send."),
-        }
+        send.unbounded_send((section_receiver, buf, sections_handle))
+            .expect("Expected to always send.");
 
         ftx
     };
@@ -1147,10 +1135,7 @@ pub(crate) fn write_zoom_vals<
         {
             // First, we need to make sure that all the sections that were queued to encode have been written
             let data_write_data = runtime.block_on(data_write_future);
-            let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
-                Ok(d) => d,
-                Err(e) => return Err(e),
-            };
+            let (_num_sections, uncompressed_buf_size) = data_write_data.unwrap()?;
             max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
 
             let zoom = zooms_map.get_mut(&resolution).unwrap();
@@ -1273,7 +1258,7 @@ pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'sta
     (ftx, sections_handle, buf, section_receiver)
 }
 
-#[cfg(all(test, feature = "read"))]
+#[cfg(test)]
 mod tests {
     use byteordered::Endianness;
 
