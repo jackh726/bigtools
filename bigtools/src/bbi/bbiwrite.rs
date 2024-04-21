@@ -4,7 +4,6 @@ use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::iter::Flatten;
-use std::pin::Pin;
 use std::vec;
 
 use byteorder::{NativeEndian, WriteBytesExt};
@@ -129,9 +128,8 @@ pub(crate) struct TempZoomInfo<SourceError: Error> {
     pub sections: crossbeam_channel::Receiver<Section>,
 }
 
-pub(crate) type ChromProcessingInputSectionChannel = futures::channel::mpsc::Sender<
-    Pin<Box<dyn Future<Output = io::Result<(SectionData, usize)>> + Send>>,
->;
+pub(crate) type ChromProcessingInputSectionChannel =
+    futures_mpsc::Sender<tokio::task::JoinHandle<io::Result<(SectionData, usize)>>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
@@ -766,15 +764,8 @@ pub(crate) fn write_vals<
         options: BBIWriteOptions,
         runtime: &Runtime,
     ) -> (
-        Vec<(
-            u32,
-            futures_mpsc::Sender<
-                Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
-            >,
-        )>,
-        futures_mpsc::Sender<
-            Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
-        >,
+        Vec<(u32, ChromProcessingInputSectionChannel)>,
+        ChromProcessingInputSectionChannel,
     ) {
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, runtime.handle(), options.inmemory);
@@ -1280,13 +1271,13 @@ pub(crate) fn write_mid<E: Error>(
 async fn write_data<W: Write, SourceError: Error + Send>(
     mut data_file: W,
     section_sender: crossbeam_channel::Sender<Section>,
-    mut frx: futures_mpsc::Receiver<impl Future<Output = io::Result<(SectionData, usize)>> + Send>,
+    mut frx: futures_mpsc::Receiver<tokio::task::JoinHandle<io::Result<(SectionData, usize)>>>,
 ) -> Result<(usize, usize), ProcessChromError<SourceError>> {
     let mut current_offset = 0;
     let mut total = 0;
     let mut max_uncompressed_buf_size = 0;
     while let Some(section_raw) = frx.next().await {
-        let (section, uncompressed_buf_size): (SectionData, usize) = section_raw.await?;
+        let (section, uncompressed_buf_size): (SectionData, usize) = section_raw.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
         total += 1;
         let size = section.data.len() as u64;
@@ -1310,9 +1301,7 @@ pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'sta
     runtime: &Handle,
     inmemory: bool,
 ) -> (
-    futures_mpsc::Sender<
-        Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
-    >,
+    ChromProcessingInputSectionChannel,
     futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Err>>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,

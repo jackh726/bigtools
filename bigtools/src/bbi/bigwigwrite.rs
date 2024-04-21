@@ -44,7 +44,6 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::vec;
 
-use futures::future::FutureExt;
 use futures::sink::SinkExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
@@ -302,10 +301,9 @@ impl BigWigWrite {
         items.push(current_val);
         if next_val.is_none() || items.len() >= options.items_per_slot as usize {
             let items = std::mem::take(items);
-            let handle = runtime
-                .spawn(encode_section(options.compress, items, chrom_id))
-                .map(|f| f.unwrap());
-            ftx.send(handle.boxed()).await.expect("Couldn't send");
+            let handle: tokio::task::JoinHandle<io::Result<(SectionData, usize)>> =
+                runtime.spawn(encode_section(options.compress, items, chrom_id));
+            ftx.send(handle).await.expect("Couldn't send");
         }
 
         Ok(())
@@ -338,14 +336,8 @@ impl BigWigWrite {
                     || zoom_item.records.len() == options.items_per_slot as usize
                 {
                     let items = std::mem::take(&mut zoom_item.records);
-                    let handle = runtime
-                        .spawn(encode_zoom_section(options.compress, items))
-                        .map(|f| f.unwrap());
-                    zoom_item
-                        .channel
-                        .send(handle.boxed())
-                        .await
-                        .expect("Couln't send");
+                    let handle = runtime.spawn(encode_zoom_section(options.compress, items));
+                    zoom_item.channel.send(handle).await.expect("Couln't send");
                 }
                 if add_start >= current_val.end {
                     if next_val.is_none() {
