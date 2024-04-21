@@ -12,7 +12,6 @@ use thiserror::Error;
 
 use futures::channel::mpsc as futures_mpsc;
 use futures::channel::mpsc::channel;
-use futures::future::FutureExt;
 use futures::stream::StreamExt;
 
 use serde::{Deserialize, Serialize};
@@ -121,9 +120,8 @@ pub enum ProcessChromError<SourceError: Error> {
 
 pub(crate) struct TempZoomInfo<SourceError: Error> {
     pub resolution: u32,
-    pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
-    >,
+    pub data_write_future:
+        tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<SourceError>>>,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: crossbeam_channel::Receiver<Section>,
 }
@@ -578,13 +576,13 @@ pub(crate) type ZoomValue = (
 type Data<Error> = (
     crossbeam_channel::Receiver<Section>,
     TempFileBuffer<BufWriter<File>>,
-    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<Error>>>,
     Vec<TempZoomInfo<Error>>,
 );
 type DataWithoutzooms<Error> = (
     crossbeam_channel::Receiver<Section>,
     TempFileBuffer<BufWriter<File>>,
-    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<Error>>>,
 );
 
 async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
@@ -623,7 +621,7 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
         }
 
         // All the futures are actually just handles, so these are purely for the result
-        let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
+        let (_num_sections, uncompressed_buf_size) = data_write_future.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
         section_iter.push(sections.into_iter());
         file = data.await_real_file();
@@ -637,7 +635,7 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
         {
             let zoom = zooms_map.get_mut(&resolution).unwrap();
             let data_write_data = data_write_future.await;
-            let (_num_sections, uncompressed_buf_size) = match data_write_data {
+            let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
                 Ok(d) => d,
                 Err(e) => return Err(e),
             };
@@ -674,7 +672,7 @@ async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
         data.switch(file);
 
         // All the futures are actually just handles, so these are purely for the result
-        let (_num_sections, uncompressed_buf_size) = data_write_future.await?;
+        let (_num_sections, uncompressed_buf_size) = data_write_future.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
         section_iter.push(sections.into_iter());
         file = data.await_real_file();
@@ -751,14 +749,13 @@ pub(crate) fn write_vals<
     let mut summary: Option<Summary> = None;
     let (mut send, recv) = futures_mpsc::unbounded();
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
-    let (write_fut, write_fut_handle) = write_fut.remote_handle();
-    runtime.spawn(write_fut);
+    let write_fut_handle = runtime.spawn(write_fut);
 
     fn setup_chrom<E: Error + Send + 'static>(
         send: &mut futures_mpsc::UnboundedSender<(
             crossbeam_channel::Receiver<Section>,
             TempFileBuffer<BufWriter<File>>,
-            futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<E>>>,
+            tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<E>>>,
             Vec<TempZoomInfo<E>>,
         )>,
         options: BBIWriteOptions,
@@ -778,11 +775,11 @@ pub(crate) fn write_vals<
                 std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
                     .take(options.max_zooms as usize);
             for size in zoom_sizes {
-                let (ftx, handle, buf, section_receiver) =
+                let (ftx, data_write_future, buf, section_receiver) =
                     future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = TempZoomInfo {
                     resolution: size,
-                    data_write_future: Box::new(handle),
+                    data_write_future,
                     data: buf,
                     sections: section_receiver,
                 };
@@ -857,7 +854,7 @@ pub(crate) fn write_vals<
     });
 
     let (file, max_uncompressed_buf_size, section_iter, zooms_map) =
-        runtime.block_on(write_fut_handle)?;
+        runtime.block_on(write_fut_handle).unwrap()?;
 
     let zoom_infos: Vec<ZoomInfo> = zooms_map
         .into_iter()
@@ -927,8 +924,7 @@ pub(crate) fn write_vals_no_zoom<
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
     let write_fut = write_chroms_without_zooms::<V::Error>(file, recv);
-    let (write_fut, write_fut_handle) = write_fut.remote_handle();
-    runtime.spawn(write_fut);
+    let write_fut_handle = runtime.spawn(write_fut);
 
     let setup_chrom = || {
         let (ftx, sections_handle, buf, section_receiver) =
@@ -1004,7 +1000,8 @@ pub(crate) fn write_vals_no_zoom<
         sum_squares: 0.0,
     });
 
-    let (file, max_uncompressed_buf_size, section_iter) = runtime.block_on(write_fut_handle)?;
+    let (file, max_uncompressed_buf_size, section_iter) =
+        runtime.block_on(write_fut_handle).unwrap()?;
 
     let section_iter = section_iter.into_iter().flatten();
     Ok((
@@ -1026,9 +1023,9 @@ type InternalZoomValue = (
 
 pub(crate) struct InternalTempZoomInfo<SourceError: Error> {
     pub resolution: u32,
-    pub data_write_future: Box<
-        dyn Future<Output = Result<(usize, usize), ProcessChromError<SourceError>>> + Send + Unpin,
-    >,
+
+    pub data_write_future:
+        tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<SourceError>>>,
     pub data: TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
     pub sections: crossbeam_channel::Receiver<Section>,
 }
@@ -1101,11 +1098,11 @@ pub(crate) fn write_zoom_vals<
             let mut zooms_channels = Vec::with_capacity(options.max_zooms as usize);
 
             for size in resolutions.iter().copied() {
-                let (ftx, handle, buf, section_receiver) =
+                let (ftx, data_write_future, buf, section_receiver) =
                     future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = InternalTempZoomInfo {
                     resolution: size,
-                    data_write_future: Box::new(handle),
+                    data_write_future,
                     data: buf,
                     sections: section_receiver,
                 };
@@ -1150,7 +1147,7 @@ pub(crate) fn write_zoom_vals<
         {
             // First, we need to make sure that all the sections that were queued to encode have been written
             let data_write_data = runtime.block_on(data_write_future);
-            let (_num_sections, uncompressed_buf_size) = match data_write_data {
+            let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
                 Ok(d) => d,
                 Err(e) => return Err(e),
             };
@@ -1262,7 +1259,7 @@ pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'sta
     inmemory: bool,
 ) -> (
     ChromProcessingInputSectionChannel,
-    futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Err>>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<Err>>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,
 ) {
@@ -1271,8 +1268,8 @@ pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'sta
     let file = BufWriter::new(write);
 
     let (section_sender, section_receiver) = unbounded();
-    let (sections_remote, sections_handle) = write_data(file, section_sender, frx).remote_handle();
-    runtime.spawn(sections_remote);
+    let sections_remote = write_data(file, section_sender, frx);
+    let sections_handle = runtime.spawn(sections_remote);
     (ftx, sections_handle, buf, section_receiver)
 }
 
