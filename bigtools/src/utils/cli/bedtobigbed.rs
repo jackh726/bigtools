@@ -7,12 +7,10 @@ use std::path::PathBuf;
 use clap::Parser;
 use tokio::runtime;
 
-use crate::bed::bedparser::parse_bed;
+use crate::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
 use crate::bed::indexer::index_chroms;
 use crate::bedchromdata::BedParserParallelStreamingIterator;
-use crate::{
-    bed::bedparser::BedParser, bedchromdata::BedParserStreamingIterator, BigBedWrite, InputSortType,
-};
+use crate::{bedchromdata::BedParserStreamingIterator, BigBedWrite, InputSortType};
 
 use super::BBIWriteArgs;
 
@@ -108,10 +106,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
     let autosql = match args.autosql.as_ref() {
         None => {
             let infile = File::open(&bedpath)?;
-            let mut vals_iter = BedParser::from_bed_file(infile);
-            let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-            let first = group.peek_val().unwrap();
-            crate::bed::autosql::bed_autosql(&first.rest)
+            let mut vals_iter = BedFileStream::from_bed_file(infile);
+            crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest)
         }
         Some(file) => std::fs::read_to_string(file)?,
     };
@@ -120,9 +116,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedpath == "-" || bedpath == "stdin" {
         let stdin = std::io::stdin().lock();
-        let vals_iter = BedParser::from_bed_file(stdin);
-
-        let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+        let chsi = BedParserStreamingIterator::from_bed_file(stdin, allow_out_of_order_chroms);
         outb.write(chrom_map, chsi, runtime)?;
     } else {
         let infile = File::open(&bedpath)?;
@@ -182,17 +176,17 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         } else {
             let infile = File::open(&bedpath)?;
             if args.single_pass {
-                let vals_iter = BedParser::from_bed_file(infile);
-
-                let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+                let chsi =
+                    BedParserStreamingIterator::from_bed_file(infile, allow_out_of_order_chroms);
                 outb.write(chrom_map, chsi, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
                         let infile = File::open(&bedpath)?;
-                        let vals_iter = BedParser::from_bed_file(infile);
-                        let chsi =
-                            BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+                        let chsi = BedParserStreamingIterator::from_bed_file(
+                            infile,
+                            allow_out_of_order_chroms,
+                        );
 
                         Ok(chsi)
                     },
