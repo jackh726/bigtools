@@ -4,7 +4,6 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
-use futures::future::FutureExt;
 use futures::sink::SinkExt;
 
 use byteorder::{NativeEndian, WriteBytesExt};
@@ -452,14 +451,9 @@ impl ChromProcess for BigBedFullProcess {
                             }
                             if !zoom_item.records.is_empty() {
                                 let items = std::mem::take(&mut zoom_item.records);
-                                let handle = runtime
-                                    .spawn(encode_zoom_section(options.compress, items))
-                                    .map(|f| f.unwrap());
-                                zoom_item
-                                    .channel
-                                    .send(handle.boxed())
-                                    .await
-                                    .expect("Couln't send");
+                                let handle =
+                                    runtime.spawn(encode_zoom_section(options.compress, items));
+                                zoom_item.channel.send(handle).await.expect("Couln't send");
                             }
                         }
                         break;
@@ -514,14 +508,8 @@ impl ChromProcess for BigBedFullProcess {
                     // Write section if full
                     if zoom_item.records.len() == options.items_per_slot as usize {
                         let items = std::mem::take(&mut zoom_item.records);
-                        let handle = runtime
-                            .spawn(encode_zoom_section(options.compress, items))
-                            .map(|f| f.unwrap());
-                        zoom_item
-                            .channel
-                            .send(handle.boxed())
-                            .await
-                            .expect("Couln't send");
+                        let handle = runtime.spawn(encode_zoom_section(options.compress, items));
+                        zoom_item.channel.send(handle).await.expect("Couln't send");
                     }
                 }
             }
@@ -535,10 +523,8 @@ impl ChromProcess for BigBedFullProcess {
                 &mut state_val.items,
                 Vec::with_capacity(options.items_per_slot as usize),
             );
-            let handle = runtime
-                .spawn(encode_section(options.compress, items, chrom_id))
-                .map(|f| f.unwrap());
-            ftx.send(handle.boxed()).await.expect("Couldn't send");
+            let handle = runtime.spawn(encode_section(options.compress, items, chrom_id));
+            ftx.send(handle).await.expect("Couldn't send");
         }
 
         Ok(())
