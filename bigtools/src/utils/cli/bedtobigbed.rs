@@ -6,9 +6,8 @@ use std::io::{BufRead, BufReader};
 use clap::Parser;
 use tokio::runtime;
 
-use crate::{
-    bed::bedparser::BedParser, bedchromdata::BedParserStreamingIterator, BigBedWrite, InputSortType,
-};
+use crate::bed::bedparser::{BedFileStream, StreamingBedValues};
+use crate::{bedchromdata::BedParserStreamingIterator, BigBedWrite, InputSortType};
 
 use super::BBIWriteArgs;
 
@@ -86,21 +85,18 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
             .unwrap()
     };
 
-    let infile = File::open(bedpath)?;
-    let mut vals_iter = BedParser::from_bed_file(infile);
+    let infile = File::open(&bedpath)?;
+    let mut vals_iter = BedFileStream::from_bed_file(infile);
 
     let autosql = match args.autosql.as_ref() {
-        None => {
-            let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-            let first = group.peek_val().unwrap();
-            crate::bed::autosql::bed_autosql(&first.rest)
-        }
+        None => crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest),
         Some(file) => std::fs::read_to_string(file)?,
     };
     outb.autosql = Some(autosql);
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+    let infile = File::open(bedpath)?;
+    let chsi = BedParserStreamingIterator::from_bed_file(infile, allow_out_of_order_chroms);
     outb.write(chrom_map, chsi, runtime)?;
 
     Ok(())

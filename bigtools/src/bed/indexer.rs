@@ -99,14 +99,30 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
 
         let curr = chroms.insert_after(prev, (tell, chrom)).unwrap();
 
-        if chroms[curr].1 != chroms[prev].1 && tell < next_tell {
+        let left = chroms[curr].1 != chroms[prev].1 && tell < next_tell;
+        let right = next
+            .map(|next| chroms[curr].1 != chroms[next].1 && tell < chroms[next].0)
+            .unwrap_or(true);
+
+        if left {
             do_index(file_size, file, chroms, line, prev, Some(curr), limit - 1)?;
         }
 
-        if next.map(|next| tell < chroms[next].0).unwrap_or(true) {
+        if right {
             do_index(file_size, file, chroms, line, curr, next, limit - 1)?;
         }
 
+        if chroms[curr].1 != chroms[prev].1 && tell == next_tell {
+            file.seek(SeekFrom::Start(chroms[prev].0))?;
+            line.clear();
+            file.read_line(line)?;
+            line.clear();
+            let tell = file.tell()?;
+            file.read_line(line)?;
+            let chrom = parse_line(&*line)?
+                .expect("Bad logic. Must at least find last entry for chromosome.");
+            chroms.insert_after(prev, (tell, chrom)).unwrap();
+        }
         Ok(())
     }
 
@@ -130,6 +146,30 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
     }
 
     Ok(Some(chroms))
+}
+
+#[allow(unused)]
+fn linear_index(reader: &mut BufReader<File>) -> io::Result<Vec<(u64, String)>> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut chroms: Vec<(u64, String)> = vec![];
+    loop {
+        let mut line = String::new();
+        let tell = reader.seek(SeekFrom::Current(0))?;
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+
+        let chrom = line
+            .split_ascii_whitespace()
+            .next()
+            .ok_or(io::Error::from(io::ErrorKind::InvalidData))?;
+        if chroms.last().map(|c| &c.1 != chrom).unwrap_or(true) {
+            chroms.push((tell, chrom.to_string()));
+        }
+        line.clear();
+    }
+    Ok(chroms)
 }
 
 #[cfg(test)]

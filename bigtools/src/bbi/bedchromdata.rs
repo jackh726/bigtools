@@ -1,39 +1,87 @@
 //! The types here (`BedParserStreamingIterator` and `BedParserParallelStreamingIterator`)
-//! ultimately wrap around the a `BedParser` to interface with bigWig and bigBed writing.
+//! process incoming bed-like data and process into bigWig and bigBed files.
 //!
-//! `BedParserStreamingIterator` is a thin wrapper, which only really has extra checking
-//! for out of order chromosomes.
-//!
-//! `BedParserParallelStreamingIterator` is a more complicated wrapper that will queue up
-//! to 4 extra chromosomes to be processed concurrently.
+//! `BedParserStreamingIterator` processes the data serially, checking for out
+//! of order chromosomes. `BedParserParallelStreamingIterator`, on the other
+//! hand, is more complicated wrapper and will queue up to 4 extra chromosomes
+//! to be processed concurrently.
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 
 use tokio::runtime::Runtime;
 
 use crate::bed::bedparser::{
-    BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
+    parse_bed, parse_bedgraph, BedFileStream, BedInfallibleIteratorStream, BedIteratorStream,
+    BedValueError, Parser, StreamingBedValues,
 };
 use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{ChromData, ChromProcess, ProcessChromError};
+use crate::{BedEntry, ChromData, ChromProcess, ProcessChromError, Value};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
-    bed_data: BedParser<S>,
+    bed_data: S,
     allow_out_of_order_chroms: bool,
-    last_chrom: Option<String>,
 }
 
 impl<S: StreamingBedValues> BedParserStreamingIterator<S> {
-    pub fn new(bed_data: BedParser<S>, allow_out_of_order_chroms: bool) -> Self {
+    pub fn new(bed_data: S, allow_out_of_order_chroms: bool) -> Self {
         BedParserStreamingIterator {
             bed_data,
             allow_out_of_order_chroms,
-            last_chrom: None,
         }
+    }
+}
+
+impl<R: Read> BedParserStreamingIterator<BedFileStream<BedEntry, BufReader<R>>> {
+    pub fn from_bed_file(file: R, allow_out_of_order_chroms: bool) -> Self {
+        BedParserStreamingIterator::new(
+            BedFileStream {
+                bed: StreamingLineReader::new(BufReader::new(file)),
+                parse: parse_bed,
+            },
+            allow_out_of_order_chroms,
+        )
+    }
+}
+
+impl<R: Read> BedParserStreamingIterator<BedFileStream<Value, BufReader<R>>> {
+    pub fn from_bedgraph_file(file: R, allow_out_of_order_chroms: bool) -> Self {
+        BedParserStreamingIterator::new(
+            BedFileStream {
+                bed: StreamingLineReader::new(BufReader::new(file)),
+                parse: parse_bedgraph,
+            },
+            allow_out_of_order_chroms,
+        )
+    }
+}
+
+impl<
+        V: Clone,
+        E: Into<BedValueError>,
+        C: Into<String> + for<'a> PartialEq<&'a str>,
+        I: Iterator<Item = Result<(C, V), E>>,
+    > BedParserStreamingIterator<BedIteratorStream<V, I>>
+{
+    pub fn wrap_iter(iter: I, allow_out_of_order_chroms: bool) -> Self {
+        BedParserStreamingIterator::new(
+            BedIteratorStream { iter, curr: None },
+            allow_out_of_order_chroms,
+        )
+    }
+}
+
+impl<V: Clone, C: Into<String> + for<'a> PartialEq<&'a str>, I: Iterator<Item = (C, V)>>
+    BedParserStreamingIterator<BedInfallibleIteratorStream<V, I>>
+{
+    pub fn wrap_infallible_iter(iter: I, allow_out_of_order_chroms: bool) -> Self {
+        BedParserStreamingIterator::new(
+            BedInfallibleIteratorStream { iter, curr: None },
+            allow_out_of_order_chroms,
+        )
     }
 }
 
@@ -51,43 +99,79 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
     ) -> Result<(), ProcessChromError<Self::Error>> {
+        let mut state: Option<(String, P, Option<Result<(&str, S::Value), BedValueError>>)> = None;
+
         loop {
-            match self.bed_data.next_chrom() {
-                Some(Ok((chrom, mut group))) => {
-                    // First, if we don't want to allow out of order chroms, error here
-                    let last = self.last_chrom.replace(chrom.clone());
-                    if let Some(c) = last {
-                        // TODO: test this correctly fails
-                        if !self.allow_out_of_order_chroms && c >= chrom {
-                            return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
-                        }
-                    }
-
-                    let mut p = start_processing(chrom)?;
-
-                    while let Some(current_val) = group.next() {
-                        // If there is a source error, propogate that up
-                        let current_val = current_val.map_err(ProcessChromError::SourceError)?;
-                        let next_val = group.peek_val();
-
-                        let read = p.do_process(current_val, next_val);
-                        runtime.block_on(read)?;
-                    }
-
-                    advance(p)?;
+            let (curr_value, new_state) = match state {
+                Some((c, p, Some(v))) => (Some(v), Some((c, p))),
+                Some((c, p, None)) => (self.bed_data.next(), Some((c, p))),
+                None => (self.bed_data.next(), None),
+            };
+            state = match (new_state, curr_value) {
+                // The next value is an error, but we never started
+                (None, Some(Err(e))) => return Err(ProcessChromError::SourceError(e)),
+                // There are no values at all
+                (None, None) => return Ok(()),
+                // There are no more values
+                (Some(state), None) => {
+                    advance(state.1)?;
+                    return Ok(());
                 }
-                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
-                None => break,
-            }
-        }
+                // The next value is an error and we have seen values before
+                (Some(state), Some(Err(e))) => {
+                    // We *can* do anything since we've encountered an error.
+                    // We'll go ahead and try to finish what we can, before we return.
+                    advance(state.1)?;
+                    return Err(ProcessChromError::SourceError(e));
+                }
+                // The next value is the first
+                (None, Some(Ok((chrom, val)))) => {
+                    let chrom = chrom.to_string();
+                    let mut p = start_processing(chrom.clone())?;
+                    let next_val = self.bed_data.next();
+                    let next_value = match &next_val {
+                        Some(Ok(v)) if v.0 == chrom => Some(&v.1),
+                        _ => None,
+                    };
+                    runtime.block_on(p.do_process(val, next_value))?;
+                    Some((chrom, p, next_val))
+                }
+                // The next value is the same chromosome
+                (Some((prev_chrom, mut p)), Some(Ok((chrom, val)))) if chrom == &prev_chrom => {
+                    let next_val = self.bed_data.next();
+                    let next_value = match &next_val {
+                        Some(Ok(v)) if v.0 == prev_chrom => Some(&v.1),
+                        _ => None,
+                    };
+                    runtime.block_on(p.do_process(val, next_value))?;
+                    Some((prev_chrom, p, next_val))
+                }
+                // The next value is a different chromosome
+                (Some((prev_chrom, p)), Some(Ok((chrom, val)))) => {
+                    // TODO: test this correctly fails
+                    if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
+                        return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                    }
+                    advance(p)?;
 
-        Ok(())
+                    let chrom = chrom.to_string();
+                    let mut p = start_processing(chrom.clone())?;
+                    let next_val = self.bed_data.next();
+                    let next_value = match &next_val {
+                        Some(Ok(v)) if v.0 == chrom => Some(&v.1),
+                        _ => None,
+                    };
+
+                    runtime.block_on(p.do_process(val, next_value))?;
+                    Some((chrom, p, next_val))
+                }
+            };
+        }
     }
 }
 
 pub struct BedParserParallelStreamingIterator<V> {
     allow_out_of_order_chroms: bool,
-    last_chrom: Option<String>,
 
     chrom_indices: Vec<(u64, String)>,
     parse_fn: Parser<V>,
@@ -107,7 +191,6 @@ impl<V> BedParserParallelStreamingIterator<V> {
 
         BedParserParallelStreamingIterator {
             allow_out_of_order_chroms,
-            last_chrom: None,
 
             chrom_indices,
             parse_fn,
@@ -135,55 +218,64 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
         loop {
             while remaining && queued_reads.len() < (4 + 1) {
                 let (curr, next) = match self.chrom_indices.pop() {
-                    Some(c) => (c, self.chrom_indices.get(0)),
+                    Some(c) => (c, self.chrom_indices.last()),
                     None => {
                         remaining = false;
                         break;
                     }
                 };
+                next.map(|n| assert!(curr.1 != n.1));
+                // TODO: test this correctly fails
+                if !self.allow_out_of_order_chroms && next.map(|n| curr.1 > n.1).unwrap_or(false) {
+                    return Err(ProcessChromError::SourceError(BedValueError::InvalidInput(
+                        "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`."
+                            .to_string(),
+                    )));
+                }
 
                 let file = match File::open(&self.path) {
                     Ok(f) => f,
                     Err(err) => return Err(ProcessChromError::SourceError(err.into())),
                 };
                 let file = FileView::new(file, curr.0, next.map(|n| n.0).unwrap_or(u64::MAX))?;
-                let mut parser = BedParser::new(BedFileStream {
+                let mut stream = BedFileStream {
                     bed: StreamingLineReader::new(BufReader::new(file)),
                     parse: self.parse_fn,
-                });
+                };
 
-                match parser.next_chrom() {
-                    Some(Ok((chrom, mut group))) => {
-                        let last = self.last_chrom.replace(chrom.clone());
-                        if let Some(c) = last {
-                            // TODO: test this correctly fails
-                            if !self.allow_out_of_order_chroms && c >= chrom {
-                                return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
-                            }
+                let mut p = start_processing(curr.1.clone())?;
+                let curr_chrom = curr.1.clone();
+                let data: tokio::task::JoinHandle<Result<P, ProcessChromError<BedValueError>>> =
+                    runtime.spawn(async move {
+                        let mut next_val: Option<Result<(&str, V), BedValueError>> = None;
+
+                        loop {
+                            let curr_value = match next_val.take() {
+                                Some(v) => Some(v),
+                                None => stream.next(),
+                            };
+                            next_val = match curr_value {
+                                // The next value is an error
+                                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                                None => return Ok(p),
+                                Some(Ok((chrom, _))) if chrom != curr_chrom => {
+                                    return Err(ProcessChromError::InvalidInput(
+                                        "File is not sorted.".to_string(),
+                                    ));
+                                }
+                                Some(Ok((_, val))) => {
+                                    let next_val = stream.next();
+                                    let next_value = match &next_val {
+                                        Some(Ok(v)) if v.0 == curr_chrom => Some(&v.1),
+                                        _ => None,
+                                    };
+                                    p.do_process(val, next_value).await?;
+                                    next_val
+                                }
+                            };
                         }
-
-                        let mut p = start_processing(chrom)?;
-                        let data: tokio::task::JoinHandle<
-                            Result<P, ProcessChromError<BedValueError>>,
-                        > = runtime.spawn(async move {
-                            while let Some(current_val) = group.next() {
-                                // If there is a source error, propogate that up
-                                let current_val =
-                                    current_val.map_err(ProcessChromError::SourceError)?;
-                                let next_val = group.peek_val();
-
-                                let read = p.do_process::<BedValueError>(current_val, next_val);
-                                read.await?;
-                            }
-                            Ok(p)
-                        });
-                        queued_reads.push_back(data);
-                    }
-                    Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
-                    None => {
-                        panic!("Unexpected end of file")
-                    }
-                }
+                    });
+                queued_reads.push_back(data);
             }
             let Some(next_chrom) = queued_reads.pop_front() else {
                 break;
@@ -193,31 +285,6 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
         }
 
         Ok(())
-    }
-}
-
-impl<S: StreamingBedValues> BedChromData<S> {
-    pub fn next(&mut self) -> Option<Result<S::Value, BedValueError>> {
-        let state = self.load_state()?;
-        let ret = state.load_state_and_take_value();
-        if matches!(state.state_value, StateValue::DiffChrom(..)) {
-            self.done = true;
-        }
-        ret
-    }
-
-    pub fn peek_val(&mut self) -> Option<&S::Value> {
-        let state = self.load_state()?;
-        state.load_state(false);
-        let ret = match &state.state_value {
-            StateValue::Empty => None,
-            StateValue::Value(_, val) => Some(val),
-            StateValue::EmptyValue(_) => None,   // Shouldn't occur
-            StateValue::DiffChrom(_, _) => None, // Only `Value` is peekable
-            StateValue::Error(_) => None,
-            StateValue::Done => None,
-        };
-        ret
     }
 }
 
