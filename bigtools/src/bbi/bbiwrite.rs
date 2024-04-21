@@ -751,12 +751,31 @@ pub(crate) fn write_vals<
     let mut chrom_ids = IdMap::default();
 
     let mut summary: Option<Summary> = None;
-    let (send, recv) = futures_mpsc::unbounded();
+    let (mut send, recv) = futures_mpsc::unbounded();
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
     let (write_fut, write_fut_handle) = write_fut.remote_handle();
     runtime.spawn(write_fut);
 
-    let setup_chrom = || {
+    fn setup_chrom<E: Error + Send + 'static>(
+        send: &mut futures_mpsc::UnboundedSender<(
+            crossbeam_channel::Receiver<Section>,
+            TempFileBuffer<BufWriter<File>>,
+            futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<E>>>,
+            Vec<TempZoomInfo<E>>,
+        )>,
+        options: BBIWriteOptions,
+        runtime: &Runtime,
+    ) -> (
+        Vec<(
+            u32,
+            futures_mpsc::Sender<
+                Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
+            >,
+        )>,
+        futures_mpsc::Sender<
+            Pin<Box<dyn Future<Output = Result<(SectionData, usize), io::Error>> + Send>>,
+        >,
+    ) {
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, runtime.handle(), options.inmemory);
 
@@ -788,7 +807,7 @@ pub(crate) fn write_vals<
         }
 
         (zooms_channels, ftx)
-    };
+    }
     let mut do_read = |chrom: String| -> Result<_, ProcessChromError<_>> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
@@ -802,7 +821,7 @@ pub(crate) fn write_vals<
         // Make a new id for the chromosome
         let chrom_id = chrom_ids.get_id(&chrom);
 
-        let (zooms_channels, ftx) = setup_chrom();
+        let (zooms_channels, ftx) = setup_chrom(&mut send, options, &runtime);
 
         let internal_data = crate::InternalProcessData(
             zooms_channels,
