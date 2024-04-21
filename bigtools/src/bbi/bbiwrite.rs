@@ -589,7 +589,7 @@ type DataWithoutzooms<Error> = (
     futures::future::RemoteHandle<Result<(usize, usize), ProcessChromError<Error>>>,
 );
 
-pub(crate) async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
+async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
     mut file: BufWriter<File>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
     mut receiver: futures_mpsc::UnboundedReceiver<Data<Err>>,
@@ -695,7 +695,7 @@ pub struct InternalProcessData(
     pub(crate) u32,
 );
 
-pub mod process_internal {
+pub(crate) mod process_internal {
     pub trait ChromProcessCreate {
         type I;
         type Out;

@@ -245,7 +245,7 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_val<E: Error>(
+    async fn process_val(
         current_val: Value,
         next_val: Option<&Value>,
         chrom_length: u32,
@@ -256,20 +256,20 @@ impl BigWigWrite {
         runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), BigWigInvalidInput> {
         // Check a few preconditions:
         // - The current end is greater than or equal to the start
         // - The current end is at most the chromosome length
         // - If there is a next value, then it does not overlap value
         // TODO: test these correctly fails
         if current_val.start > current_val.end {
-            return Err(ProcessChromError::InvalidInput(format!(
+            return Err(BigWigInvalidInput(format!(
                 "Invalid bed graph: {} > {}",
                 current_val.start, current_val.end
             )));
         }
         if current_val.end > chrom_length {
-            return Err(ProcessChromError::InvalidInput(format!(
+            return Err(BigWigInvalidInput(format!(
                 "Invalid bed graph: `{}` is greater than the chromosome ({}) length ({})",
                 current_val.end, chrom, chrom_length
             )));
@@ -278,7 +278,7 @@ impl BigWigWrite {
             None => {}
             Some(next_val) => {
                 if current_val.end > next_val.start {
-                    return Err(ProcessChromError::InvalidInput(format!(
+                    return Err(BigWigInvalidInput(format!(
                         "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
                         chrom, current_val.start, current_val.end, next_val.start, next_val.end,
                     )));
@@ -311,14 +311,14 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<E: Error>(
+    async fn process_val_zoom(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
         current_val: Value,
         next_val: Option<&Value>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -395,8 +395,14 @@ impl BigWigWrite {
             }
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
         }
+    }
+}
 
-        Ok(())
+struct BigWigInvalidInput(String);
+
+impl<E: Error> From<BigWigInvalidInput> for ProcessChromError<E> {
+    fn from(value: BigWigInvalidInput) -> Self {
+        ProcessChromError::InvalidInput(value.0)
     }
 }
 
@@ -518,7 +524,7 @@ impl ChromProcess for BigWigFullProcess {
             &runtime,
             chrom_id,
         )
-        .await?;
+        .await;
 
         Ok(())
     }
@@ -721,7 +727,7 @@ impl<Er: Error> ChromProcess for BigWigZoomsProcess<Er> {
             &runtime,
             *chrom_id,
         )
-        .await?;
+        .await;
 
         Ok(())
     }
