@@ -140,7 +140,13 @@ pub fn compat_args(mut args: impl Iterator<Item = OsString>) -> impl Iterator<It
         .unwrap_or(false)
     {
         let second = args.next();
-        let second = second.map(|a| a.to_ascii_lowercase());
+        let second = second.map(|a| {
+            if a.eq_ignore_ascii_case("-V") {
+                a
+            } else {
+                a.to_ascii_lowercase()
+            }
+        });
         if let Some(command) = second
             .as_ref()
             .and_then(|f| Path::new(f).file_name())

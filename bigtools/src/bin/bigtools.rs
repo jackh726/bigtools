@@ -42,57 +42,58 @@ struct ChromIntersectArgs {
 }
 
 #[derive(Clone, Debug, PartialEq, Subcommand)]
+#[command(version)]
 enum SubCommands {
     Intersect {
         #[command(flatten)]
         args: IntersectArgs,
     },
-    #[command(name = "chromintersect")]
+    #[command(name = "chromintersect", version)]
     ChromIntersect {
         #[command(flatten)]
         args: ChromIntersectArgs,
     },
-    #[command(name = "bedgraphtobigwig")]
+    #[command(name = "bedgraphtobigwig", version)]
     BedGraphToBigWig {
         #[command(flatten)]
         args: BedGraphToBigWigArgs,
     },
-    #[command(name = "bedtobigbed")]
+    #[command(name = "bedtobigbed", version)]
     BedToBigBed {
         #[command(flatten)]
         args: BedToBigBedArgs,
     },
-    #[command(name = "bigbedinfo")]
+    #[command(name = "bigbedinfo", version)]
     BigBedInfo {
         #[command(flatten)]
         args: BigBedInfoArgs,
     },
-    #[command(name = "bigbedtobed")]
+    #[command(name = "bigbedtobed", version)]
     BigBedToBed {
         #[command(flatten)]
         args: BigBedToBedArgs,
     },
-    #[command(name = "bigwigaverageoverbed")]
+    #[command(name = "bigwigaverageoverbed", version)]
     BigWigAverageOverBed {
         #[command(flatten)]
         args: BigWigAverageOverBedArgs,
     },
-    #[command(name = "bigwiginfo")]
+    #[command(name = "bigwiginfo", version)]
     BigWigInfo {
         #[command(flatten)]
         args: BigWigInfoArgs,
     },
-    #[command(name = "bigwigmerge")]
+    #[command(name = "bigwigmerge", version)]
     BigWigMerge {
         #[command(flatten)]
         args: BigWigMergeArgs,
     },
-    #[command(name = "bigwigtobedgraph")]
+    #[command(name = "bigwigtobedgraph", version)]
     BigWigToBedGraph {
         #[command(flatten)]
         args: BigWigToBedGraphArgs,
     },
-    #[command(name = "bigwigvaluesoverbed")]
+    #[command(name = "bigwigvaluesoverbed", version)]
     BigWigValuesOverBed {
         #[command(flatten)]
         args: BigWigValuesOverBedArgs,

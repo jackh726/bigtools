@@ -12,7 +12,7 @@ use crate::{BBIFileRead, BBIReadError};
 #[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
     name = "bigwigvaluesoverbed",
-    about = "Converts a bed to a bigBed.",
+    about = "For each bed interval, gets the base-resolution values from a bigWig.",
     long_about = None,
 )]
 pub struct BigWigValuesOverBedArgs {
