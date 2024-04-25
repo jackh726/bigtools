@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufReader, Write};
@@ -83,23 +84,12 @@ pub fn bigwigtobedgraph(args: BigWigToBedGraphArgs) -> Result<(), Box<dyn Error>
             write_bg_from_bed(bigwig, bedgraph, overlap_bed)?;
         }
         None => {
-            if nthreads == 1 {
+            // Right now, we don't offload decompression to separate threads,
+            // so specifying `chrom` effectively means single-threaded
+            if nthreads == 1 || args.chrom.is_some() {
                 write_bg_singlethreaded(bigwig, bedgraph, args.chrom, args.start, args.end)?;
             } else {
-                let runtime = runtime::Builder::new_multi_thread()
-                    .worker_threads(nthreads)
-                    .build()
-                    .unwrap();
-
-                runtime.block_on(write_bg(
-                    bigwig,
-                    bedgraph,
-                    args.chrom,
-                    args.start,
-                    args.end,
-                    runtime.handle(),
-                    args.inmemory,
-                ))?;
+                write_bg(bigwig, bedgraph, args.inmemory, nthreads)?;
             }
         }
     }
@@ -117,16 +107,26 @@ pub fn write_bg_singlethreaded<R: SeekableRead + Send + 'static>(
     let start = chrom.as_ref().and_then(|_| start);
     let end = chrom.as_ref().and_then(|_| end);
 
-    let chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
+    let chroms: Vec<ChromInfo> = if let Some(arg_chrom) = chrom {
+        let chrom = bigwig.chroms().iter().find(|c| c.name == arg_chrom);
+        let Some(chrom) = chrom else {
+            eprintln!("{arg_chrom} not found in file.");
+            return Ok(());
+        };
+        vec![chrom.clone()]
+    } else {
+        bigwig.chroms().to_vec()
+    };
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     for chrom in chroms {
         let start = start.unwrap_or(0);
         let end = end.unwrap_or(chrom.length);
         let mut values = bigwig.get_interval(&chrom.name, start, end)?;
+        let mut buf = String::with_capacity(50); // Estimate
         while let Some(raw_val) = values.next() {
             let val = raw_val?;
 
-            let mut buf = String::with_capacity(50); // Estimate
+            // Using ryu for f32 to string conversion has a ~15% speedup
             uwrite!(
                 &mut buf,
                 "{}\t{}\t{}\t{}\n",
@@ -137,74 +137,75 @@ pub fn write_bg_singlethreaded<R: SeekableRead + Send + 'static>(
             )
             .unwrap();
             writer.write(buf.as_bytes())?;
+            buf.clear();
         }
     }
 
     Ok(())
 }
 
-pub async fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
+pub fn write_bg<R: Reopen + SeekableRead + Send + 'static>(
     bigwig: BigWigRead<R>,
     mut out_file: File,
-    chrom: Option<String>,
-    start: Option<u32>,
-    end: Option<u32>,
-    runtime: &runtime::Handle,
     inmemory: bool,
+    nthreads: usize,
 ) -> Result<(), BBIReadError> {
-    let start = chrom.as_ref().and_then(|_| start);
-    let end = chrom.as_ref().and_then(|_| end);
+    let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(nthreads)
+        .build()
+        .unwrap();
 
-    let chroms: Vec<ChromInfo> = bigwig.chroms().to_vec();
-    let chrom_files: Vec<io::Result<(_, TempFileBuffer<File>)>> = chroms
-        .into_iter()
-        .filter(|c| chrom.as_ref().map_or(true, |chrom| &c.name == chrom))
-        .map(|chrom| {
-            let bigwig = bigwig.reopen()?;
+    let mut remaining_chroms = bigwig.chroms().to_vec();
+    remaining_chroms.reverse();
+
+    let mut chrom_files: VecDeque<_> = VecDeque::new();
+
+    async fn file_future<R: SeekableRead + 'static>(
+        mut bigwig: BigWigRead<R>,
+        chrom: ChromInfo,
+        mut writer: io::BufWriter<TempFileBufferWriter<File>>,
+    ) -> Result<(), BBIReadError> {
+        let mut buf: String = String::with_capacity(50); // Estimate
+        for raw_val in bigwig.get_interval(&chrom.name, 0, chrom.length)? {
+            let val = raw_val?;
+            // Using ryu for f32 to string conversion has a ~15% speedup
+            uwrite!(
+                &mut buf,
+                "{}\t{}\t{}\t{}\n",
+                chrom.name,
+                val.start,
+                val.end,
+                ryu::Buffer::new().format(val.value)
+            )
+            .unwrap();
+            writer.write(buf.as_bytes())?;
+            buf.clear();
+        }
+        Ok(())
+    }
+
+    loop {
+        while chrom_files.len() < nthreads {
+            let Some(chrom) = remaining_chroms.pop() else {
+                break;
+            };
+
+            let bigbed = bigwig.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
                 TempFileBuffer::new(inmemory);
             let writer = io::BufWriter::new(file);
-            async fn file_future<R: Reopen + SeekableRead + 'static>(
-                mut bigwig: BigWigRead<R>,
-                chrom: ChromInfo,
-                mut writer: io::BufWriter<TempFileBufferWriter<File>>,
-                start: u32,
-                end: u32,
-            ) -> Result<(), BBIReadError> {
-                for raw_val in bigwig.get_interval(&chrom.name, start, end)? {
-                    let val = raw_val?;
-                    let mut buf = String::with_capacity(50); // Estimate
-
-                    // Using ryu for f32 to string conversion has a ~15% speedup
-                    uwrite!(
-                        &mut buf,
-                        "{}\t{}\t{}\t{}\n",
-                        chrom.name.as_str(),
-                        val.start,
-                        val.end,
-                        ryu::Buffer::new().format(val.value)
-                    )
-                    .unwrap();
-                    writer.write(buf.as_bytes())?;
-                }
-                Ok(())
-            }
-            let start = start.unwrap_or(0);
-            let end = end.unwrap_or(chrom.length);
             let handle = runtime
-                .spawn(file_future(bigwig, chrom, writer, start, end))
+                .spawn(file_future(bigbed, chrom, writer))
                 .map(|f| f.unwrap());
-            Ok((handle, buf))
-        })
-        .collect::<Vec<_>>();
-
-    for res in chrom_files {
-        let (f, mut buf) = res?;
-        buf.switch(out_file);
-        f.await?;
-        while !buf.is_real_file_ready() {
-            tokio::task::yield_now().await;
+            chrom_files.push_back((handle, buf));
         }
+
+        let Some((f, mut buf)) = chrom_files.pop_front() else {
+            break;
+        };
+
+        buf.switch(out_file);
+        runtime.block_on(f).unwrap();
         out_file = buf.await_real_file();
     }
 
