@@ -205,7 +205,7 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
     }
 }
 
-#[cfg(all(test, feature = "write"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;

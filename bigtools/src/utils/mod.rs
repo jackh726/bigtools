@@ -4,7 +4,7 @@ pub mod fill;
 pub mod idmap;
 pub mod indexlist;
 pub mod merge;
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub mod misc;
 
 #[cfg(feature = "cli")]

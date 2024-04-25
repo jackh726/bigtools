@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "bigtools",
+    "bigtools-wasm",
     "pybigtools",
 ]
 

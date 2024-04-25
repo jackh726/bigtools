@@ -7,7 +7,11 @@ use std::vec::Vec;
 use byteordered::Endianness;
 use bytes::{Buf, BytesMut};
 use itertools::Either;
+#[cfg(all(feature = "read", not(feature = "read_wasm")))]
 use libdeflater::Decompressor;
+#[cfg(all(feature = "read_wasm", not(feature = "read")))]
+use flate2::{Decompress, FlushDecompress};
+
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
@@ -1287,12 +1291,25 @@ fn read_block_data<R: SeekableRead>(
     let mut raw_data = vec![0u8; block.size as usize];
     read.read_exact(&mut raw_data)?;
     let block_data: Vec<u8> = if uncompress_buf_size > 0 {
-        let mut decompressor = Decompressor::new();
         let mut outbuf = vec![0; uncompress_buf_size];
-        let decompressed = decompressor
-            .zlib_decompress(&raw_data, &mut outbuf)
-            .unwrap();
-        outbuf.truncate(decompressed);
+        #[cfg(all(feature = "read", not(feature = "read_wasm")))]
+        {
+            let mut decompressor = Decompressor::new();
+            let decompressed = decompressor
+                .zlib_decompress(&raw_data, &mut outbuf)
+                .unwrap();
+            outbuf.truncate(decompressed);
+        }
+        #[cfg(all(feature = "read_wasm", not(feature = "read")))]
+        {
+            let mut decompress = Decompress::new(false);
+            decompress.decompress(&raw_data, &mut outbuf, FlushDecompress::Finish).unwrap();
+            outbuf.truncate(decompress.total_out() as usize);
+        }
+        #[cfg(all(not(feature = "read_wasm"), not(feature = "read")))]
+        {
+            const _: () = panic!("Expected one read feature.");
+        }
         outbuf
     } else {
         raw_data

@@ -1,19 +1,19 @@
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub(crate) mod bbiread;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub(crate) mod bbiwrite;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub mod bedchromdata;
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub(crate) mod bigbedread;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub(crate) mod bigbedwrite;
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub(crate) mod bigwigread;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub(crate) mod bigwigwrite;
 
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 use serde::{Deserialize, Serialize};
 
 pub(crate) const BIGWIG_MAGIC: u32 = 0x888F_FC26;
@@ -53,7 +53,7 @@ pub struct Summary {
 
 /// Represents a single value in a bigWig file
 #[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "write", derive(Serialize, Deserialize))]
+#[cfg_attr(any(feature = "write", feature = "write_wasm"), derive(Serialize, Deserialize))]
 pub struct Value {
     pub start: u32,
     pub end: u32,
@@ -75,15 +75,15 @@ pub enum BBIFile {
     BigBed,
 }
 
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub use bbiread::*;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub use bbiwrite::*;
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub use bigbedread::*;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub use bigbedwrite::*;
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "read_wasm"))]
 pub use bigwigread::*;
-#[cfg(feature = "write")]
+#[cfg(any(feature = "write", feature = "write_wasm"))]
 pub use bigwigwrite::*;

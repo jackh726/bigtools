@@ -22,12 +22,13 @@ clap = { version = "4.3", optional = true, features = ["derive"] }
 itertools = { version = "0.10", optional = true }
 bincode = { version = "1.3", optional = true }
 attohttpc = { version = "0.25", optional = true, default_features = false, features = ["tls-rustls-native-roots"] }
-libdeflater = "0.13"
+libdeflater = { version = "0.13", optional = true }
+flate2 = { version = "1.0.17", optional = true }
 thiserror = "1"
 ryu = { version = "1.0", optional = true }
 ufmt = { version = "0.2", features = ["std"], optional = true }
 bytes = { version = "1.4.0", optional = true }
-tokio = { version = "1.34.0", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1.34.0", features = ["rt"] }
 smallvec = { version = "1.11.2", features = ["write"] }
 
 [dev-dependencies]
@@ -81,5 +82,7 @@ required-features = ["cli"]
 default = ["remote", "read", "write", "cli"]
 remote = ["attohttpc", "tempfile"]
 cli = ["clap", "ryu", "ufmt", "read", "write"]
-read = ["bytes", "itertools"]
-write = ["crossbeam-channel", "tempfile", "futures", "serde", "itertools", "bincode"]
+read = ["bytes", "itertools", "libdeflater", "tokio/rt-multi-thread"]
+read_wasm = ["bytes", "itertools", "flate2"]
+write = ["crossbeam-channel", "tempfile", "futures", "serde", "itertools", "bincode", "libdeflater", "tokio/rt-multi-thread"]
+write_wasm = ["crossbeam-channel", "tempfile", "futures", "serde", "itertools", "bincode", "flate2"]

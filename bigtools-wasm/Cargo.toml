@@ -1,0 +1,17 @@
+[package]
+name = "bigtools-wasm"
+version = "0.1.0"
+authors = ["Jack <jackh726@gmail.com>"]
+description = "A wasm wrapper for the bigtools library"
+license = "MIT"
+repository = "https://github.com/jackh726/bigtools"
+readme = "../README.md"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+bigtools = { version = "0.4.3-dev", path = "../bigtools", default_features = false, features = ["read_wasm"] }
+tokio = { version = "1.34.0", features = ["rt"] }
