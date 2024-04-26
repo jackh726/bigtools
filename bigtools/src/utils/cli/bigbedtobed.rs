@@ -117,27 +117,27 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
         bigbed.chroms().to_vec()
     };
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
+    let mut buf: String = String::with_capacity(50); // Estimate
     for chrom in chroms {
         let start = start.unwrap_or(0);
         let end = end.unwrap_or(chrom.length);
         for raw_val in bigbed.get_interval(&chrom.name, start, end)? {
             let val = raw_val?;
-            let end = if !val.rest.is_empty() {
-                format!("\t{}\n", val.rest)
+            if !val.rest.is_empty() {
+                uwrite!(
+                    &mut buf,
+                    "{}\t{}\t{}\t{}\n",
+                    chrom.name,
+                    val.start,
+                    val.end,
+                    val.rest
+                )
+                .unwrap();
             } else {
-                "\n".to_string()
+                uwrite!(&mut buf, "{}\t{}\t{}\n", chrom.name, val.start, val.end).unwrap();
             };
-            let mut buf = String::with_capacity(50); // Estimate
-            uwrite!(
-                &mut buf,
-                "{}\t{}\t{}\t{}\n",
-                chrom.name,
-                val.start,
-                val.end,
-                end,
-            )
-            .unwrap();
             writer.write(buf.as_bytes())?;
+            buf.clear();
         }
     }
     Ok(())
@@ -167,20 +167,19 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
         let mut buf: String = String::with_capacity(50); // Estimate
         for raw_val in bigbed.get_interval(&chrom.name, 0, chrom.length)? {
             let val = raw_val?;
-            let end = if !val.rest.is_empty() {
-                format!("\t{}\n", val.rest)
+            if !val.rest.is_empty() {
+                uwrite!(
+                    &mut buf,
+                    "{}\t{}\t{}\t{}\n",
+                    chrom.name,
+                    val.start,
+                    val.end,
+                    val.rest
+                )
+                .unwrap();
             } else {
-                "\n".to_string()
+                uwrite!(&mut buf, "{}\t{}\t{}\n", chrom.name, val.start, val.end).unwrap();
             };
-            uwrite!(
-                &mut buf,
-                "{}\t{}\t{}\t{}\n",
-                chrom.name,
-                val.start,
-                val.end,
-                end,
-            )
-            .unwrap();
             writer.write(buf.as_bytes())?;
             buf.clear();
         }
@@ -223,6 +222,7 @@ pub fn write_bed_from_bed<R: Reopen + SeekableRead + Send + 'static>(
     let mut bedstream = StreamingLineReader::new(BufReader::new(bed));
     let mut writer = io::BufWriter::new(out_file);
 
+    let mut buf = String::with_capacity(50); // Estimate
     while let Some(line) = bedstream.read() {
         let line = line?;
         let mut split = line.trim().splitn(5, '\t');
@@ -233,14 +233,21 @@ pub fn write_bed_from_bed<R: Reopen + SeekableRead + Send + 'static>(
             let mut val = raw_val?;
             val.start = val.start.max(start);
             val.end = val.end.min(end);
-            let end = if !val.rest.is_empty() {
-                format!("\t{}\n", val.rest)
+            if !val.rest.is_empty() {
+                uwrite!(
+                    &mut buf,
+                    "{}\t{}\t{}\t{}\n",
+                    chrom,
+                    val.start,
+                    val.end,
+                    val.rest
+                )
+                .unwrap();
             } else {
-                "\n".to_string()
+                uwrite!(&mut buf, "{}\t{}\t{}\n", chrom, val.start, val.end).unwrap();
             };
-            let mut buf = String::with_capacity(50); // Estimate
-            uwrite!(&mut buf, "{}\t{}\t{}\t{}\n", chrom, val.start, val.end, end,).unwrap();
             writer.write(buf.as_bytes())?;
+            buf.clear();
         }
     }
 
