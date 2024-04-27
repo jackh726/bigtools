@@ -1244,6 +1244,46 @@ pub(crate) fn write_zoom_vals<
     Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
+pub(crate) fn write_mid<E: Error>(
+    file: &mut BufWriter<File>,
+    pre_data: u64,
+    raw_sections_iter: impl Iterator<Item = Section>,
+    chrom_sizes: HashMap<String, u32>,
+    chrom_ids: &HashMap<String, u32>,
+    options: BBIWriteOptions,
+) -> Result<(u64, u64, u64, u64), ProcessChromError<E>> {
+    let data_size = file.tell()? - pre_data;
+    let mut current_offset = pre_data;
+    let sections_iter = raw_sections_iter.map(|mut section| {
+        // TODO: this assumes that all the data is contiguous
+        // This will fail if we ever space the sections in any way
+        section.offset = current_offset;
+        current_offset += section.size;
+        section
+    });
+
+    // This deviates slighly from the layout of bigBeds generated from kent tools (but are 100%)
+    // compatible. In kent tools, the chrom tree is written *before* the data.
+    // However, in order to do this, the data must be read *twice*, which we don't want. Luckily,
+    // the chrom tree offset is stored to be seeked to before read, so
+    // it doesn't matter where in the file these are placed. The one caveat to this is in any
+    // caching (most commonly over-the-network): if the caching "chunk" size is large enough to
+    // cover either/both the autosql and chrom tree with the start of the file, then this may
+    // cause two separate "chunks" (and therefore, e.g., network requests), compared to one.
+
+    // Since the chrom tree is read before the index, we put this before the full data index
+    // Therefore, there is a higher likelihood that the udc file will only need one read for
+    // chrom tree + full data index.
+    let chrom_index_start = file.tell()?;
+    write_chrom_tree(file, chrom_sizes, &chrom_ids)?;
+
+    let index_start = file.tell()?;
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+    write_rtreeindex(file, nodes, levels, total_sections, options)?;
+
+    Ok((data_size, chrom_index_start, index_start, total_sections))
+}
+
 async fn write_data<W: Write, SourceError: Error + Send>(
     mut data_file: W,
     section_sender: crossbeam_channel::Sender<Section>,

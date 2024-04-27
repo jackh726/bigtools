@@ -54,12 +54,12 @@ use tokio::runtime::{Handle, Runtime};
 
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::tell::Tell;
-use crate::{write_info, ChromData, ChromProcessingInputSectionChannel, Section};
+use crate::{write_info, ChromData, ChromProcessingInputSectionChannel};
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
-    self, encode_zoom_section, get_rtreeindex, write_blank_headers, write_chrom_tree,
-    write_rtreeindex, write_zooms, BBIWriteOptions, ProcessChromError, SectionData,
+    self, encode_zoom_section, write_blank_headers, write_zooms, BBIWriteOptions,
+    ProcessChromError, SectionData,
 };
 
 struct ZoomItem {
@@ -106,38 +106,6 @@ impl BigWigWrite {
         let pre_data = file.tell()?;
 
         Ok((total_summary_offset, full_data_offset, pre_data))
-    }
-
-    fn write_mid<E: Error>(
-        file: &mut BufWriter<File>,
-        pre_data: u64,
-        raw_sections_iter: impl Iterator<Item = Section>,
-        chrom_sizes: HashMap<String, u32>,
-        chrom_ids: &HashMap<String, u32>,
-        options: BBIWriteOptions,
-    ) -> Result<(u64, u64, u64, u64), ProcessChromError<E>> {
-        let data_size = file.tell()? - pre_data;
-        let mut current_offset = pre_data;
-        let sections_iter = raw_sections_iter.map(|mut section| {
-            // TODO: this assumes that all the data is contiguous
-            // This will fail if we ever space the sections in any way
-            section.offset = current_offset;
-            current_offset += section.size;
-            section
-        });
-
-        // Since the chrom tree is read before the index, we put this before the full data index
-        // Therefore, there is a higher likelihood that the udc file will only need one read for chrom tree + full data index
-        // Putting the chrom tree before the data also has a higher likelihood of being included with the beginning headers,
-        // but requires us to know all the data ahead of time (when writing)
-        let chrom_index_start = file.tell()?;
-        write_chrom_tree(file, chrom_sizes, chrom_ids)?;
-
-        let index_start = file.tell()?;
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
-        write_rtreeindex(file, nodes, levels, total_sections, options)?;
-
-        Ok((data_size, chrom_index_start, index_start, total_sections))
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
@@ -224,7 +192,7 @@ impl BigWigWrite {
             output?;
 
         let chrom_ids = chrom_ids.get_map();
-        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
+        let (data_size, chrom_index_start, index_start, total_sections) = bbiwrite::write_mid(
             &mut file,
             pre_data,
             raw_sections_iter,
@@ -310,7 +278,7 @@ impl BigWigWrite {
             output?;
 
         let chrom_ids = chrom_ids.get_map();
-        let (data_size, chrom_index_start, index_start, total_sections) = BigWigWrite::write_mid(
+        let (data_size, chrom_index_start, index_start, total_sections) = bbiwrite::write_mid(
             &mut file,
             pre_data,
             raw_sections_iter,
