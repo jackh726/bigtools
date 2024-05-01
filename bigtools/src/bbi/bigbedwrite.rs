@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::CString;
@@ -452,10 +453,12 @@ impl BigBedWrite {
                 &mut state_val.items,
                 Vec::with_capacity(options.items_per_slot as usize),
             );
+
             let handle = runtime
                 .spawn(encode_section(options.compress, items, chrom_id))
                 .map(|f| f.unwrap());
             ftx.send(handle.boxed()).await.expect("Couldn't send");
+            tokio::task::yield_now().await;
         }
 
         Ok(())
@@ -860,36 +863,51 @@ struct EntriesSection {
 
 async fn encode_section(
     compress: bool,
-    items_in_section: Vec<BedEntry>,
+    mut items_in_section: Vec<BedEntry>,
     chrom_id: u32,
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
-    let mut bytes = Vec::with_capacity(items_in_section.len() * 30);
+    thread_local! {
+        static BYTES: RefCell<Vec<u8>> = RefCell::new(vec![]);
+    }
+
+    let mut size = 0;
+    for item in &items_in_section {
+        size += 13 + item.rest.bytes().len();
+    }
+
+    let mut bytes = BYTES.take();
+    bytes.reserve_exact(size);
 
     let start = items_in_section[0].start;
     let end = items_in_section[items_in_section.len() - 1].end;
 
-    // FIXME: Each of these calls end up calling `Vec::reserve`
-    // We could instead use a `Cursor<&mut [u8]>`, but we would need to be a bit
-    // more careful here around safety
     for item in items_in_section.iter() {
         bytes.write_u32::<NativeEndian>(chrom_id)?;
         bytes.write_u32::<NativeEndian>(item.start)?;
         bytes.write_u32::<NativeEndian>(item.end)?;
         bytes.write_all(item.rest.as_bytes())?;
-        bytes.write_all(&[b'\0'])?;
+        bytes.write_all(&[b'\0']).unwrap();
     }
 
     let (out_bytes, uncompress_buf_size) = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
-        let mut compressed_data = vec![0; max_sz];
+
+        items_in_section.clear();
+        let mut compressed_data: Vec<u8> = items_in_section.into_iter().map(|_| 0).collect();
+        compressed_data.resize(max_sz, 0);
+
+        //let mut compressed_data = vec![0; max_sz];
         let actual_sz = compressor
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
-        (compressed_data, bytes.len())
+        let len = bytes.len();
+        bytes.clear();
+        BYTES.replace(bytes);
+        (compressed_data, len)
     } else {
         (bytes, 0)
     };
