@@ -5,6 +5,7 @@ pub trait ChromValues {
     type Value;
     type Error: Error + Send + From<io::Error> + 'static;
 
-    fn next(&mut self) -> Option<Result<Self::Value, Self::Error>>;
+    fn next(&mut self) -> Option<Result<&Self::Value, Self::Error>>;
     fn peek(&mut self) -> Option<Result<&Self::Value, &Self::Error>>;
+    fn next_pair(&mut self) -> Option<Result<(&Self::Value, Option<&Self::Value>), Self::Error>>;
 }

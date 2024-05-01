@@ -188,16 +188,16 @@ pub struct BedParser<S: StreamingBedValues> {
 pub(crate) enum StateValue<V> {
     // No value has been loaded yet
     Empty,
-    // A value has been loaded without error
-    // Contains the current chromosome and the value.
-    Value(String, V),
-    // A previously loaded value was taken.
-    // Contains the current chromosome.
-    EmptyValue(String),
-    // A new chromsome has been loaded
+    Initial(String, V),
+    // A value has been loaded without error and the next value is the same
+    // chrommosome and not an error.
+    // Contains the current chromosome, the current value, and the next value.
+    Value(String, V, V),
+    ValueThenDone(String, V),
+    CurrError(BedValueError),
+    NextError(String, V, BedValueError),
+    ValueNextDiffChrom(String, V, String, V),
     DiffChrom(String, V),
-    // An error has been seen
-    Error(BedValueError),
     // We are done, either because we have run out of values or because of an error
     Done,
 }
@@ -206,21 +206,30 @@ impl<V> std::fmt::Debug for StateValue<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => write!(f, "Empty"),
-            Self::Value(arg0, _) => f.debug_tuple("Value").field(arg0).finish(),
-            Self::EmptyValue(arg0) => f.debug_tuple("EmptyValue").field(arg0).finish(),
+            Self::Initial(arg0, _) => f.debug_tuple("Initial").field(arg0).finish(),
+            Self::Value(arg0, _, _) => f.debug_tuple("Value").field(arg0).finish(),
+            Self::ValueThenDone(arg0, _) => f.debug_tuple("ValueThenDone").field(arg0).finish(),
+            Self::CurrError(arg0) => f.debug_tuple("CurrError").field(arg0).finish(),
+            Self::NextError(arg0, _, arg1) => {
+                f.debug_tuple("NextError").field(arg0).field(arg1).finish()
+            }
+            Self::ValueNextDiffChrom(arg0, _, arg1, _) => f
+                .debug_tuple("ValueNextDiffChrom")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
             Self::DiffChrom(arg0, _) => f.debug_tuple("DiffChrom").field(arg0).finish(),
-            Self::Error(arg0) => f.debug_tuple("Error").field(arg0).finish(),
             Self::Done => write!(f, "Done"),
         }
     }
 }
 
 impl<V> StateValue<V> {
-    fn take_error(&mut self) -> Option<BedValueError> {
+    pub(crate) fn take_error(&mut self) -> Option<BedValueError> {
         let v = std::mem::replace(self, StateValue::Done);
         let ret;
         (*self, ret) = match v {
-            StateValue::Error(e) => (StateValue::Done, Some(e)),
+            StateValue::CurrError(e) => (StateValue::Done, Some(e)),
             s => (s, None),
         };
         ret
@@ -229,10 +238,13 @@ impl<V> StateValue<V> {
     fn active_chrom(&self) -> Option<&String> {
         match self {
             StateValue::Empty => None,
-            StateValue::Value(c, _) => Some(c),
-            StateValue::EmptyValue(c) => Some(c),
+            StateValue::Initial(c, _) => Some(c),
+            StateValue::Value(c, _, _) => Some(c),
+            StateValue::ValueThenDone(c, _) => Some(c),
+            StateValue::CurrError(_) => None,
+            StateValue::NextError(c, _, _) => Some(c),
+            StateValue::ValueNextDiffChrom(c, _, _, _) => Some(c),
             StateValue::DiffChrom(c, _) => Some(c),
-            StateValue::Error(_) => None,
             StateValue::Done => None,
         }
     }
@@ -327,63 +339,84 @@ impl<S: StreamingBedValues> BedParserState<S> {
     pub(crate) fn load_state(&mut self, switch_chrom: bool) {
         let state_value = std::mem::replace(&mut self.state_value, StateValue::Empty);
         self.state_value = match state_value {
+            StateValue::Empty if switch_chrom => match self.stream.next() {
+                None => StateValue::Done,
+                Some(Err(err)) => StateValue::CurrError(err),
+                Some(Ok((chrom, val))) => {
+                    let chrom = chrom.to_string();
+                    StateValue::Initial(chrom, val)
+                }
+            }
             StateValue::Empty => match self.stream.next() {
                 None => StateValue::Done,
-                Some(Ok((chrom, val))) => StateValue::Value(chrom.to_owned(), val),
-                Some(Err(err)) => StateValue::Error(err),
-            },
-            StateValue::Value(c, v) => StateValue::Value(c, v),
-            StateValue::EmptyValue(prev_chrom) => match self.stream.next() {
-                None => StateValue::Done,
-                Some(Ok((chrom, val))) if switch_chrom || prev_chrom == chrom => {
-                    StateValue::Value(prev_chrom, val)
+                Some(Err(err)) => StateValue::CurrError(err),
+                Some(Ok((chrom, val))) => {
+                    let chrom = chrom.to_string();
+                    match self.stream.next() {
+                        None => StateValue::ValueThenDone(chrom, val),
+                        Some(Err(err)) => StateValue::NextError(chrom, val, err),
+                        Some(Ok((next_chrom, next_val))) if chrom == next_chrom => {
+                            StateValue::Value(chrom, val, next_val)
+                        }
+                        Some(Ok((next_chrom, next_val))) => StateValue::ValueNextDiffChrom(
+                            chrom,
+                            val,
+                            next_chrom.to_string(),
+                            next_val,
+                        ),
+                    }
                 }
-                Some(Ok((chrom, val))) => StateValue::DiffChrom(chrom.to_owned(), val),
-                Some(Err(err)) => StateValue::Error(err),
             },
-            StateValue::DiffChrom(c, v) if switch_chrom => StateValue::Value(c, v),
-            StateValue::DiffChrom(c, v) => StateValue::DiffChrom(c, v),
-            StateValue::Error(e) => StateValue::Error(e),
+            StateValue::Initial(chrom, val) => match self.stream.next() {
+                None => StateValue::ValueThenDone(chrom, val),
+                Some(Err(e)) => StateValue::NextError(chrom, val, e),
+                Some(Ok((next_chrom, next_val))) if chrom == next_chrom => {
+                    StateValue::Value(chrom, val, next_val)
+                }
+                Some(Ok((next_chrom, next_val))) => {
+                    StateValue::ValueNextDiffChrom(chrom, val, next_chrom.to_string(), next_val)
+                }
+            }
+            StateValue::Value(chrom, _, val) => match self.stream.next() {
+                None => StateValue::ValueThenDone(chrom, val),
+                Some(Err(err)) => StateValue::NextError(chrom, val, err),
+                Some(Ok((next_chrom, next_val))) if chrom == next_chrom => {
+                    StateValue::Value(chrom, val, next_val)
+                }
+                Some(Ok((next_chrom, next_val))) => {
+                    StateValue::ValueNextDiffChrom(chrom, val, next_chrom.to_string(), next_val)
+                }
+            },
+            StateValue::ValueThenDone(_, _) => StateValue::Done,
+            StateValue::CurrError(e) => StateValue::CurrError(e),
+            StateValue::NextError(_, _, e) => StateValue::CurrError(e),
+            StateValue::ValueNextDiffChrom(_, _, chrom, val) if switch_chrom => StateValue::Initial(chrom, val),
+            StateValue::ValueNextDiffChrom(_, _, chrom, val) => StateValue::DiffChrom(chrom, val),
+            StateValue::DiffChrom(chrom, val) if switch_chrom => StateValue::Initial(chrom, val),
+            /*
+            StateValue::DiffChrom(chrom, val) if switch_chrom => match self.stream.next() {
+                None => StateValue::ValueThenDone(chrom, val),
+                Some(Err(err)) => StateValue::NextError(chrom, val, err),
+                Some(Ok((next_chrom, next_val))) if chrom == next_chrom => {
+                    StateValue::Value(chrom, val, next_val)
+                }
+                Some(Ok((next_chrom, next_val))) => {
+                    StateValue::ValueNextDiffChrom(chrom, val, next_chrom.to_string(), next_val)
+                }
+            },
+            */
+            StateValue::DiffChrom(chrom, val) => StateValue::DiffChrom(chrom, val),
             StateValue::Done => StateValue::Done,
         };
+
         // For sanity, if we're switching chromosomes then we should never have an empty value or say we're in a "different" chromosome
         debug_assert!(
             !(switch_chrom
                 && matches!(
                     &self.state_value,
-                    StateValue::Empty | StateValue::EmptyValue(..) | StateValue::DiffChrom(..)
+                    StateValue::Empty | StateValue::DiffChrom(..)
                 )),
         );
-    }
-
-    pub(crate) fn load_state_and_take_value(&mut self) -> Option<Result<S::Value, BedValueError>> {
-        let state_value = std::mem::replace(&mut self.state_value, StateValue::Empty);
-        let ret;
-        (self.state_value, ret) = match state_value {
-            StateValue::Empty => match self.stream.next() {
-                None => (StateValue::Done, None),
-                Some(Ok((chrom, val))) => (StateValue::EmptyValue(chrom.to_owned()), Some(Ok(val))),
-                Some(Err(err)) => (StateValue::Done, Some(Err(err))),
-            },
-            StateValue::Value(c, v) => (StateValue::EmptyValue(c), Some(Ok(v))),
-            StateValue::EmptyValue(prev_chrom) => match self.stream.next() {
-                None => (StateValue::Done, None),
-                Some(Ok((chrom, val))) if prev_chrom == chrom => {
-                    (StateValue::EmptyValue(prev_chrom), Some(Ok(val)))
-                }
-                Some(Ok((chrom, val))) => (StateValue::DiffChrom(chrom.to_owned(), val), None),
-                Some(Err(err)) => (StateValue::Done, Some(Err(err))),
-            },
-            StateValue::DiffChrom(c, v) => (StateValue::DiffChrom(c, v), None),
-            StateValue::Error(e) => (StateValue::Done, Some(Err(e))),
-            StateValue::Done => (StateValue::Done, None),
-        };
-        // For sanity, we shouldn't have any error or value (for the current chromosome) stored
-        debug_assert!(matches!(
-            &self.state_value,
-            StateValue::Done | StateValue::EmptyValue(..) | StateValue::DiffChrom(..)
-        ));
-        ret
     }
 }
 
@@ -399,7 +432,7 @@ pub struct BedChromData<S: StreamingBedValues> {
 }
 
 impl<S: StreamingBedValues> BedChromData<S> {
-    pub(crate) fn load_state(&mut self) -> Option<&mut BedParserState<S>> {
+    pub(crate) fn load_state(&mut self) -> Option<(&mut BedParserState<S>, &mut bool)> {
         if self.done {
             return None;
         }
@@ -410,7 +443,7 @@ impl<S: StreamingBedValues> BedChromData<S> {
             }
             self.curr_state = opt_state;
         }
-        Some(self.curr_state.as_mut().unwrap())
+        Some((self.curr_state.as_mut().unwrap(), &mut self.done))
     }
 }
 

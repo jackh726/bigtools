@@ -1,0 +1,633 @@
+desc: (none)
+cmd: target/release/bigtools bedtobigbed --single-pass -t 1 workdir/multiz470way.head10k.bed workdir/chrom.sizes workdir/multiz470way.head10k.bigBed
+time_unit: i
+#-----------
+snapshot=0
+#-----------
+time=0
+mem_heap_B=0
+mem_heap_extra_B=0
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=1
+#-----------
+time=51994044
+mem_heap_B=17134713
+mem_heap_extra_B=28095
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=2
+#-----------
+time=85613166
+mem_heap_B=32883807
+mem_heap_extra_B=28089
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=3
+#-----------
+time=133913010
+mem_heap_B=64274218
+mem_heap_extra_B=28086
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=4
+#-----------
+time=174359619
+mem_heap_B=64265287
+mem_heap_extra_B=28089
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=5
+#-----------
+time=205285730
+mem_heap_B=64284420
+mem_heap_extra_B=28100
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=6
+#-----------
+time=238865425
+mem_heap_B=127182612
+mem_heap_extra_B=28100
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=7
+#-----------
+time=4114863201
+mem_heap_B=194359910
+mem_heap_extra_B=31770
+mem_stacks_B=0
+heap_tree=peak
+n3: 194359910 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n2: 126184108 0x3331AA: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n2: 126184108 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 125829120 0x1DAAC9: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 125829120 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 125829120 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 125829120 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 125829120 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 125829120 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 125829120 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 125829120 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n0: 354988 in 2 places, all below massif's threshold (1.00%)
+  n0: 0 in 7 places, all below massif's threshold (1.00%)
+ n2: 66538517 0x333208: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n2: 66535989 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 66535925 0x1DE520: bigtools::bbi::bigbedwrite::encode_section::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 66535925 0x2AA25D: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 66535925 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 66535925 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 66535925 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 66535925 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 66535925 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 66535925 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n0: 64 in 78 places, all below massif's threshold (1.00%)
+  n0: 2528 in 10 places, all below massif's threshold (1.00%)
+ n0: 1637285 in 117 places, all below massif's threshold (1.00%)
+#-----------
+snapshot=8
+#-----------
+time=4167136964
+mem_heap_B=142933298
+mem_heap_extra_B=32166
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=9
+#-----------
+time=4217964065
+mem_heap_B=158713449
+mem_heap_extra_B=32159
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=10
+#-----------
+time=4250886842
+mem_heap_B=190168074
+mem_heap_extra_B=32174
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=11
+#-----------
+time=4292291280
+mem_heap_B=190124857
+mem_heap_extra_B=32159
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=12
+#-----------
+time=7138924695
+mem_heap_B=190120855
+mem_heap_extra_B=32249
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=13
+#-----------
+time=7159402471
+mem_heap_B=72223410
+mem_heap_extra_B=32182
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=14
+#-----------
+time=7200799916
+mem_heap_B=95770717
+mem_heap_extra_B=32171
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=15
+#-----------
+time=7233441616
+mem_heap_B=95685323
+mem_heap_extra_B=32149
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=16
+#-----------
+time=7257720566
+mem_heap_B=127288319
+mem_heap_extra_B=32169
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=17
+#-----------
+time=7296142593
+mem_heap_B=127260572
+mem_heap_extra_B=32148
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=18
+#-----------
+time=7319284975
+mem_heap_B=127235931
+mem_heap_extra_B=32157
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=19
+#-----------
+time=10214034288
+mem_heap_B=127389061
+mem_heap_extra_B=32235
+mem_stacks_B=0
+heap_tree=detailed
+n2: 127389061 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n2: 126184108 0x3331AA: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n2: 126184108 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 125829120 0x1DAAC9: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 125829120 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 125829120 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 125829120 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 125829120 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 125829120 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 125829120 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 125829120 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n0: 354988 in 2 places, all below massif's threshold (1.00%)
+  n0: 0 in 7 places, all below massif's threshold (1.00%)
+ n0: 1204953 in 119 places, all below massif's threshold (1.00%)
+#-----------
+snapshot=20
+#-----------
+time=10260331893
+mem_heap_B=77874829
+mem_heap_extra_B=30891
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=21
+#-----------
+time=10298970141
+mem_heap_B=91482038
+mem_heap_extra_B=29602
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=22
+#-----------
+time=10329739089
+mem_heap_B=118557334
+mem_heap_extra_B=31138
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=23
+#-----------
+time=10352698841
+mem_heap_B=118539893
+mem_heap_extra_B=31115
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=24
+#-----------
+time=10383554071
+mem_heap_B=118576504
+mem_heap_extra_B=31136
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=25
+#-----------
+time=10414291599
+mem_heap_B=172763373
+mem_heap_extra_B=30107
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=26
+#-----------
+time=13650676297
+mem_heap_B=172733810
+mem_heap_extra_B=30190
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=27
+#-----------
+time=13673967272
+mem_heap_B=120439956
+mem_heap_extra_B=27572
+mem_stacks_B=0
+heap_tree=detailed
+n2: 120439956 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n2: 119339948 0x3331AA: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n3: 119339948 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 116503040 0x1DAAC9: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 116503040 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 116503040 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 116503040 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 116503040 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 116503040 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 116503040 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 116503040 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n2: 2836480 0x1AE77B: std::io::append_to_string (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 2836480 0x18A9B4: bigtools::bed::bedparser::BedParserState<S>::load_state (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 2836480 0x18A544: bigtools::bbi::bedchromdata::<impl bigtools::utils::chromvalues::ChromValues for bigtools::bed::bedparser::BedChromData<S>>::next_pair (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 2836480 0x1DA5E6: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 2836480 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 2836480 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 2836480 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n1: 2836480 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+           n1: 2836480 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+            n1: 2836480 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+             n0: 2836480 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n0: 0 in 1 place, below massif's threshold (1.00%)
+   n0: 428 in 2 places, all below massif's threshold (1.00%)
+  n0: 0 in 7 places, all below massif's threshold (1.00%)
+ n0: 1100008 in 119 places, all below massif's threshold (1.00%)
+#-----------
+snapshot=28
+#-----------
+time=13704512032
+mem_heap_B=128218833
+mem_heap_extra_B=29071
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=29
+#-----------
+time=13735726524
+mem_heap_B=144817800
+mem_heap_extra_B=28064
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=30
+#-----------
+time=13763749558
+mem_heap_B=176050752
+mem_heap_extra_B=30120
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=31
+#-----------
+time=15450385091
+mem_heap_B=176045052
+mem_heap_extra_B=30196
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=32
+#-----------
+time=15475972515
+mem_heap_B=75498476
+mem_heap_extra_B=32268
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=33
+#-----------
+time=15514193324
+mem_heap_B=99099125
+mem_heap_extra_B=32259
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=34
+#-----------
+time=15565275111
+mem_heap_B=130597173
+mem_heap_extra_B=32259
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=35
+#-----------
+time=15616222423
+mem_heap_B=130532151
+mem_heap_extra_B=32249
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=36
+#-----------
+time=15656134548
+mem_heap_B=130649326
+mem_heap_extra_B=32450
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=37
+#-----------
+time=18878740110
+mem_heap_B=130519164
+mem_heap_extra_B=32332
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=38
+#-----------
+time=18929769826
+mem_heap_B=84877467
+mem_heap_extra_B=30517
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=39
+#-----------
+time=18967895241
+mem_heap_B=103045283
+mem_heap_extra_B=28821
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=40
+#-----------
+time=18993337663
+mem_heap_B=102990083
+mem_heap_extra_B=28845
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=41
+#-----------
+time=19044334635
+mem_heap_B=139291970
+mem_heap_extra_B=29614
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=42
+#-----------
+time=21867879050
+mem_heap_B=139366763
+mem_heap_extra_B=29693
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=43
+#-----------
+time=21906093744
+mem_heap_B=91601907
+mem_heap_extra_B=25893
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=44
+#-----------
+time=21931655865
+mem_heap_B=106968817
+mem_heap_extra_B=26287
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=45
+#-----------
+time=21982495429
+mem_heap_B=137488331
+mem_heap_extra_B=27037
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=46
+#-----------
+time=22020602934
+mem_heap_B=137550772
+mem_heap_extra_B=27052
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=47
+#-----------
+time=22046040827
+mem_heap_B=137441997
+mem_heap_extra_B=27043
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=48
+#-----------
+time=24852570992
+mem_heap_B=137481941
+mem_heap_extra_B=27123
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=49
+#-----------
+time=24877973446
+mem_heap_B=73011900
+mem_heap_extra_B=28468
+mem_stacks_B=0
+heap_tree=detailed
+n2: 73011900 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n2: 72099884 0x3331AA: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n3: 72034348 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 69197440 0x1DAAC9: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 69197440 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 69197440 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 69197440 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 69197440 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 69197440 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 69197440 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 69197440 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n2: 2836480 0x1AE77B: std::io::append_to_string (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 2836480 0x18A9B4: bigtools::bed::bedparser::BedParserState<S>::load_state (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 2836480 0x18A544: bigtools::bbi::bedchromdata::<impl bigtools::utils::chromvalues::ChromValues for bigtools::bed::bedparser::BedChromData<S>>::next_pair (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 2836480 0x1DA5E6: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 2836480 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 2836480 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 2836480 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n1: 2836480 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+           n1: 2836480 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+            n1: 2836480 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+             n0: 2836480 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n0: 0 in 1 place, below massif's threshold (1.00%)
+   n0: 428 in 2 places, all below massif's threshold (1.00%)
+  n0: 65536 in 8 places, all below massif's threshold (1.00%)
+ n0: 912016 in 123 places, all below massif's threshold (1.00%)
+#-----------
+snapshot=50
+#-----------
+time=24898498777
+mem_heap_B=81118724
+mem_heap_extra_B=27284
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=51
+#-----------
+time=24919109336
+mem_heap_B=97433722
+mem_heap_extra_B=29094
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=52
+#-----------
+time=24939736994
+mem_heap_B=97460265
+mem_heap_extra_B=29095
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=53
+#-----------
+time=24960255455
+mem_heap_B=97434972
+mem_heap_extra_B=29108
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=54
+#-----------
+time=24980766757
+mem_heap_B=129872583
+mem_heap_extra_B=28577
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=55
+#-----------
+time=27198925173
+mem_heap_B=129975767
+mem_heap_extra_B=28673
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=56
+#-----------
+time=27219414507
+mem_heap_B=77089649
+mem_heap_extra_B=29671
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=57
+#-----------
+time=27239901229
+mem_heap_B=85372802
+mem_heap_extra_B=28222
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=58
+#-----------
+time=27260530906
+mem_heap_B=102149005
+mem_heap_extra_B=29363
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=59
+#-----------
+time=27281194286
+mem_heap_B=102146715
+mem_heap_extra_B=29365
+mem_stacks_B=0
+heap_tree=detailed
+n2: 102146715 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+ n2: 101074092 0x3331AA: alloc::raw_vec::finish_grow (in /home/hueyj/git/bigtools/target/release/bigtools)
+  n3: 101008556 0x12D7E1: alloc::raw_vec::RawVec<T,A>::reserve::do_reserve_and_handle (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n1: 98171648 0x1DAAC9: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 98171648 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 98171648 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 98171648 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 98171648 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 98171648 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 98171648 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n0: 98171648 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+   n2: 2836480 0x1AE77B: std::io::append_to_string (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n1: 2836480 0x18A9B4: bigtools::bed::bedparser::BedParserState<S>::load_state (in /home/hueyj/git/bigtools/target/release/bigtools)
+     n1: 2836480 0x18A544: bigtools::bbi::bedchromdata::<impl bigtools::utils::chromvalues::ChromValues for bigtools::bed::bedparser::BedChromData<S>>::next_pair (in /home/hueyj/git/bigtools/target/release/bigtools)
+      n1: 2836480 0x1DA5E6: bigtools::bbi::bigbedwrite::BigBedWrite::process_chrom::{{closure}} (in /home/hueyj/git/bigtools/target/release/bigtools)
+       n1: 2836480 0x2A87D8: tokio::runtime::task::raw::poll (in /home/hueyj/git/bigtools/target/release/bigtools)
+        n1: 2836480 0x2BB361: tokio::runtime::runtime::Runtime::block_on (in /home/hueyj/git/bigtools/target/release/bigtools)
+         n1: 2836480 0x2CBF16: bigtools::bbi::bigbedwrite::BigBedWrite::write_internal (in /home/hueyj/git/bigtools/target/release/bigtools)
+          n1: 2836480 0x1A7404: bigtools::utils::cli::bedtobigbed::bedtobigbed (in /home/hueyj/git/bigtools/target/release/bigtools)
+           n1: 2836480 0x134CA6: bigtools::main (in /home/hueyj/git/bigtools/target/release/bigtools)
+            n1: 2836480 0x2DBB62: std::sys_common::backtrace::__rust_begin_short_backtrace (in /home/hueyj/git/bigtools/target/release/bigtools)
+             n0: 2836480 0x161238: main (in /home/hueyj/git/bigtools/target/release/bigtools)
+    n0: 0 in 1 place, below massif's threshold (1.00%)
+   n0: 428 in 2 places, all below massif's threshold (1.00%)
+  n0: 65536 in 8 places, all below massif's threshold (1.00%)
+ n0: 1072623 in 123 places, all below massif's threshold (1.00%)
+#-----------
+snapshot=60
+#-----------
+time=27301677802
+mem_heap_B=102060245
+mem_heap_extra_B=29355
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=61
+#-----------
+time=27322174134
+mem_heap_B=135325313
+mem_heap_extra_B=27567
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=62
+#-----------
+time=27342920991
+mem_heap_B=135364246
+mem_heap_extra_B=27578
+mem_stacks_B=0
+heap_tree=empty
+#-----------
+snapshot=63
+#-----------
+time=29845701998
+mem_heap_B=135140747
+mem_heap_extra_B=27637
+mem_stacks_B=0
+heap_tree=empty

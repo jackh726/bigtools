@@ -181,26 +181,74 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
     type Value = S::Value;
     type Error = BedValueError;
 
-    fn next(&mut self) -> Option<Result<Self::Value, Self::Error>> {
-        let state = self.load_state()?;
-        let ret = state.load_state_and_take_value();
-        if matches!(state.state_value, StateValue::DiffChrom(..)) {
-            self.done = true;
+    fn next(&mut self) -> Option<Result<&Self::Value, Self::Error>> {
+        let (state, done) = self.load_state()?;
+        state.load_state(false);
+
+        let error = state.state_value.take_error();
+        if let Some(e) = error {
+            *done = true;
+            return Some(Err(e));
         }
-        ret
+
+        match &state.state_value {
+            StateValue::Empty => None,
+            StateValue::Initial(_, _) => unreachable!(),
+            StateValue::Value(_, v, _) => return Some(Ok(v)),
+            StateValue::ValueThenDone(_, v) => return Some(Ok(v)),
+            StateValue::CurrError(_) => unreachable!(),
+            StateValue::NextError(_, v, _) => return Some(Ok(v)),
+            StateValue::ValueNextDiffChrom(_, v, _, _) => return Some(Ok(v)),
+            StateValue::DiffChrom(_, _) => {
+                *done = true;
+                None
+            }
+            StateValue::Done => None,
+        }
     }
 
     fn peek(&mut self) -> Option<Result<&S::Value, &Self::Error>> {
-        let state = self.load_state()?;
-        state.load_state(false);
+        let (state, _) = self.load_state()?;
         let ret = match &state.state_value {
             StateValue::Empty => None,
-            StateValue::Value(_, val) => Some(Ok(val)),
-            StateValue::EmptyValue(_) => None,   // Shouldn't occur
-            StateValue::DiffChrom(_, _) => None, // Only `Value` is peekable
-            StateValue::Error(err) => Some(Err(err)),
+            StateValue::Initial(_, v) => Some(Ok(v)),
+            StateValue::Value(_, _, v) => Some(Ok(v)),
+            StateValue::ValueThenDone(_, _) => None,
+            StateValue::CurrError(_) => None,
+            StateValue::NextError(_, _, e) => Some(Err(e)),
+            StateValue::ValueNextDiffChrom(_, _, _, _) => None,
+            StateValue::DiffChrom(_, _) => None,
             StateValue::Done => None,
         };
+        ret
+    }
+
+    fn next_pair(&mut self) -> Option<Result<(&Self::Value, Option<&Self::Value>), Self::Error>> {
+        let (state, done) = self.load_state()?;
+        state.load_state(false);
+
+        if let Some(e) = state.state_value.take_error() {
+            *done = true;
+            return Some(Err(e));
+        }
+
+        if matches!(state.state_value, StateValue::DiffChrom(..)) {
+            *done = true;
+            return None;
+        }
+
+        let ret = match &state.state_value {
+            StateValue::Empty => None,
+            StateValue::Initial(_, _) => unreachable!(),
+            StateValue::Value(_, val, next_val) => Some(Ok((val, Some(next_val)))),
+            StateValue::ValueThenDone(_, v) => Some(Ok((v, None))),
+            StateValue::CurrError(_) => unreachable!(),
+            StateValue::NextError(_, v, _) => Some(Ok((v, None))),
+            StateValue::ValueNextDiffChrom(_, v, _, _) => Some(Ok((v, None))),
+            StateValue::DiffChrom(_, _) => None,
+            StateValue::Done => None,
+        };
+
         ret
     }
 }

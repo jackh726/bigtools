@@ -299,18 +299,18 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val<I: ChromValues<Value = BedEntry>>(
-        current_val: BedEntry,
+    async fn process_val<E: Error>(
+        current_val: &BedEntry,
+        next_val: Option<&BedEntry>,
         chrom_length: u32,
         chrom: &String,
-        chrom_values: &mut I,
         summary: &mut Option<Summary>,
         state_val: &mut EntriesSection,
         options: BBIWriteOptions,
         runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Check a few preconditions:
         // - The current end is greater than or equal to the start
         // - The current end is at most the chromosome length
@@ -328,9 +328,9 @@ impl BigBedWrite {
                 current_val.start, chrom, chrom_length
             )));
         }
-        match chrom_values.peek() {
-            None | Some(Err(_)) => (),
-            Some(Ok(next_val)) => {
+        match next_val {
+            None => (),
+            Some(next_val) => {
                 if current_val.start > next_val.start {
                     return Err(ProcessChromError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
@@ -442,24 +442,45 @@ impl BigBedWrite {
             summary,
             current_val.start,
             current_val.end,
-            chrom_values.peek().and_then(|v| v.ok()).map(|v| v.start),
+            next_val.map(|v| v.start),
         );
 
         // Then, add the current item to the actual values, and encode if full, or last item
-        state_val.items.push(current_val);
-        if chrom_values.peek().is_none() || state_val.items.len() >= options.items_per_slot as usize
-        {
+        state_val.items_data.write_u32::<NativeEndian>(chrom_id)?;
+        state_val
+            .items_data
+            .write_u32::<NativeEndian>(current_val.start)?;
+        state_val
+            .items_data
+            .write_u32::<NativeEndian>(current_val.end)?;
+        state_val
+            .items_data
+            .write_all(current_val.rest.as_bytes())?;
+        state_val.items_data.write_all(&[b'\0'])?;
+        if state_val.items == 0 {
+            state_val.items_start = current_val.start;
+        }
+        state_val.items_end = current_val.end;
+        state_val.items += 1;
+        if next_val.is_none() || state_val.items >= options.items_per_slot as usize {
             let items = std::mem::replace(
-                &mut state_val.items,
-                Vec::with_capacity(options.items_per_slot as usize),
+                &mut state_val.items_data,
+                Vec::with_capacity(30 * options.items_per_slot as usize),
             );
-            let mut size = 0;
-            for item in &items {
-                size += item.rest.bytes().len() + 8;
-            }
-            eprintln!("Next section size: {size}");
+            state_val.items = 0;
+            let (start, end) = (state_val.items_start, state_val.items_end);
+            state_val.items_start = 0;
+            state_val.items_end = 0;
+
+            eprintln!("Next section size: {}", items.len());
             let handle = runtime
-                .spawn(encode_section(options.compress, items, chrom_id))
+                .spawn(encode_section(
+                    options.compress,
+                    items,
+                    start,
+                    end,
+                    chrom_id,
+                ))
                 .map(|f| f.unwrap());
             ftx.send(handle.boxed()).await.expect("Couldn't send");
             tokio::task::yield_now().await;
@@ -468,15 +489,15 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<I: ChromValues<Value = BedEntry>>(
+    async fn process_val_zoom<E: Error>(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
         item_start: u32,
         item_end: u32,
-        chrom_values: &mut I,
+        next_val: Option<&BedEntry>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -520,9 +541,7 @@ impl BigBedWrite {
                 });
             }
 
-            let next_start = chrom_values
-                .peek()
-                .and_then(|v| v.ok())
+            let next_start = next_val
                 .map(|v| v.start)
                 .unwrap_or(u32::max_value());
 
@@ -545,7 +564,7 @@ impl BigBedWrite {
                 let mut add_start = removed_start;
                 loop {
                     if add_start >= removed_end {
-                        if chrom_values.peek().is_none() {
+                        if next_val.is_none() {
                             if let Some((mut zoom2, total_items)) = zoom_item.live_info.take() {
                                 zoom2.summary.total_items = total_items;
                                 zoom_item.records.push(zoom2);
@@ -648,7 +667,10 @@ impl BigBedWrite {
         let mut summary: Option<Summary> = None;
 
         let mut state_val = EntriesSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
+            items: 0,
+            items_data: Vec::with_capacity(30 * options.items_per_slot as usize),
+            items_start: 0,
+            items_end: 0,
             overlap: IndexList::new(),
         };
         let mut zoom_items = zooms_channels
@@ -662,9 +684,10 @@ impl BigBedWrite {
             })
             .collect();
         let mut total_items = 0;
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
             total_items += 1;
 
             let item_start = current_val.start;
@@ -672,9 +695,9 @@ impl BigBedWrite {
 
             BigBedWrite::process_val(
                 current_val,
+                next_val,
                 chrom_length,
                 &chrom,
-                &mut chrom_values,
                 &mut summary,
                 &mut state_val,
                 options,
@@ -689,14 +712,15 @@ impl BigBedWrite {
                 options,
                 item_start,
                 item_end,
-                &mut chrom_values,
+                next_val,
                 &runtime,
                 chrom_id,
             )
             .await?;
         }
 
-        debug_assert!(state_val.items.is_empty());
+        debug_assert!(state_val.items == 0);
+        debug_assert!(state_val.items_data.len() == 0);
         for zoom_item in zoom_items.iter_mut() {
             debug_assert!(zoom_item.live_info.is_none());
             debug_assert!(zoom_item.records.is_empty());
@@ -736,7 +760,10 @@ impl BigBedWrite {
         let mut summary: Option<Summary> = None;
 
         let mut state_val = EntriesSection {
-            items: Vec::with_capacity(options.items_per_slot as usize),
+            items: 0,
+            items_data: Vec::with_capacity(30 * options.items_per_slot as usize),
+            items_start: 0,
+            items_end: 0,
             overlap: IndexList::new(),
         };
         let mut zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
@@ -749,9 +776,10 @@ impl BigBedWrite {
             .collect();
 
         let mut total_items = 0;
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
             total_items += 1;
 
             let item_start = current_val.start;
@@ -759,9 +787,9 @@ impl BigBedWrite {
 
             BigBedWrite::process_val(
                 current_val,
+                next_val,
                 chrom_length,
                 &chrom,
-                &mut chrom_values,
                 &mut summary,
                 &mut state_val,
                 options,
@@ -783,7 +811,8 @@ impl BigBedWrite {
             }
         }
 
-        debug_assert!(state_val.items.is_empty());
+        debug_assert!(state_val.items == 0);
+        debug_assert!(state_val.items_data.is_empty());
 
         let mut summary_complete = match summary {
             None => Summary {
@@ -824,9 +853,10 @@ impl BigBedWrite {
             })
             .collect();
 
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
 
             let item_start = current_val.start;
             let item_end = current_val.end;
@@ -836,7 +866,7 @@ impl BigBedWrite {
                 options,
                 item_start,
                 item_end,
-                &mut chrom_values,
+                next_val,
                 &runtime,
                 chrom_id,
             )
@@ -861,13 +891,18 @@ struct ZoomItem {
     channel: ChromProcessingInputSectionChannel,
 }
 struct EntriesSection {
-    items: Vec<BedEntry>,
+    items: usize,
+    items_data: Vec<u8>,
+    items_start: u32,
+    items_end: u32,
     overlap: IndexList<Value>,
 }
 
 async fn encode_section(
     compress: bool,
-    mut items_in_section: Vec<BedEntry>,
+    mut bytes: Vec<u8>,
+    start: u32,
+    end: u32,
     chrom_id: u32,
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
@@ -876,41 +911,22 @@ async fn encode_section(
         static BYTES: RefCell<Vec<u8>> = RefCell::new(vec![]);
     }
 
-    let mut size = 0;
-    for item in &items_in_section {
-        size += 13 + item.rest.bytes().len();
-    }
-
-    let mut bytes = BYTES.take();
-    bytes.reserve_exact(size);
-
-    let start = items_in_section[0].start;
-    let end = items_in_section[items_in_section.len() - 1].end;
-
-    for item in items_in_section.iter() {
-        bytes.write_u32::<NativeEndian>(chrom_id)?;
-        bytes.write_u32::<NativeEndian>(item.start)?;
-        bytes.write_u32::<NativeEndian>(item.end)?;
-        bytes.write_all(item.rest.as_bytes())?;
-        bytes.write_all(&[b'\0']).unwrap();
-    }
-
     let (out_bytes, uncompress_buf_size) = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
 
-        items_in_section.clear();
-        let mut compressed_data: Vec<u8> = items_in_section.into_iter().map(|i| 0).collect();
+        let mut compressed_data = BYTES.take();
         compressed_data.resize(max_sz, 0);
 
-        //let mut compressed_data = vec![0; max_sz];
         let actual_sz = compressor
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
         let len = bytes.len();
+
         bytes.clear();
         BYTES.replace(bytes);
+
         (compressed_data, len)
     } else {
         (bytes, 0)

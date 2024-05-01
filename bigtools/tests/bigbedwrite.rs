@@ -25,7 +25,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         let infile = File::open(bed.clone())?;
         let mut vals_iter = BedParser::from_bed_file(infile);
         let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        group.next().unwrap().unwrap()
+        group.next().unwrap().unwrap().clone()
     };
 
     let runtime = runtime::Builder::new_multi_thread()
@@ -33,11 +33,11 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         .build()
         .expect("Unable to create runtime.");
 
-    let infile = File::open(bed)?;
     let tempfile = tempfile::NamedTempFile::new()?;
-    let mut vals_iter = BedParser::from_bed_file(infile);
     let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
     outb.autosql = {
+        let infile = File::open(&bed)?;
+        let mut vals_iter = BedParser::from_bed_file(infile);
         let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
         let first = group.peek().unwrap().unwrap();
         Some(bigtools::bed::autosql::bed_autosql(&first.rest))
@@ -49,6 +49,8 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
+    let infile = File::open(bed)?;
+    let vals_iter = BedParser::from_bed_file(infile);
     let chsi = BedParserStreamingIterator::new(vals_iter, false);
     outb.write(chrom_map, chsi, runtime).unwrap();
 

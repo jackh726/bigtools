@@ -40,6 +40,7 @@ out.write(chrom_map, vals, runtime)?;
 # }
 ```
 */
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -70,6 +71,13 @@ struct ZoomItem {
     // All zoom entries in the current section
     records: Vec<ZoomRecord>,
     channel: ChromProcessingInputSectionChannel,
+}
+
+struct ValuesSection {
+    items: usize,
+    items_data: Vec<u8>,
+    items_start: u32,
+    items_end: u32,
 }
 
 /// The struct used to write a bigWig file
@@ -324,18 +332,18 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_val<I: ChromValues<Value = Value>>(
-        current_val: Value,
+    async fn process_val<E: Error>(
+        current_val: &Value,
+        next_val: Option<&Value>,
         chrom_length: u32,
         chrom: &String,
-        chrom_values: &mut I,
         summary: &mut Summary,
-        items: &mut Vec<Value>,
+        state_val: &mut ValuesSection,
         options: BBIWriteOptions,
         runtime: &Handle,
         ftx: &mut ChromProcessingInputSectionChannel,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Check a few preconditions:
         // - The current end is greater than or equal to the start
         // - The current end is at most the chromosome length
@@ -353,9 +361,9 @@ impl BigWigWrite {
                 current_val.end, chrom, chrom_length
             )));
         }
-        match chrom_values.peek() {
-            None | Some(Err(_)) => (),
-            Some(Ok(next_val)) => {
+        match next_val {
+            None => (),
+            Some(next_val) => {
                 if current_val.end > next_val.start {
                     return Err(ProcessChromError::InvalidInput(format!(
                         "Invalid bed graph: overlapping values on chromosome {} at {}-{} and {}-{}",
@@ -378,11 +386,40 @@ impl BigWigWrite {
         summary.sum_squares += f64::from(len) * val * val;
 
         // Then, add the current item to the actual values, and encode if full, or last item
-        items.push(current_val);
-        if chrom_values.peek().is_none() || items.len() >= options.items_per_slot as usize {
-            let items = std::mem::take(items);
+        state_val
+            .items_data
+            .write_u32::<NativeEndian>(current_val.start)?;
+        state_val
+            .items_data
+            .write_u32::<NativeEndian>(current_val.end)?;
+        state_val
+            .items_data
+            .write_f32::<NativeEndian>(current_val.value)?;
+        if state_val.items == 0 {
+            state_val.items_start = current_val.start;
+        }
+        state_val.items_end = current_val.end;
+        state_val.items += 1;
+        if next_val.is_none() || state_val.items >= options.items_per_slot as usize {
+            let items = std::mem::replace(
+                &mut state_val.items_data,
+                Vec::with_capacity(12 * options.items_per_slot as usize),
+            );
+            let num_items = state_val.items;
+            state_val.items = 0;
+            let (start, end) = (state_val.items_start, state_val.items_end);
+            state_val.items_start = 0;
+            state_val.items_end = 0;
+
             let handle = runtime
-                .spawn(encode_section(options.compress, items, chrom_id))
+                .spawn(encode_section(
+                    options.compress,
+                    items,
+                    num_items,
+                    start,
+                    end,
+                    chrom_id,
+                ))
                 .map(|f| f.unwrap());
             ftx.send(handle.boxed()).await.expect("Couldn't send");
         }
@@ -390,14 +427,14 @@ impl BigWigWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<I: ChromValues<Value = Value>>(
+    async fn process_val_zoom<E: Error>(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
-        current_val: Value,
-        chrom_values: &mut I,
+        current_val: &Value,
+        next_val: Option<&Value>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<I::Error>> {
+    ) -> Result<(), ProcessChromError<E>> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -412,7 +449,7 @@ impl BigWigWrite {
                 // Write section if full; or if no next section, some items, and no current zoom record
                 if (add_start >= current_val.end
                     && zoom_item.live_info.is_none()
-                    && chrom_values.peek().is_none()
+                    && next_val.is_none()
                     && !zoom_item.records.is_empty())
                     || zoom_item.records.len() == options.items_per_slot as usize
                 {
@@ -427,7 +464,7 @@ impl BigWigWrite {
                         .expect("Couln't send");
                 }
                 if add_start >= current_val.end {
-                    if chrom_values.peek().is_none() {
+                    if next_val.is_none() {
                         if let Some(zoom2) = zoom_item.live_info.take() {
                             zoom_item.records.push(zoom2);
                             continue;
@@ -497,7 +534,12 @@ impl BigWigWrite {
             sum_squares: 0.0,
         };
 
-        let mut items = Vec::with_capacity(options.items_per_slot as usize);
+        let mut items = ValuesSection {
+            items: 0,
+            items_data: Vec::with_capacity(12 * options.items_per_slot as usize),
+            items_start: 0,
+            items_end: 0,
+        };
         let mut zoom_items: Vec<ZoomItem> = zooms_channels
             .into_iter()
             .map(|(size, channel)| ZoomItem {
@@ -508,15 +550,16 @@ impl BigWigWrite {
             })
             .collect();
 
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
 
             BigWigWrite::process_val(
                 current_val,
+                next_val,
                 chrom_length,
                 &chrom,
-                &mut chrom_values,
                 &mut summary,
                 &mut items,
                 options,
@@ -530,14 +573,15 @@ impl BigWigWrite {
                 &mut zoom_items,
                 options,
                 current_val,
-                &mut chrom_values,
+                next_val,
                 &runtime,
                 chrom_id,
             )
             .await?;
         }
 
-        debug_assert!(items.is_empty());
+        debug_assert!(items.items_data.is_empty());
+        debug_assert!(items.items == 0);
         for zoom_item in zoom_items.iter_mut() {
             debug_assert!(zoom_item.live_info.is_none());
             debug_assert!(zoom_item.records.is_empty());
@@ -575,7 +619,12 @@ impl BigWigWrite {
             sum_squares: 0.0,
         };
 
-        let mut items: Vec<Value> = Vec::with_capacity(options.items_per_slot as usize);
+        let mut items = ValuesSection {
+            items: 0,
+            items_data: Vec::with_capacity(12 * options.items_per_slot as usize),
+            items_start: 0,
+            items_end: 0,
+        };
         let mut zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
             .take_while(|z| *z <= u64::MAX / 4 && *z <= chrom_length as u64 * 4)
             .map(|z| ZoomCounts {
@@ -585,15 +634,16 @@ impl BigWigWrite {
             })
             .collect();
 
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
 
             BigWigWrite::process_val(
                 current_val,
+                next_val,
                 chrom_length,
                 &chrom,
-                &mut chrom_values,
                 &mut summary,
                 &mut items,
                 options,
@@ -615,7 +665,8 @@ impl BigWigWrite {
             }
         }
 
-        debug_assert!(items.is_empty());
+        debug_assert!(items.items_data.is_empty());
+        debug_assert!(items.items == 0);
 
         if summary.total_items == 0 {
             summary.min_val = 0.0;
@@ -647,15 +698,16 @@ impl BigWigWrite {
             })
             .collect();
 
-        while let Some(current_val) = chrom_values.next() {
+        while let Some(vals) = chrom_values.next_pair() {
             // If there is a source error, propogate that up
-            let current_val = current_val.map_err(ProcessChromError::SourceError)?;
+            let vals = vals.map_err(ProcessChromError::SourceError)?;
+            let (current_val, next_val) = vals;
 
             BigWigWrite::process_val_zoom(
                 &mut zoom_items,
                 options,
                 current_val,
-                &mut chrom_values,
+                next_val,
                 &runtime,
                 chrom_id,
             )
@@ -673,15 +725,21 @@ impl BigWigWrite {
 
 async fn encode_section(
     compress: bool,
-    items_in_section: Vec<Value>,
+    mut item_bytes: Vec<u8>,
+    items: usize,
+    start: u32,
+    end: u32,
     chrom_id: u32,
 ) -> io::Result<(SectionData, usize)> {
     use libdeflater::{CompressionLvl, Compressor};
 
-    let mut bytes = Vec::with_capacity(24 + (items_in_section.len() * 24));
+    thread_local! {
+        static BYTES: RefCell<Vec<u8>> = RefCell::new(vec![]);
+    }
 
-    let start = items_in_section[0].start;
-    let end = items_in_section[items_in_section.len() - 1].end;
+    let mut bytes = BYTES.take();
+    bytes.reserve_exact(24 + (items * 12));
+
     bytes.write_u32::<NativeEndian>(chrom_id)?;
     bytes.write_u32::<NativeEndian>(start)?;
     bytes.write_u32::<NativeEndian>(end)?;
@@ -689,24 +747,25 @@ async fn encode_section(
     bytes.write_u32::<NativeEndian>(0)?;
     bytes.write_u8(1)?;
     bytes.write_u8(0)?;
-    bytes.write_u16::<NativeEndian>(items_in_section.len() as u16)?;
-
-    for item in items_in_section.iter() {
-        bytes.write_u32::<NativeEndian>(item.start)?;
-        bytes.write_u32::<NativeEndian>(item.end)?;
-        bytes.write_f32::<NativeEndian>(item.value)?;
-    }
+    bytes.write_u16::<NativeEndian>(items as u16)?;
+    bytes.extend(&item_bytes);
 
     let (out_bytes, uncompress_buf_size) = if compress {
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
-        let mut compressed_data = vec![0; max_sz];
+        let mut compressed_data = item_bytes;
+        compressed_data.resize(max_sz, 0);
         let actual_sz = compressor
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
-        (compressed_data, bytes.len())
+        let len = bytes.len();
+        bytes.clear();
+        BYTES.replace(bytes);
+        (compressed_data, len)
     } else {
+        item_bytes.clear();
+        BYTES.replace(item_bytes);
         (bytes, 0)
     };
 

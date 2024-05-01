@@ -24,7 +24,7 @@ fn test() -> Result<(), Box<dyn Error>> {
         let infile = File::open(single_chrom_bedgraph.clone())?;
         let mut vals_iter = BedParser::from_bedgraph_file(infile);
         let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        group.next().unwrap().unwrap()
+        group.next().unwrap().unwrap().clone()
     };
 
     let runtime = runtime::Builder::new_multi_thread()
@@ -71,7 +71,7 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
         let infile = File::open(single_chrom_bedgraph.clone())?;
         let mut vals_iter = BedParser::from_bedgraph_file(infile);
         let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        group.next().unwrap().unwrap()
+        group.next().unwrap().unwrap().clone()
     };
 
     let runtime = runtime::Builder::new_multi_thread()

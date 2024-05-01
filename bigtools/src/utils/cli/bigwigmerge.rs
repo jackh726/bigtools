@@ -162,9 +162,17 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+enum State {
+    NotStarted,
+    Value(Value, Value),
+    ValueThenDone(Value),
+    ValueThenError(Value, MergingValuesError),
+    Done,
+}
 pub struct MergingValues {
     // We Box<dyn Iterator> because other this would be a mess to try to type
-    iter: std::iter::Peekable<Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>>,
+    iter: Box<dyn Iterator<Item = Result<Value, MergingValuesError>> + Send>,
+    state: State,
 }
 
 impl MergingValues {
@@ -192,7 +200,8 @@ impl MergingValues {
                 .filter(move |x| x.as_ref().map_or(true, |v| v.value > threshold)),
         );
         MergingValues {
-            iter: iter.peekable(),
+            iter: iter,
+            state: State::NotStarted,
         }
     }
 }
@@ -213,21 +222,101 @@ impl ChromValues for MergingValues {
     type Value = Value;
     type Error = MergingValuesError;
 
-    fn next(&mut self) -> Option<Result<Value, MergingValuesError>> {
-        match self.iter.next() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(e)) => Some(Err(e.into())),
-            None => None,
+    fn next(&mut self) -> Option<Result<&Self::Value, Self::Error>> {
+        let state = std::mem::replace(&mut self.state, State::Done);
+        self.state = match state {
+            State::NotStarted => match self.iter.next() {
+                None => State::Done,
+                Some(Ok(v)) => match self.iter.next() {
+                    None => State::ValueThenDone(v),
+                    Some(Ok(next_val)) => State::Value(v, next_val),
+                    Some(Err(e)) => State::ValueThenError(v, e),
+                },
+                Some(Err(e)) => {
+                    return Some(Err(e));
+                }
+            },
+            State::Value(_, v) => match self.iter.next() {
+                None => State::ValueThenDone(v),
+                Some(Ok(next_val)) => State::Value(v, next_val),
+                Some(Err(e)) => State::ValueThenError(v, e),
+            },
+            State::ValueThenDone(_) => State::Done,
+            State::ValueThenError(_, e) => {
+                return Some(Err(e));
+            }
+            State::Done => State::Done,
+        };
+        match &self.state {
+            State::NotStarted => None,
+            State::Value(v, _) => Some(Ok(v)),
+            State::ValueThenDone(v) => Some(Ok(v)),
+            State::ValueThenError(v, _) => Some(Ok(v)),
+            State::Done => None,
         }
     }
 
-    fn peek(&mut self) -> Option<Result<&Value, &MergingValuesError>> {
-        match self.iter.peek() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
+    fn peek(&mut self) -> Option<Result<&Self::Value, &Self::Error>> {
+        match &self.state {
+            State::NotStarted => None,
+            State::Value(_, v) => Some(Ok(v)),
+            State::ValueThenDone(_) => None,
+            State::ValueThenError(_, _) => None,
+            State::Done => None,
         }
     }
+
+    fn next_pair(&mut self) -> Option<Result<(&Self::Value, Option<&Self::Value>), Self::Error>> {
+        let state = std::mem::replace(&mut self.state, State::Done);
+        self.state = match state {
+            State::NotStarted => match self.iter.next() {
+                None => State::Done,
+                Some(Ok(v)) => match self.iter.next() {
+                    None => State::ValueThenDone(v),
+                    Some(Ok(next_val)) => State::Value(v, next_val),
+                    Some(Err(e)) => State::ValueThenError(v, e),
+                },
+                Some(Err(e)) => {
+                    return Some(Err(e));
+                }
+            },
+            State::Value(_, v) => match self.iter.next() {
+                None => State::ValueThenDone(v),
+                Some(Ok(next_val)) => State::Value(v, next_val),
+                Some(Err(e)) => State::ValueThenError(v, e),
+            },
+            State::ValueThenDone(_) => State::Done,
+            State::ValueThenError(_, e) => {
+                return Some(Err(e));
+            }
+            State::Done => State::Done,
+        };
+        match &self.state {
+            State::NotStarted => None,
+            State::Value(v, next_val) => Some(Ok((v, Some(next_val)))),
+            State::ValueThenDone(v) => Some(Ok((v, None))),
+            State::ValueThenError(v, _) => Some(Ok((v, None))),
+            State::Done => None,
+        }
+    }
+
+    /*
+        fn next(&mut self) -> Option<Result<Value, MergingValuesError>> {
+            match self.iter.next() {
+                Some(Ok(v)) => Some(Ok(v)),
+                Some(Err(e)) => Some(Err(e.into())),
+                None => None,
+            }
+        }
+
+        fn peek(&mut self) -> Option<Result<&Value, &MergingValuesError>> {
+            match self.iter.peek() {
+                Some(Ok(v)) => Some(Ok(v)),
+                Some(Err(err)) => Some(Err(err)),
+                None => None,
+            }
+        }
+    */
 }
 
 pub fn get_merged_vals(
@@ -326,7 +415,7 @@ pub fn get_merged_vals(
                         let (sender, receiver) = unbounded::<Value>();
                         while let Some(val) = mergingvalues.next() {
                             let val = val?;
-                            sender.send(val).unwrap();
+                            sender.send(*val).unwrap();
                         }
 
                         merges.push(Box::new(receiver.into_iter().map(Result::Ok)));
