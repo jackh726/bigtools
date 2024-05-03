@@ -1,0 +1,5 @@
+[target.'cfg(any(target_os = "macos"))']
+rustflags = [
+  "-C", "link-arg=-undefined",
+  "-C", "link-arg=dynamic_lookup",
+]
