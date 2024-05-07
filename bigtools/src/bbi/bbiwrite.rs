@@ -1003,11 +1003,11 @@ pub(crate) fn write_vals_no_zoom<
 }
 
 // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
-type InternalZoomValue = (
-    Vec<crossbeam_channel::IntoIter<Section>>,
-    TempFileBuffer<BufWriter<File>>,
-    Option<TempFileBufferWriter<BufWriter<File>>>,
-);
+type ZoomSender<E> = futures_mpsc::Sender<(
+    tokio::task::JoinHandle<Result<(usize, usize), E>>,
+    TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
+    crossbeam_channel::Receiver<Section>,
+)>;
 
 pub(crate) struct InternalTempZoomInfo<SourceError: Error> {
     pub resolution: u32,
@@ -1046,7 +1046,9 @@ pub(crate) fn write_zoom_vals<
     data_size: u64,
 ) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), ProcessChromError<V::Error>> {
     let min_first_zoom_size = average_size.max(10) * 4;
-    let mut zooms_map: BTreeMap<u32, InternalZoomValue> = zoom_counts
+    let mut zoom_receivers = vec![];
+    let mut zoom_files = vec![];
+    let mut zooms_map: BTreeMap<u32, ZoomSender<ProcessChromError<V::Error>>> = zoom_counts
         .into_iter()
         .skip_while(|z| z.0 > min_first_zoom_size as u64)
         .skip_while(|z| {
@@ -1058,18 +1060,19 @@ pub(crate) fn write_zoom_vals<
         })
         .take(options.max_zooms as usize)
         .map(|size| {
-            let section_iter = vec![];
             let (buf, write) = TempFileBuffer::new(options.inmemory);
-            let value = (section_iter, buf, Some(write));
-            (size.0 as u32, value)
+            let (sender, receiver) = futures_mpsc::channel(chrom_ids.len());
+            zoom_receivers.push((size.0, receiver, write));
+            zoom_files.push((size.0 as u32, buf));
+            (size.0 as u32, sender)
         })
         .collect();
     let resolutions: Vec<_> = zooms_map.keys().copied().collect();
 
     let first_zoom_data_offset = file.tell()?;
     // We can immediately start to write to the file the first zoom
-    match zooms_map.first_entry() {
-        Some(mut first) => first.get_mut().1.switch(file),
+    match zoom_files.first_mut() {
+        Some(first) => first.1.switch(file),
         None => return Ok((file, vec![], 0)),
     }
 
@@ -1112,54 +1115,69 @@ pub(crate) fn write_zoom_vals<
 
     let mut advance = |p: P| {
         let data = p.destroy();
-        let ZoomsInternalProcessedData(mut zooms) = data;
-
-        // For each zoom, switch the current chromosome to write to the actual zoom file
-        for InternalTempZoomInfo {
-            resolution: size,
-            data,
-            ..
-        } in zooms.iter_mut()
-        {
-            let zoom = zooms_map.get_mut(size).unwrap();
-            let writer = zoom.2.take().unwrap();
-            data.switch(writer);
-        }
+        let ZoomsInternalProcessedData(zooms) = data;
 
         for InternalTempZoomInfo {
             resolution,
-            data_write_future,
             data,
+            data_write_future,
             sections,
+            ..
         } in zooms.into_iter()
         {
-            // First, we need to make sure that all the sections that were queued to encode have been written
-            let data_write_data = runtime.block_on(data_write_future);
-            let (_num_sections, uncompressed_buf_size) = data_write_data.unwrap()?;
-            max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-
             let zoom = zooms_map.get_mut(&resolution).unwrap();
-            // Add the section data to the zoom
-            zoom.0.push(sections.into_iter());
-            // Replace the zoom file again
-            zoom.2.replace(data.await_real_file());
+            zoom.try_send((data_write_future, data, sections)).unwrap();
         }
 
         Ok(())
     };
 
+    let mut zooms = Vec::with_capacity(zoom_receivers.len());
+    for rcv in zoom_receivers {
+        let mut sections = vec![];
+        let handle = runtime.spawn(async move {
+            let (_, mut rcv, mut real_file) = rcv;
+            while let Some(r) = rcv.next().await {
+                let (data_write_future, mut data, sections_rcv) = r;
+
+                data.switch(real_file);
+
+                // First, we need to make sure that all the sections that were queued to encode have been written
+                let data_write_data = data_write_future.await;
+                let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return Err(e);
+                    }
+                };
+                max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
+
+                // Replace the zoom file again
+                real_file = data.await_real_file();
+
+                sections.push(sections_rcv.into_iter());
+            }
+            Ok((real_file, sections))
+        });
+        zooms.push(handle);
+    }
+
     vals_iter.process_to_bbi(&runtime, &mut do_read, &mut advance)?;
 
-    let mut zoom_entries = Vec::with_capacity(zooms_map.len());
-    let mut zooms_map_iter = zooms_map.into_iter();
+    drop(zooms_map);
 
-    // Since the first zoom has already been written to the file, no need to
-    let first_zoom = zooms_map_iter
-        .next()
-        .expect("Should have at least one zoom");
+    let mut zoom_entries = Vec::with_capacity(zooms.len());
+    let zooms_iter = zooms.into_iter();
+    let zooms_files = zoom_files.into_iter();
+    let mut zip = zooms_iter.zip(zooms_files);
+
+    // We already switched this zoom to the real file, so need to treat this a bit different
+    let (first_zoom_fut, first_data) = zip.next().expect("Should have at least one zoom");
+    let first_zoom = runtime.block_on(first_zoom_fut).unwrap()?;
+
     // First, we can drop the writer - no more data
-    drop(first_zoom.1 .2);
-    let first_zoom_sections = first_zoom.1 .0.into_iter().flatten();
+    drop(first_zoom.0);
+    let first_zoom_sections = first_zoom.1.into_iter().flatten();
     let mut current_offset = first_zoom_data_offset;
     let sections_iter = first_zoom_sections.map(|mut section| {
         // TODO: assumes contiguous, see note for primary data
@@ -1167,24 +1185,25 @@ pub(crate) fn write_zoom_vals<
         current_offset += section.size;
         section
     });
-    // First zoom has already switched, real data
-    file = first_zoom.1 .1.await_real_file();
+    file = first_data.1.await_real_file();
     // Generate the rtree index
     let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
     let first_zoom_index_offset = file.tell()?;
     write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
     zoom_entries.push(ZoomHeader {
-        reduction_level: first_zoom.0,
+        reduction_level: first_data.0,
         data_offset: first_zoom_data_offset,
         index_offset: first_zoom_index_offset,
         index_tree_offset: None,
     });
 
-    while let Some(mut zoom) = zooms_map_iter.next() {
+    while let Some(zoom) = zip.next() {
+        let (zoom_fut, data) = zoom;
+        let (real_file, sections) = runtime.block_on(zoom_fut).unwrap()?;
         let zoom_data_offset = file.tell()?;
         // First, we can drop the writer - no more data
-        drop(zoom.1 .2);
-        let zoom_sections = zoom.1 .0.into_iter().flatten();
+        drop(real_file);
+        let zoom_sections = sections.into_iter().flatten();
         let mut current_offset = zoom_data_offset;
         let sections_iter = zoom_sections.map(|mut section| {
             // TODO: assumes contiguous, see note for primary data
@@ -1193,14 +1212,13 @@ pub(crate) fn write_zoom_vals<
             section
         });
         // Subsequence zooms have not switched to real file
-        zoom.1 .1.switch(file);
-        file = zoom.1 .1.await_real_file();
+        data.1.expect_closed_write(&mut file)?;
         // Generate the rtree index
         let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
         let zoom_index_offset = file.tell()?;
         write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
         zoom_entries.push(ZoomHeader {
-            reduction_level: first_zoom.0,
+            reduction_level: data.0,
             data_offset: zoom_data_offset,
             index_offset: zoom_index_offset,
             index_tree_offset: None,

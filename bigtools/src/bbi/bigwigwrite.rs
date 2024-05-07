@@ -300,7 +300,8 @@ impl BigWigWrite {
         // Then, add the current item to the actual values, and encode if full, or last item
         items.push(current_val);
         if next_val.is_none() || items.len() >= options.items_per_slot as usize {
-            let items = std::mem::take(items);
+            let items =
+                std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
             let handle: tokio::task::JoinHandle<io::Result<(SectionData, usize)>> =
                 runtime.spawn(encode_section(options.compress, items, chrom_id));
             ftx.send(handle).await.expect("Couldn't send");

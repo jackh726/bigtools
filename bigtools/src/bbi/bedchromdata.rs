@@ -99,74 +99,75 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
     ) -> Result<(), ProcessChromError<Self::Error>> {
-        let mut state: Option<(String, P, Option<Result<(&str, S::Value), BedValueError>>)> = None;
-
-        loop {
-            let (curr_value, new_state) = match state {
-                Some((c, p, Some(v))) => (Some(v), Some((c, p))),
-                Some((c, p, None)) => (self.bed_data.next(), Some((c, p))),
-                None => (self.bed_data.next(), None),
-            };
-            state = match (new_state, curr_value) {
-                // The next value is an error, but we never started
-                (None, Some(Err(e))) => return Err(ProcessChromError::SourceError(e)),
-                // There are no values at all
-                (None, None) => return Ok(()),
-                // There are no more values
-                (Some(state), None) => {
-                    advance(state.1)?;
-                    return Ok(());
-                }
-                // The next value is an error and we have seen values before
-                (Some(state), Some(Err(e))) => {
-                    // We *can* do anything since we've encountered an error.
-                    // We'll go ahead and try to finish what we can, before we return.
-                    advance(state.1)?;
-                    return Err(ProcessChromError::SourceError(e));
-                }
-                // The next value is the first
-                (None, Some(Ok((chrom, val)))) => {
-                    let chrom = chrom.to_string();
-                    let mut p = start_processing(chrom.clone())?;
-                    let next_val = self.bed_data.next();
-                    let next_value = match &next_val {
-                        Some(Ok(v)) if v.0 == chrom => Some(&v.1),
-                        _ => None,
-                    };
-                    runtime.block_on(p.do_process(val, next_value))?;
-                    Some((chrom, p, next_val))
-                }
-                // The next value is the same chromosome
-                (Some((prev_chrom, mut p)), Some(Ok((chrom, val)))) if chrom == &prev_chrom => {
-                    let next_val = self.bed_data.next();
-                    let next_value = match &next_val {
-                        Some(Ok(v)) if v.0 == prev_chrom => Some(&v.1),
-                        _ => None,
-                    };
-                    runtime.block_on(p.do_process(val, next_value))?;
-                    Some((prev_chrom, p, next_val))
-                }
-                // The next value is a different chromosome
-                (Some((prev_chrom, p)), Some(Ok((chrom, val)))) => {
-                    // TODO: test this correctly fails
-                    if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
-                        return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+        runtime.block_on(async move {
+            let mut state: Option<(String, P, Option<Result<(&str, S::Value), BedValueError>>)> = None;
+            loop {
+                let (curr_value, new_state) = match state {
+                    Some((c, p, Some(v))) => (Some(v), Some((c, p))),
+                    Some((c, p, None)) => (self.bed_data.next(), Some((c, p))),
+                    None => (self.bed_data.next(), None),
+                };
+                state = match (new_state, curr_value) {
+                    // The next value is an error, but we never started
+                    (None, Some(Err(e))) => return Err(ProcessChromError::SourceError(e)),
+                    // There are no values at all
+                    (None, None) => return Ok(()),
+                    // There are no more values
+                    (Some(state), None) => {
+                        advance(state.1)?;
+                        return Ok(());
                     }
-                    advance(p)?;
+                    // The next value is an error and we have seen values before
+                    (Some(state), Some(Err(e))) => {
+                        // We *can* do anything since we've encountered an error.
+                        // We'll go ahead and try to finish what we can, before we return.
+                        advance(state.1)?;
+                        return Err(ProcessChromError::SourceError(e));
+                    }
+                    // The next value is the first
+                    (None, Some(Ok((chrom, val)))) => {
+                        let chrom = chrom.to_string();
+                        let mut p = start_processing(chrom.clone())?;
+                        let next_val = self.bed_data.next();
+                        let next_value = match &next_val {
+                            Some(Ok(v)) if v.0 == chrom => Some(&v.1),
+                            _ => None,
+                        };
+                        p.do_process(val, next_value).await?;
+                        Some((chrom, p, next_val))
+                    }
+                    // The next value is the same chromosome
+                    (Some((prev_chrom, mut p)), Some(Ok((chrom, val)))) if chrom == &prev_chrom => {
+                        let next_val = self.bed_data.next();
+                        let next_value = match &next_val {
+                            Some(Ok(v)) if v.0 == prev_chrom => Some(&v.1),
+                            _ => None,
+                        };
+                        p.do_process(val, next_value).await?;
+                        Some((prev_chrom, p, next_val))
+                    }
+                    // The next value is a different chromosome
+                    (Some((prev_chrom, p)), Some(Ok((chrom, val)))) => {
+                        // TODO: test this correctly fails
+                        if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
+                            return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                        }
+                        advance(p)?;
 
-                    let chrom = chrom.to_string();
-                    let mut p = start_processing(chrom.clone())?;
-                    let next_val = self.bed_data.next();
-                    let next_value = match &next_val {
-                        Some(Ok(v)) if v.0 == chrom => Some(&v.1),
-                        _ => None,
-                    };
+                        let chrom = chrom.to_string();
+                        let mut p = start_processing(chrom.clone())?;
+                        let next_val = self.bed_data.next();
+                        let next_value = match &next_val {
+                            Some(Ok(v)) if v.0 == chrom => Some(&v.1),
+                            _ => None,
+                        };
 
-                    runtime.block_on(p.do_process(val, next_value))?;
-                    Some((chrom, p, next_val))
-                }
-            };
-        }
+                        p.do_process(val, next_value).await?;
+                        Some((chrom, p, next_val))
+                    }
+                };
+            }
+        })
     }
 }
 
