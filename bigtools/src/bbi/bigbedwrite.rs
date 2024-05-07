@@ -854,7 +854,7 @@ impl<E: Error> ChromProcessCreate for BigBedZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error> ChromProcess for BigBedZoomsProcess<Er> {
+impl<Er: Error + Send> ChromProcess for BigBedZoomsProcess<Er> {
     type Value = BedEntry;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
