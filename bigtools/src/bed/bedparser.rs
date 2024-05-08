@@ -17,7 +17,7 @@ use crate::bbi::{BedEntry, Value};
 use crate::utils::streaming_linereader::StreamingLineReader;
 
 pub fn parse_bed<'a>(s: &'a str) -> Option<Result<(&'a str, BedEntry), BedValueError>> {
-    let mut split = s.splitn(4, '\t');
+    let mut split = s.trim_end().splitn(4, '\t');
     let chrom = match split.next() {
         Some(chrom) => chrom,
         None => return None,
@@ -45,7 +45,7 @@ pub fn parse_bed<'a>(s: &'a str) -> Option<Result<(&'a str, BedEntry), BedValueE
 }
 
 pub fn parse_bedgraph<'a>(s: &'a str) -> Option<Result<(&'a str, Value), BedValueError>> {
-    let mut split = s.splitn(5, '\t');
+    let mut split = s.trim_end().splitn(5, '\t');
     let chrom = match split.next() {
         Some(chrom) => chrom,
         None => return None,

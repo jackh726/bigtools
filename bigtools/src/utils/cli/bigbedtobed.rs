@@ -1,11 +1,10 @@
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 
 use clap::Parser;
-use futures::FutureExt;
+use futures::{SinkExt, StreamExt};
 use tokio::runtime;
 use ufmt::uwrite;
 
@@ -157,8 +156,6 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     let mut remaining_chroms = bigbed.chroms().to_vec();
     remaining_chroms.reverse();
 
-    let mut chrom_files: VecDeque<_> = VecDeque::new();
-
     async fn file_future<R: SeekableRead + 'static>(
         mut bigbed: BigBedRead<R>,
         chrom: ChromInfo,
@@ -186,30 +183,49 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
         Ok(())
     }
 
-    loop {
-        while chrom_files.len() < nthreads {
+    let (mut handle_snd, mut handle_rcv) = futures::channel::mpsc::channel(nthreads);
+    let (mut buf_snd, mut buf_rcv) = futures::channel::mpsc::unbounded();
+    runtime.spawn(async move {
+        loop {
             let Some(chrom) = remaining_chroms.pop() else {
-                break;
+                return Ok::<_, BBIReadError>(());
             };
 
             let bigbed = bigbed.reopen()?;
             let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
                 TempFileBuffer::new(inmemory);
             let writer = io::BufWriter::new(file);
-            let handle = runtime
-                .spawn(file_future(bigbed, chrom, writer))
-                .map(|f| f.unwrap());
-            chrom_files.push_back((handle, buf));
+            let handle = tokio::task::spawn(file_future(bigbed, chrom, writer));
+
+            handle_snd.send(handle).await.unwrap();
+            buf_snd.send(buf).await.unwrap();
         }
+    });
 
-        let Some((f, mut buf)) = chrom_files.pop_front() else {
-            break;
-        };
+    let data_handle = runtime.spawn(async move {
+        loop {
+            let next = handle_rcv.next().await;
+            let Some(handle) = next else {
+                return Ok::<_, BBIReadError>(());
+            };
+            handle.await.unwrap()?;
+        }
+    });
+    runtime.block_on(async move {
+        loop {
+            let next = buf_rcv.next().await;
+            let Some(mut buf) = next else {
+                data_handle.await.unwrap()?;
+                return Ok::<_, BBIReadError>(());
+            };
 
-        buf.switch(out_file);
-        runtime.block_on(f).unwrap();
-        out_file = buf.await_real_file();
-    }
+            buf.switch(out_file);
+            while !buf.is_real_file_ready() {
+                tokio::task::yield_now().await;
+            }
+            out_file = buf.await_real_file();
+        }
+    })?;
 
     Ok(())
 }
