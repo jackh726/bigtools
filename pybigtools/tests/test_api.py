@@ -246,8 +246,8 @@ def test_values(bw, bb):
     assert len(bw.values("chr17", 100000, 110000, 10)) == 10
     assert len(bb.values("chr21", 10_148_000, 10_158_000, 10)) == 10
 
-    assert bw.values("chr17", 100000, 110000, 10)[0] == 0.37435242314338685
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10)[0] == 0.175
+    assert bw.values("chr17", 100000, 110000, 10)[0] == 0.44886381671868925
+    assert bb.values("chr21", 10_148_000, 10_158_000, 10)[0] == 1.0
 
     assert bw.values("chr17", 100000, 110000, 10, "max")[0] == 1.1978399753570557
     assert bb.values("chr21", 10_148_000, 10_158_000, 10, "max")[0] == 1.0
@@ -257,11 +257,11 @@ def test_values(bw, bb):
 
     assert (
         bw.values("chr17", 100000, 110000, 10, "mean", exact=True)[0]
-        == 0.37885534041374924
+        == 0.4542629980980206
     )
     assert (
         bb.values("chr21", 10_148_000, 10_158_000, 10, "mean", exact=True)[0]
-        == 0.175
+        == 1.0
     )
 
     assert list(bw.values("chr17", 59890, 59900, 10, "mean", exact=True)) == [

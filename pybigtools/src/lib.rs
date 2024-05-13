@@ -482,7 +482,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
-    let mut bin_data: VecDeque<(usize, i32, i32, Option<f64>)> = VecDeque::new();
+    let mut bin_data: VecDeque<(usize, i32, i32, Option<(i32, f64)>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
     for interval in iter {
         let interval = interval?;
@@ -498,13 +498,13 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
 
                 match summary {
                     Summary::Min => {
-                        v[bin] = front.3.unwrap_or(missing);
+                        v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
                     }
                     Summary::Max => {
-                        v[bin] = front.3.unwrap_or(missing);
+                        v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
                     }
                     Summary::Mean => {
-                        v[bin] = front.3.map(|v| v / bin_size).unwrap_or(missing);
+                        v[bin] = front.3.map(|(c, v)| v / (c as f64)).unwrap_or(missing);
                     }
                 }
             } else {
@@ -534,13 +534,13 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
-            let v = data.get_or_insert_with(|| {
+            let (c, v) = data.get_or_insert_with(|| {
                 match summary {
                     // min & max are defined for NAN and we are about to set it
                     // can't use 0.0 because it may be either below or above the real value
-                    Summary::Min | Summary::Max => f64::NAN,
+                    Summary::Min | Summary::Max => (0, f64::NAN),
                     // addition is not defined for NAN
-                    Summary::Mean => 0.0,
+                    Summary::Mean => (0, 0.0),
                 }
             });
             match summary {
@@ -555,6 +555,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
                     let overlap_end = (*bin_end).min(interval_end);
                     let overlap_size: i32 = overlap_end - overlap_start;
                     *v += (overlap_size as f64) * interval.value as f64;
+                    *c += overlap_size;
                 }
             }
         }
@@ -564,13 +565,13 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
 
         match summary {
             Summary::Min => {
-                v[bin] = front.3.unwrap_or(missing);
+                v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
             }
             Summary::Max => {
-                v[bin] = front.3.unwrap_or(missing);
+                v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
             }
             Summary::Mean => {
-                v[bin] = front.3.map(|v| v / bin_size).unwrap_or(missing);
+                v[bin] = front.3.map(|(c, v)| v / (c as f64)).unwrap_or(missing);
             }
         }
     }
@@ -589,7 +590,8 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
-    let mut bin_data: VecDeque<(usize, i32, i32, Option<f64>)> = VecDeque::new();
+    // (bin, bin_start, bin_end, Option<(covered_bases, value)>)
+    let mut bin_data: VecDeque<(usize, i32, i32, Option<(i32, f64)>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
     for interval in iter {
         let interval = interval?;
@@ -605,13 +607,13 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
 
                 match summary {
                     Summary::Min => {
-                        v[bin] = front.3.unwrap_or(missing);
+                        v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
                     }
                     Summary::Max => {
-                        v[bin] = front.3.unwrap_or(missing);
+                        v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
                     }
                     Summary::Mean => {
-                        v[bin] = front.3.map(|v| v / bin_size).unwrap_or(missing);
+                        v[bin] = front.3.map(|(c, v)| v / (c as f64)).unwrap_or(missing);
                     }
                 }
             } else {
@@ -641,37 +643,37 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+            let overlap_start = (*bin_start).max(interval_start);
+            let overlap_end = (*bin_end).min(interval_end);
+            let overlap_size: i32 = overlap_end - overlap_start;
             match data.as_mut() {
-                Some(v) => match summary {
+                Some((c, v)) => match summary {
                     Summary::Min => {
                         *v = v.min(interval.summary.min_val as f64);
+                        *c += overlap_size;
                     }
                     Summary::Max => {
                         *v = v.max(interval.summary.max_val as f64);
+                        *c += overlap_size;
                     }
                     Summary::Mean => {
-                        let overlap_start = (*bin_start).max(interval_start);
-                        let overlap_end = (*bin_end).min(interval_end);
-                        let overlap_size = overlap_end - overlap_start;
                         let zoom_mean =
                             (interval.summary.sum as f64) / (interval.summary.bases_covered as f64);
                         *v += (overlap_size as f64) * zoom_mean;
+                        *c += overlap_size;
                     }
                 },
                 None => match summary {
                     Summary::Min => {
-                        *data = Some(interval.summary.min_val as f64);
+                        *data = Some((overlap_size, interval.summary.min_val as f64));
                     }
                     Summary::Max => {
-                        *data = Some(interval.summary.max_val as f64);
+                        *data = Some((overlap_size, interval.summary.max_val as f64));
                     }
                     Summary::Mean => {
-                        let overlap_start = (*bin_start).max(interval_start);
-                        let overlap_end = (*bin_end).min(interval_end);
-                        let overlap_size = overlap_end - overlap_start;
                         let zoom_mean =
                             (interval.summary.sum as f64) / (interval.summary.bases_covered as f64);
-                        *data = Some((overlap_size as f64) * zoom_mean);
+                        *data = Some((overlap_size, (overlap_size as f64) * zoom_mean));
                     }
                 },
             }
@@ -682,13 +684,13 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
 
         match summary {
             Summary::Min => {
-                v[bin] = front.3.unwrap_or(missing);
+                v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
             }
             Summary::Max => {
-                v[bin] = front.3.unwrap_or(missing);
+                v[bin] = front.3.map(|v| v.1).unwrap_or(missing);
             }
             Summary::Mean => {
-                v[bin] = front.3.map(|v| v / bin_size).unwrap_or(missing);
+                v[bin] = front.3.map(|(c, v)| v / (c as f64)).unwrap_or(missing);
             }
         }
     }
@@ -727,7 +729,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
-    let mut bin_data: VecDeque<(usize, i32, i32, Vec<f64>)> = VecDeque::new();
+    let mut bin_data: VecDeque<(usize, i32, i32, i32, Vec<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
     for interval in iter {
         let interval = interval?;
@@ -744,20 +746,23 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                 match summary {
                     Summary::Min => {
                         v[bin] = front
-                            .3
+                            .4
                             .into_iter()
                             .reduce(|min, v| min.min(v))
                             .unwrap_or(missing);
                     }
                     Summary::Max => {
                         v[bin] = front
-                            .3
+                            .4
                             .into_iter()
                             .reduce(|max, v| max.max(v))
                             .unwrap_or(missing);
                     }
                     Summary::Mean => {
-                        v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                        v[bin] = (front.3 != 0)
+                            .then(|| front.3 as f64)
+                            .map(|c| front.4.into_iter().sum::<f64>() / c)
+                            .unwrap_or(missing);
                     }
                 }
             } else {
@@ -776,6 +781,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                 bin,
                 bin_start,
                 bin_end,
+                0,
                 vec![missing; (bin_end - bin_start) as usize],
             ));
         }
@@ -791,7 +797,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
-        for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+        for (_bin, bin_start, bin_end, covered, data) in bin_data.iter_mut() {
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
 
@@ -801,6 +807,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                 // If NAN, then 0.0 + 1.0, else i + 1.0
                 *i = (*i).max(0.0) + 1.0;
             }
+            *covered += overlap_end - overlap_start;
         }
     }
     while let Some(front) = bin_data.pop_front() {
@@ -809,20 +816,23 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
         match summary {
             Summary::Min => {
                 v[bin] = front
-                    .3
+                    .4
                     .into_iter()
                     .reduce(|min, v| min.min(v))
                     .unwrap_or(missing);
             }
             Summary::Max => {
                 v[bin] = front
-                    .3
+                    .4
                     .into_iter()
                     .reduce(|max, v| max.max(v))
                     .unwrap_or(missing);
             }
             Summary::Mean => {
-                v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                v[bin] = (front.3 != 0)
+                    .then(|| front.3 as f64)
+                    .map(|c| front.4.into_iter().sum::<f64>() / c)
+                    .unwrap_or(missing);
             }
         }
     }
@@ -841,7 +851,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
     assert_eq!(v.len(), bins);
     v.fill(missing);
 
-    let mut bin_data: VecDeque<(usize, i32, i32, Vec<f64>)> = VecDeque::new();
+    let mut bin_data: VecDeque<(usize, i32, i32, i32, Vec<f64>)> = VecDeque::new();
     let bin_size = (end - start) as f64 / bins as f64;
     for interval in iter {
         let interval = interval?;
@@ -858,20 +868,23 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                 match summary {
                     Summary::Min => {
                         v[bin] = front
-                            .3
+                            .4
                             .into_iter()
                             .reduce(|min, v| min.min(v))
                             .unwrap_or(missing);
                     }
                     Summary::Max => {
                         v[bin] = front
-                            .3
+                            .4
                             .into_iter()
                             .reduce(|max, v| max.max(v))
                             .unwrap_or(missing);
                     }
                     Summary::Mean => {
-                        v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                        v[bin] = (front.3 != 0)
+                            .then(|| front.3 as f64)
+                            .map(|c| front.4.into_iter().sum::<f64>() / c)
+                            .unwrap_or(missing);
                     }
                 }
             } else {
@@ -890,6 +903,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                 bin,
                 bin_start,
                 bin_end,
+                0,
                 vec![missing; (bin_end - bin_start) as usize],
             ));
         }
@@ -905,7 +919,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
-        for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+        for (_bin, bin_start, bin_end, c, data) in bin_data.iter_mut() {
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
 
@@ -920,6 +934,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                     Summary::Max => *i = i.max(interval.summary.max_val),
                 }
             }
+            *c += overlap_end - overlap_start;
         }
     }
     while let Some(front) = bin_data.pop_front() {
@@ -928,20 +943,23 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
         match summary {
             Summary::Min => {
                 v[bin] = front
-                    .3
+                    .4
                     .into_iter()
                     .reduce(|min, v| min.min(v))
                     .unwrap_or(missing);
             }
             Summary::Max => {
                 v[bin] = front
-                    .3
+                    .4
                     .into_iter()
                     .reduce(|max, v| max.max(v))
                     .unwrap_or(missing);
             }
             Summary::Mean => {
-                v[bin] = front.3.into_iter().sum::<f64>() / bin_size;
+                v[bin] = (front.3 != 0)
+                    .then(|| front.3 as f64)
+                    .map(|c| front.4.into_iter().sum::<f64>() / c)
+                    .unwrap_or(missing);
             }
         }
     }

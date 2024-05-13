@@ -7,3 +7,4 @@ dist/
 **/workdir
 .vscode
 pybigtools/html/
+pybigtools/tests/data/
