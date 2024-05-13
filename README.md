@@ -98,6 +98,35 @@ See the `pybigtools` 🐍 [API Documentation](https://bigtools.readthedocs.io/en
 
 The `pybigtools` package can be used as a dpendency either through [pypi](https://pypi.org/project/pybigtools/) or [conda](https://anaconda.org/bioconda/pybigtools/).
 
+## How to build from source
+
+In order to build the bigtools binaries, you can run
+
+```
+cargo build --release
+```
+
+and the binaries can be found in `target/release/`.
+
+Otherwise, you can install the binaries from source by running
+
+```
+cargo install --path bigtools/
+```
+
+Building the python wheels for pybigtools requires [maturin](https://pypi.org/project/maturin/). To build the pybigtools wheel for installation (and install), you can run
+
+```
+maturin build --release -m pybigtools/Cargo.toml
+pip install target/wheels/pybigtools*.whl
+```
+
+or
+
+```
+maturin develop --release -m pybigtools/Cargo.toml
+```
+
 ## Benchmarks
 [Benchmarks]: #Benchmarks
 
