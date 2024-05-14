@@ -13,7 +13,8 @@ use std::io::{BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::bed::bedparser::{
-    BedChromData, BedFileStream, BedParser, BedValueError, Parser, StateValue, StreamingBedValues,
+    BedChromData, BedFileStream, BedLineParser, BedParser, BedValueError, StateValue,
+    StreamingBedValues,
 };
 use crate::utils::chromvalues::ChromValues;
 use crate::utils::streaming_linereader::StreamingLineReader;
@@ -72,29 +73,33 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
     }
 }
 
-pub struct BedParserParallelStreamingIterator<V, E, ChromError> {
+pub struct BedParserParallelStreamingIterator<V, E, ChromError, P> {
+    _v: std::marker::PhantomData<V>,
     allow_out_of_order_chroms: bool,
     last_chrom: Option<String>,
 
     chrom_indices: Vec<(u64, String)>,
-    parse_fn: Parser<V>,
+    parse_fn: P,
     path: PathBuf,
 
     queued_reads: VecDeque<Result<ChromDataState<ChromProcessingKey, ChromError>, E>>,
 }
 
-impl<V, E, ChromError> BedParserParallelStreamingIterator<V, E, ChromError> {
+impl<V, E, ChromError, P: BedLineParser<V>>
+    BedParserParallelStreamingIterator<V, E, ChromError, P>
+{
     pub fn new(
         mut chrom_indices: Vec<(u64, String)>,
         allow_out_of_order_chroms: bool,
         path: PathBuf,
-        parse_fn: Parser<V>,
+        parse_fn: P,
     ) -> Self {
         // For speed, we `pop` and go in reverse order. We want forward order,
         // so reverse here.
         chrom_indices.reverse();
 
         BedParserParallelStreamingIterator {
+            _v: std::marker::PhantomData,
             allow_out_of_order_chroms,
             last_chrom: None,
 
@@ -107,16 +112,16 @@ impl<V, E, ChromError> BedParserParallelStreamingIterator<V, E, ChromError> {
     }
 }
 
-impl<V> ChromData
-    for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError>
+impl<V, P: BedLineParser<V>> ChromData
+    for BedParserParallelStreamingIterator<V, ProcessChromError<BedValueError>, BedValueError, P>
 {
-    type Values = BedChromData<BedFileStream<V, BufReader<File>>>;
+    type Values = BedChromData<BedFileStream<V, BufReader<File>, P>>;
 
     fn advance<
         State,
         F: FnMut(
             String,
-            BedChromData<BedFileStream<V, BufReader<File>>>,
+            BedChromData<BedFileStream<V, BufReader<File>, P>>,
             &mut State,
         ) -> Result<ChromProcessingKey, ProcessChromError<BedValueError>>,
     >(
@@ -138,10 +143,10 @@ impl<V> ChromData
                 Err(err) => return Ok(ChromDataState::Error(err.into())),
             };
             file.seek(SeekFrom::Start(curr.0))?;
-            let mut parser = BedParser::new(BedFileStream {
-                bed: StreamingLineReader::new(BufReader::new(file)),
-                parse: _self.parse_fn,
-            });
+            let mut parser = BedParser::new(BedFileStream::new(
+                StreamingLineReader::new(BufReader::new(file)),
+                _self.parse_fn.clone(),
+            ));
 
             Ok(match parser.next_chrom() {
                 Some(Ok((chrom, group))) => {
@@ -208,7 +213,7 @@ impl<S: StreamingBedValues> ChromValues for BedChromData<S> {
 #[cfg(all(test, feature = "write"))]
 mod tests {
     use super::*;
-    use crate::bed::bedparser::parse_bedgraph;
+    use crate::bed::bedparser::bedgraph_parser;
     use crate::ProcessChromError;
     use std::collections::BTreeMap;
     use std::fs::File;
@@ -228,7 +233,7 @@ mod tests {
             chrom_indices,
             true,
             PathBuf::from(dir.clone()),
-            parse_bedgraph,
+            bedgraph_parser(' '),
         );
 
         let mut chrom_ids = crate::utils::idmap::IdMap::default();

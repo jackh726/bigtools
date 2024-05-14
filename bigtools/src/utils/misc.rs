@@ -120,7 +120,7 @@ pub fn bigwig_average_over_bed<R: BBIFileRead>(
                 }
                 Ok(line) => line,
             };
-            let (chrom, entry) = match parse_bed(line) {
+            let (chrom, entry) = match parse_bed(line, ' ') {
                 None => return None,
                 Some(Err(e)) => {
                     error = true;

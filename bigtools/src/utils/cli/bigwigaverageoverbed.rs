@@ -6,7 +6,7 @@ use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
 
-use crate::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
+use crate::bed::bedparser::{bed_parser, parse_bed, BedFileStream, StreamingBedValues};
 use crate::utils::file_view::FileView;
 use crate::utils::misc::{stats_for_bed_item, Name};
 use crate::utils::reopen::{Reopen, ReopenableFile};
@@ -54,6 +54,9 @@ pub struct BigWigAverageOverBedArgs {
     #[arg(short = 't', long)]
     #[arg(default_value_t = 6)]
     pub nthreads: usize,
+
+    #[arg(long)]
+    pub tab: bool,
 }
 
 pub fn bigwigaverageoverbed(
@@ -104,15 +107,16 @@ pub fn bigwigaverageoverbed(
             bedinpath: String,
             name: Name,
             inbigwig: &mut BigWigRead<R>,
+            tab: bool,
         ) -> Result<File, Box<dyn Error + Send + Sync>> {
             let mut tmp = tempfile::tempfile()?;
 
             let chrom_bed_file = File::open(bedinpath)?;
             let chrom_bed_file = FileView::new(chrom_bed_file, start, end)?;
-            let mut bed_stream = BedFileStream {
-                bed: StreamingLineReader::new(BufReader::new(chrom_bed_file)),
-                parse: parse_bed,
-            };
+            let mut bed_stream = BedFileStream::new(
+                StreamingLineReader::new(BufReader::new(chrom_bed_file)),
+                bed_parser(if tab { '\t' } else { ' ' }),
+            );
 
             loop {
                 let (chrom, entry) = match bed_stream.next() {
@@ -164,7 +168,8 @@ pub fn bigwigaverageoverbed(
                         Err(_) => break,
                     };
 
-                    let result = process_chunk(start, end, bedinpath, name, &mut inbigwig);
+                    let result =
+                        process_chunk(start, end, bedinpath, name, &mut inbigwig, args.tab);
                     result_sender.send(result).unwrap();
                 }
             };
@@ -194,8 +199,14 @@ pub fn bigwigaverageoverbed(
                                 }
                             };
 
-                            let result =
-                                process_chunk(start, chrom, bedinpath, name, &mut inbigwig);
+                            let result = process_chunk(
+                                start,
+                                chrom,
+                                bedinpath,
+                                name,
+                                &mut inbigwig,
+                                args.tab,
+                            );
                             result_sender.send(result).unwrap();
                         }
                     }
@@ -227,7 +238,14 @@ pub fn bigwigaverageoverbed(
                 Some(Ok(line)) => line,
             };
 
-            let (chrom, entry) = parse_bed(line).ok_or_else(|| {
+            let parse_line = |line| {
+                if args.tab {
+                    parse_bed(line, '\t')
+                } else {
+                    parse_bed(line, ' ')
+                }
+            };
+            let (chrom, entry) = parse_line(line).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Invalid bed: A minimum of 3 columns must be specified (chrom, start, end).",

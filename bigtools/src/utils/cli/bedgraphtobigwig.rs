@@ -4,7 +4,7 @@ use std::{collections::HashMap, error::Error, fs::File, path::PathBuf};
 use clap::Parser;
 use tokio::runtime;
 
-use crate::bed::bedparser::{parse_bedgraph, BedParser};
+use crate::bed::bedparser::{bedgraph_parser, BedParser};
 use crate::bed::indexer::index_chroms;
 use crate::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use crate::{BigWigWrite, InputSortType};
@@ -38,6 +38,10 @@ pub struct BedGraphToBigWigArgs {
     #[arg(long)]
     #[arg(default_value_t = false)]
     pub single_pass: bool,
+
+    #[arg(long)]
+    #[arg(default_value_t = false)]
+    pub tab: bool,
 
     #[command(flatten)]
     pub write_args: BBIWriteArgs,
@@ -87,6 +91,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         .collect();
 
     let runtime = if nthreads == 1 {
+        outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
     } else {
         runtime::Builder::new_multi_thread()
@@ -95,10 +100,11 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
             .unwrap()
     };
 
+    let sep = if args.tab { '\t' } else { ' ' };
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedgraphpath == "-" || bedgraphpath == "stdin" {
         let stdin = std::io::stdin().lock();
-        let vals_iter = BedParser::from_bedgraph_file(stdin);
+        let vals_iter = BedParser::from_bedgraph_file_with_sep(stdin, sep);
 
         let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
         outb.write_singlethreaded(chrom_map, chsi, runtime)?;
@@ -138,7 +144,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
                     chrom_indices,
                     allow_out_of_order_chroms,
                     PathBuf::from(bedgraphpath),
-                    parse_bedgraph,
+                    bedgraph_parser(sep),
                 );
                 outb.write(chrom_map, chsi, runtime)?;
             } else {
@@ -148,7 +154,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
                             PathBuf::from(bedgraphpath.clone()),
-                            parse_bedgraph,
+                            bedgraph_parser(sep),
                         );
 
                         Ok(chsi)

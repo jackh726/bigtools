@@ -18,8 +18,8 @@ use thiserror::Error;
 use crate::bbi::{BedEntry, Value};
 use crate::utils::streaming_linereader::StreamingLineReader;
 
-pub fn parse_bed<'a>(s: &'a str) -> Option<Result<(&'a str, BedEntry), BedValueError>> {
-    let mut split = s.splitn(4, '\t');
+pub fn parse_bed<'a>(s: &'a str, sep: char) -> Option<Result<(&'a str, BedEntry), BedValueError>> {
+    let mut split = s.trim_end().splitn(4, sep);
     let chrom = match split.next() {
         Some(chrom) => chrom,
         None => return None,
@@ -46,8 +46,11 @@ pub fn parse_bed<'a>(s: &'a str) -> Option<Result<(&'a str, BedEntry), BedValueE
     }
 }
 
-pub fn parse_bedgraph<'a>(s: &'a str) -> Option<Result<(&'a str, Value), BedValueError>> {
-    let mut split = s.splitn(5, '\t');
+pub fn parse_bedgraph<'a>(
+    s: &'a str,
+    sep: char,
+) -> Option<Result<(&'a str, Value), BedValueError>> {
+    let mut split = s.trim_end().splitn(5, sep);
     let chrom = match split.next() {
         Some(chrom) => chrom,
         None => return None,
@@ -96,15 +99,61 @@ pub enum BedValueError {
     IoError(#[from] io::Error),
 }
 
-pub type Parser<V> = for<'a> fn(&'a str) -> Option<Result<(&'a str, V), BedValueError>>;
-
-/// Parses a bed-like file
-pub struct BedFileStream<V, B> {
-    pub bed: StreamingLineReader<B>,
-    pub parse: Parser<V>,
+pub trait BedLineParser<V>: Clone {
+    fn parse_bed<'a>(&mut self, s: &'a str) -> Option<Result<(&'a str, V), BedValueError>>;
 }
 
-impl<V, B: BufRead> StreamingBedValues for BedFileStream<V, B> {
+pub type ParserFn<V> = for<'a> fn(&'a str) -> Option<Result<(&'a str, V), BedValueError>>;
+
+impl<V> BedLineParser<V> for ParserFn<V> {
+    fn parse_bed<'a>(&mut self, s: &'a str) -> Option<Result<(&'a str, V), BedValueError>> {
+        self(s)
+    }
+}
+
+pub struct SepBedLineParser<V>(
+    char,
+    for<'a> fn(&'a str, char) -> Option<Result<(&'a str, V), BedValueError>>,
+);
+
+impl<V> Clone for SepBedLineParser<V> {
+    fn clone(&self) -> Self {
+        SepBedLineParser(self.0, self.1)
+    }
+}
+
+impl<V> BedLineParser<V> for SepBedLineParser<V> {
+    fn parse_bed<'a>(&mut self, s: &'a str) -> Option<Result<(&'a str, V), BedValueError>> {
+        (self.1)(s, self.0)
+    }
+}
+
+pub fn bed_parser(sep: char) -> SepBedLineParser<BedEntry> {
+    SepBedLineParser(sep, parse_bed)
+}
+
+pub fn bedgraph_parser(sep: char) -> SepBedLineParser<Value> {
+    SepBedLineParser(sep, parse_bedgraph)
+}
+
+/// Parses a bed-like file
+pub struct BedFileStream<V, B, P> {
+    _v: std::marker::PhantomData<V>,
+    bed: StreamingLineReader<B>,
+    parse: P,
+}
+
+impl<V, B, P: BedLineParser<V>> BedFileStream<V, B, P> {
+    pub fn new(bed: StreamingLineReader<B>, parse: P) -> Self {
+        BedFileStream {
+            _v: std::marker::PhantomData,
+            bed,
+            parse,
+        }
+    }
+}
+
+impl<V, B: BufRead, P: BedLineParser<V>> StreamingBedValues for BedFileStream<V, B, P> {
     type Value = V;
 
     fn next(&mut self) -> Option<Result<(&str, Self::Value), BedValueError>> {
@@ -112,7 +161,7 @@ impl<V, B: BufRead> StreamingBedValues for BedFileStream<V, B> {
             Ok(line) => line.trim_end(),
             Err(e) => return Some(Err(e.into())),
         };
-        match (self.parse)(line) {
+        match self.parse.parse_bed(line) {
             None => None,
             Some(Ok(v)) => Some(Ok(v)),
             Some(Err(e)) => Some(Err(e.into())),
@@ -256,21 +305,37 @@ impl<S: StreamingBedValues> BedParser<S> {
     }
 }
 
-impl<R: Read> BedParser<BedFileStream<BedEntry, BufReader<R>>> {
+impl<R: Read> BedParser<BedFileStream<BedEntry, BufReader<R>, SepBedLineParser<BedEntry>>> {
+    /// Builds a `BedParser` for general bed files, using space as a separator.
     pub fn from_bed_file(file: R) -> Self {
-        BedParser::new(BedFileStream {
-            bed: StreamingLineReader::new(BufReader::new(file)),
-            parse: parse_bed,
-        })
+        Self::from_bed_file_with_sep(file, ' ')
     }
 }
 
-impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>>> {
+impl<R: Read> BedParser<BedFileStream<BedEntry, BufReader<R>, SepBedLineParser<BedEntry>>> {
+    /// Builds a `BedParser` for general bed files, using the given separator.
+    pub fn from_bed_file_with_sep(file: R, sep: char) -> Self {
+        BedParser::new(BedFileStream::new(
+            StreamingLineReader::new(BufReader::new(file)),
+            SepBedLineParser(sep, parse_bed),
+        ))
+    }
+}
+
+impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>, SepBedLineParser<Value>>> {
+    /// Builds a `BedParser` for bedGraph files, using space as a separator.
     pub fn from_bedgraph_file(file: R) -> Self {
-        BedParser::new(BedFileStream {
-            bed: StreamingLineReader::new(BufReader::new(file)),
-            parse: parse_bedgraph,
-        })
+        Self::from_bedgraph_file_with_sep(file, ' ')
+    }
+}
+
+impl<R: Read> BedParser<BedFileStream<Value, BufReader<R>, SepBedLineParser<Value>>> {
+    /// Builds a `BedParser` for bedGraph files, using the given separator.
+    pub fn from_bedgraph_file_with_sep(file: R, sep: char) -> Self {
+        BedParser::new(BedFileStream::new(
+            StreamingLineReader::new(BufReader::new(file)),
+            SepBedLineParser(sep, parse_bedgraph),
+        ))
     }
 }
 
