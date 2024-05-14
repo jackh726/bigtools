@@ -28,7 +28,7 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
         if s.is_empty() {
             return Ok(None);
         }
-        let mut split = s.splitn(4, '\t');
+        let mut split = s.trim_end().splitn(4, '\t');
         let chrom = split
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Empty file".to_string()))?;

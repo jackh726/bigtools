@@ -87,6 +87,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         .collect();
 
     let runtime = if nthreads == 1 {
+        outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
     } else {
         runtime::Builder::new_multi_thread()
