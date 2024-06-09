@@ -1,6 +1,7 @@
 # Bigtools <a href="https://github.com/jackh726/bigtools"><img align="right" src="https://github.com/jackh726/bigtools/raw/master/assets/bigtools-logo.svg" height="38"></img></a>
 
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/jackh726/bigtools/blob/master/LICENSE)
+[![Paper](https://img.shields.io/badge/DOI-10.1093%2Fbioinformatics%2Fbtae350-blue)](https://doi.org/10.1093/bioinformatics/btae350)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.10606493.svg)](https://doi.org/10.5281/zenodo.10606493)
 
 <table>
@@ -55,6 +56,12 @@ Bigtools is written in Rust and published to `crates.io`, so binaries can be ins
 
 ## Library
 
+To use `bigtools` in your Rust project, add `bigtools` to your `Cargo.toml` or run:
+
+```sh
+cargo add bigtools
+```
+
 See the `bigtools` 🦀 [Documentation](https://docs.rs/bigtools).
 
 ### Example
@@ -70,6 +77,18 @@ for interval in chr1 {
 ```
 
 ## Binaries
+
+The `bigtools` CLI binaries can be installed through [crates.io](https://crates.io/crates/bigtools) or [conda](https://anaconda.org/bioconda/bigtools/).
+
+```sh
+cargo install bigtools
+```
+
+```sh
+conda install -c bioconda bigtools
+```
+
+Additionally, pre-built binaries can be downloaded through [Github releases](https://github.com/jackh726/bigtools/releases).
 
 The following binaries are available:
 
@@ -88,15 +107,19 @@ The following binaries are available:
 
 Renaming the `bigtools` binary to any of the subcommands (case-insensitive) allows you to run that subcommand directly.
 
-The `bigtools` CLI binaries can be installed through `crates.io` (`cargo install bigtools`) or [`conda`](https://anaconda.org/bioconda/bigtools/). Additionally, pre-built binaries can be downloaded through [Github releases](https://github.com/jackh726/bigtools/releases).
-
 ## Python wrapper
 
-Also included in this repo is a Python wrapper, `pybigtools` written using [`PyO3`](https://pyo3.rs/).
+The `pybigtools` package is a Python wrapper written using [`PyO3`](https://pyo3.rs/). It can be installed or used as a dependency either through [PyPI](https://pypi.org/project/pybigtools/) or [conda](https://anaconda.org/bioconda/pybigtools/).
+
+```sh
+pip install pybigtools
+```
+
+```sh
+conda install -c bioconda pybigtools
+```
 
 See the `pybigtools` 🐍 [API Documentation](https://bigtools.readthedocs.io/en/latest).
-
-The `pybigtools` package can be used as a dpendency either through [pypi](https://pypi.org/project/pybigtools/) or [conda](https://anaconda.org/bioconda/pybigtools/).
 
 ## How to build from source
 
