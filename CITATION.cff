@@ -28,7 +28,10 @@ identifiers:
     description: Zenodo
   - type: doi
     value: 10.1101/2024.02.06.579187
-    description: bioRxiv
+    description: bioRxiv preprint
+  - type: doi
+    value: 10.1093/bioinformatics/btae350
+    description: Publication
 preferred-citation:
   type: article
   title: "Bigtools: a high-performance BigWig and BigBed library in Rust"
@@ -39,6 +42,7 @@ preferred-citation:
   - given-names: Nezar
     family-names: Abdennur
     orcid: "https://orcid.org/0000-0001-5814-0864"
-  journal: bioRxiv
+  journal: Bioinformatics
   year: 2024
-  doi: "10.1101/2024.02.06.579187"
+  doi: "10.1093/bioinformatics/btae350"
+  url: https://doi.org/10.1093/bioinformatics/btae350
