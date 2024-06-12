@@ -676,8 +676,6 @@ async fn encode_section(
     items_in_section: Vec<Value>,
     chrom_id: u32,
 ) -> io::Result<(SectionData, usize)> {
-    use libdeflater::{CompressionLvl, Compressor};
-
     let mut bytes = Vec::with_capacity(24 + (items_in_section.len() * 24));
 
     let start = items_in_section[0].start;
@@ -698,6 +696,8 @@ async fn encode_section(
     }
 
     let (out_bytes, uncompress_buf_size) = if compress {
+        /*
+        use libdeflater::{CompressionLvl, Compressor};
         let mut compressor = Compressor::new(CompressionLvl::default());
         let max_sz = compressor.zlib_compress_bound(bytes.len());
         let mut compressed_data = vec![0; max_sz];
@@ -705,6 +705,14 @@ async fn encode_section(
             .zlib_compress(&bytes, &mut compressed_data)
             .unwrap();
         compressed_data.resize(actual_sz, 0);
+        */
+
+        use brotlic::{CompressorWriter};
+
+        let mut compressor = CompressorWriter::new(Vec::new());
+        compressor.write_all(&bytes)?;
+        let compressed_data = compressor.into_inner()?;
+
         (compressed_data, bytes.len())
     } else {
         (bytes, 0)
