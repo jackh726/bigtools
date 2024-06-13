@@ -1175,24 +1175,21 @@ fn bigWigAverageOverBed(
             Some(names) => match names.extract::<bool>(py) {
                 Ok(b) => {
                     if b {
-                        (Name::Column(4), true)
+                        (Name::Column(3), true)
                     } else {
                         (Name::None, true)
                     }
                 }
                 Err(_) => match names.extract::<isize>(py) {
-                    Ok(col) => {
-                        if col < 0 {
+                    Ok(col) => match col {
+                        0 => (Name::None, true),
+                        1.. => (Name::Column((col - 1) as usize), true),
+                        _ => {
                             return Err(PyErr::new::<exceptions::PyException, _>(
                                 "Invalid names argument. Must be >= 0.",
                             ));
                         }
-                        if col == 0 {
-                            (Name::None, true)
-                        } else {
-                            (Name::Column(col as usize), true)
-                        }
-                    }
+                    },
                     Err(_) => {
                         return Err(PyErr::new::<exceptions::PyException, _>("Invalid names argument. Should be either `None`, a `bool`, or an `int`"));
                     }
