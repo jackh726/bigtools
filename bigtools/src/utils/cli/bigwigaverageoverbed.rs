@@ -49,6 +49,10 @@ pub struct BigWigAverageOverBedArgs {
     #[arg(long)]
     pub end: Option<u32>,
 
+    /// If set, include two additional columns containing the min and max observed in the area
+    #[arg(long)]
+    pub min_max: bool,
+
     /// Set the number of threads to use. This tool will nearly always benefit from more cores.
     /// Note: for parts of the runtime, the actual usage may be nthreads+1
     #[arg(short = 't', long)]
@@ -62,6 +66,7 @@ pub fn bigwigaverageoverbed(
     let bigwigpath = args.bigwig;
     let bedinpath = args.bedin;
     let bedoutpath = args.output;
+    let add_min_max = args.min_max;
 
     let reopen = ReopenableFile {
         path: bigwigpath.to_string(),
@@ -103,6 +108,7 @@ pub fn bigwigaverageoverbed(
             end: u64,
             bedinpath: String,
             name: Name,
+            add_min_max: bool,
             inbigwig: &mut BigWigRead<R>,
         ) -> Result<File, Box<dyn Error + Send + Sync>> {
             let mut tmp = tempfile::tempfile()?;
@@ -130,10 +136,22 @@ pub fn bigwigaverageoverbed(
                     }
                 };
 
-                let stats = format!(
-                    "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
-                    entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
-                );
+                let stats = match add_min_max {
+                    true => format!(
+                        "{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+                        entry.size,
+                        entry.bases,
+                        entry.sum,
+                        entry.mean0,
+                        entry.mean,
+                        entry.min,
+                        entry.max
+                    ),
+                    false => format!(
+                        "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
+                        entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
+                    ),
+                };
                 writeln!(&mut tmp, "{}\t{}", entry.name, stats)?
             }
 
@@ -164,7 +182,8 @@ pub fn bigwigaverageoverbed(
                         Err(_) => break,
                     };
 
-                    let result = process_chunk(start, end, bedinpath, name, &mut inbigwig);
+                    let result =
+                        process_chunk(start, end, bedinpath, name, add_min_max, &mut inbigwig);
                     result_sender.send(result).unwrap();
                 }
             };
@@ -194,8 +213,14 @@ pub fn bigwigaverageoverbed(
                                 }
                             };
 
-                            let result =
-                                process_chunk(start, chrom, bedinpath, name, &mut inbigwig);
+                            let result = process_chunk(
+                                start,
+                                chrom,
+                                bedinpath,
+                                name,
+                                add_min_max,
+                                &mut inbigwig,
+                            );
                             result_sender.send(result).unwrap();
                         }
                     }
@@ -239,10 +264,22 @@ pub fn bigwigaverageoverbed(
                 Err(e) => return Err(e.into()),
             };
 
-            let stats = format!(
-                "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
-                entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
-            );
+            let stats = match add_min_max {
+                true => format!(
+                    "{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+                    entry.size,
+                    entry.bases,
+                    entry.sum,
+                    entry.mean0,
+                    entry.mean,
+                    entry.min,
+                    entry.max
+                ),
+                false => format!(
+                    "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
+                    entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
+                ),
+            };
             writeln!(&mut bedoutwriter, "{}\t{}", entry.name, stats)?
         }
     }
