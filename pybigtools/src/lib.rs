@@ -1614,6 +1614,7 @@ impl BBIRead {
         py: Python,
         bed: String,
         names: Option<PyObject>,
+        stats: Option<String>,
     ) -> PyResult<PyObject> {
         let (name, usename) = {
             match names {
@@ -1638,6 +1639,24 @@ impl BBIRead {
                 None => (Name::None, false),
             }
         };
+        let stats = {
+            match stats {
+                Some(stats) => match stats.as_ref() {
+                    "size" => BigWigAverageOverBedStatistics::Size,
+                    "bases" => BigWigAverageOverBedStatistics::Bases,
+                    "sum" => BigWigAverageOverBedStatistics::Sum,
+                    "mean0" => BigWigAverageOverBedStatistics::Mean0,
+                    "mean" => BigWigAverageOverBedStatistics::Mean,
+                    "min" => BigWigAverageOverBedStatistics::Min,
+                    "max" => BigWigAverageOverBedStatistics::Max,
+                    "all" => BigWigAverageOverBedStatistics::All,
+                    _ => {
+                        return Err(PyErr::new::<exceptions::PyException, _>("Invalid type argument. Should be either `None` or \"size\", \"bases\", \"sum\", \"mean0\", \"min\", \"max\" or \"all\""));
+                    }
+                },
+                None => BigWigAverageOverBedStatistics::Mean,
+            }
+        };
         let bedin = BufReader::new(File::open(bed)?);
 
         let res = match &mut self.bbi {
@@ -1645,18 +1664,33 @@ impl BBIRead {
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
-                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+                BigWigAverageOverBedEntriesIterator {
+                    iter,
+                    usename,
+                    stats,
+                }
+                .into_py(py)
             }
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => {
                 let b = b.reopen()?;
                 let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
-                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+                BigWigAverageOverBedEntriesIterator {
+                    iter,
+                    usename,
+                    stats,
+                }
+                .into_py(py)
             }
             BBIReadRaw::BigWigFileLike(b) => {
                 let b = b.reopen()?;
                 let iter = Box::new(bigwig_average_over_bed(bedin, b, name));
-                BigWigAverageOverBedEntriesIterator { iter, usename }.into_py(py)
+                BigWigAverageOverBedEntriesIterator {
+                    iter,
+                    usename,
+                    stats,
+                }
+                .into_py(py)
             }
             BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => {
                 return Err(BBIFileClosed::new_err("Not a bigWig."))
@@ -2095,15 +2129,34 @@ impl BigBedWrite {
 }
 
 enum BigWigAverageOverBedEntriesIteratorRet {
-    Single(f64),
-    WithName((String, f64)),
+    All((u32, u32, f64, f64, f64, f64, f64)),
+    Float64(f64),
+    UInt32(u32),
+    NameAndAll((String, u32, u32, f64, f64, f64, f64, f64)),
+    NameAndFloat64((String, f64)),
+    NameAndUInt32((String, u32)),
+}
+
+enum BigWigAverageOverBedStatistics {
+    Size,
+    Bases,
+    Sum,
+    Mean0,
+    Mean,
+    Min,
+    Max,
+    All,
 }
 
 impl IntoPy<PyObject> for BigWigAverageOverBedEntriesIteratorRet {
     fn into_py(self, py: Python) -> PyObject {
         match self {
-            BigWigAverageOverBedEntriesIteratorRet::Single(v) => v.into_py(py),
-            BigWigAverageOverBedEntriesIteratorRet::WithName(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::All(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::Float64(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::UInt32(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::NameAndAll(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64(v) => v.into_py(py),
+            BigWigAverageOverBedEntriesIteratorRet::NameAndUInt32(v) => v.into_py(py),
         }
     }
 }
@@ -2115,6 +2168,7 @@ struct BigWigAverageOverBedEntriesIterator {
         dyn Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> + Send,
     >,
     usename: bool,
+    stats: BigWigAverageOverBedStatistics,
 }
 
 #[pymethods]
@@ -2135,13 +2189,60 @@ impl BigWigAverageOverBedEntriesIterator {
         let Some(v) = v else {
             return Ok(None);
         };
-
-        let item = if slf.usename {
-            BigWigAverageOverBedEntriesIteratorRet::WithName((v.name, v.mean))
-        } else {
-            BigWigAverageOverBedEntriesIteratorRet::Single(v.mean)
-        };
-        Ok(Some(item))
+        Ok(Some(match (slf.usename, &slf.stats) {
+            (true, BigWigAverageOverBedStatistics::All) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndAll((
+                    v.name, v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max,
+                ))
+            }
+            (true, BigWigAverageOverBedStatistics::Size) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndUInt32((v.name, v.size))
+            }
+            (true, BigWigAverageOverBedStatistics::Bases) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndUInt32((v.name, v.bases))
+            }
+            (true, BigWigAverageOverBedStatistics::Sum) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64((v.name, v.sum))
+            }
+            (true, BigWigAverageOverBedStatistics::Mean0) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64((v.name, v.mean0))
+            }
+            (true, BigWigAverageOverBedStatistics::Mean) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64((v.name, v.mean))
+            }
+            (true, BigWigAverageOverBedStatistics::Min) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64((v.name, v.min))
+            }
+            (true, BigWigAverageOverBedStatistics::Max) => {
+                BigWigAverageOverBedEntriesIteratorRet::NameAndFloat64((v.name, v.max))
+            }
+            (false, BigWigAverageOverBedStatistics::All) => {
+                BigWigAverageOverBedEntriesIteratorRet::All((
+                    v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max,
+                ))
+            }
+            (false, BigWigAverageOverBedStatistics::Size) => {
+                BigWigAverageOverBedEntriesIteratorRet::UInt32(v.size)
+            }
+            (false, BigWigAverageOverBedStatistics::Bases) => {
+                BigWigAverageOverBedEntriesIteratorRet::UInt32(v.bases)
+            }
+            (false, BigWigAverageOverBedStatistics::Sum) => {
+                BigWigAverageOverBedEntriesIteratorRet::Float64(v.sum)
+            }
+            (false, BigWigAverageOverBedStatistics::Mean0) => {
+                BigWigAverageOverBedEntriesIteratorRet::Float64(v.mean0)
+            }
+            (false, BigWigAverageOverBedStatistics::Mean) => {
+                BigWigAverageOverBedEntriesIteratorRet::Float64(v.mean)
+            }
+            (false, BigWigAverageOverBedStatistics::Min) => {
+                BigWigAverageOverBedEntriesIteratorRet::Float64(v.min)
+            }
+            (false, BigWigAverageOverBedStatistics::Max) => {
+                BigWigAverageOverBedEntriesIteratorRet::Float64(v.max)
+            }
+        }))
     }
 }
 
