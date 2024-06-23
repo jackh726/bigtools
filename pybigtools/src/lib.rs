@@ -1141,10 +1141,10 @@ impl BBIRead {
             BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigWigFileLike(_) => BEDGRAPH.to_string(),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(_) => BEDGRAPH.to_string(),
-            BBIReadRaw::BigBedFile(b) => b.autosql().convert_err()?,
+            BBIReadRaw::BigBedFile(b) => b.autosql().convert_err()?.unwrap_or(String::new()),
             #[cfg(feature = "remote")]
-            BBIReadRaw::BigBedRemote(b) => b.autosql().convert_err()?,
-            BBIReadRaw::BigBedFileLike(b) => b.autosql().convert_err()?,
+            BBIReadRaw::BigBedRemote(b) => b.autosql().convert_err()?.unwrap_or(String::new()),
+            BBIReadRaw::BigBedFileLike(b) => b.autosql().convert_err()?.unwrap_or(String::new()),
         };
         let obj = if parse {
             let mut declarations = parse_autosql(&schema)

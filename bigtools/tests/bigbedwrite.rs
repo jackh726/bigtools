@@ -60,7 +60,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     assert_eq!(chroms[0].length, 83257441);
 
     assert_eq!(
-        &bwread.autosql().unwrap(),
+        &bwread.autosql().unwrap().unwrap(),
         "table bed\n\"Browser Extensible Data\"\n(\n    string chrom;       \"Reference sequence chromosome or scaffold\"\n    uint   chromStart;  \"Start position in chromosome\"\n    uint   chromEnd;    \"End position in chromosome\"\n   string name;        \"Name of item.\"\n   uint score;          \"Score (0-1000)\"\n)",
     );
 

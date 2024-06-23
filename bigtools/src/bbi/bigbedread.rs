@@ -190,8 +190,11 @@ impl<R: BBIFileRead> BigBedRead<R> {
     }
 
     /// Reads the autosql from this bigBed
-    pub fn autosql(&mut self) -> Result<String, BBIReadError> {
+    pub fn autosql(&mut self) -> Result<Option<String>, BBIReadError> {
         let auto_sql_offset = self.info.header.auto_sql_offset;
+        if auto_sql_offset == 0 {
+            return Ok(None);
+        }
         let reader = self.reader().raw_reader();
         let mut reader = BufReader::new(reader);
         reader.seek(SeekFrom::Start(auto_sql_offset))?;
@@ -200,7 +203,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         buffer.pop();
         let autosql = String::from_utf8(buffer)
             .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
-        Ok(autosql)
+        Ok(Some(autosql))
     }
 
     pub fn item_count(&mut self) -> Result<u64, BBIReadError> {

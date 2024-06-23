@@ -123,10 +123,10 @@ def test_autosql(bw, bb):
     # Even bigwigs have sql (a sql representing bedGraph)
     assert "bedGraph" in bw.sql()
     # We can parse the sql
-    # assert bw.sql(True)['name'] == 'bedGraph'
+    assert bw.sql(True)['name'] == 'bedGraph'
 
-    # bb.sql()
-    # BBIReadError: The file was invalid: Invalid autosql: not UTF-8
+    # Unfortunately, this test bigBed doesn't actually have autosql
+    assert len(bb.sql()) == 0
 
 
 def test_records(bw, bb):

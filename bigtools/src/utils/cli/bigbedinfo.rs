@@ -83,11 +83,17 @@ pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
         }
         if args.autosql {
             let autosql = bigbed.autosql()?;
-            if autosql.len() == 0 {
-                println!("as:  n/a");
-            } else {
-                println!("as:");
-                print!("{}", autosql);
+            match autosql {
+                None => {
+                    println!("as:  n/a");
+                }
+                Some(autosql) if autosql.is_empty() => {
+                    println!("as:  n/a");
+                }
+                Some(autosql) => {
+                    println!("as:");
+                    print!("{}", autosql);
+                }
             }
         }
         let summary = bigbed.get_summary()?;
