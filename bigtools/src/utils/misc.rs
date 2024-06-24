@@ -64,10 +64,10 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
     }
     let size = end - start;
     let mean0 = sum / f64::from(size);
-    let (mean, min, max) = match (bases == 0, end - start == bases) {
-        (true, _) => (0.0, 0.0, 0.0),
-        (false, true) => (sum / f64::from(bases), min, max),
-        (false, false) => (sum / f64::from(bases), min.min(0.0), max),
+    let (mean, min, max) = if bases == 0 {
+        (0.0, 0.0, 0.0)
+    } else {
+        (sum / f64::from(bases), min, max)
     };
 
     let name = match name {
