@@ -2176,29 +2176,29 @@ impl BigWigAverageOverBedEntriesIterator {
         let Some(v) = v else {
             return Ok(None);
         };
-        Ok(Some(match (slf.usename, &slf.stats) {
-            (true, BigWigAverageOverBedStatistics::All) => (
-                v.name, v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max,
-            )
-                .to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Size) => (v.name, v.size).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Bases) => (v.name, v.bases).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Sum) => (v.name, v.sum).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Mean0) => (v.name, v.mean0).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Mean) => (v.name, v.mean).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Min) => (v.name, v.min).to_object(slf.py()),
-            (true, BigWigAverageOverBedStatistics::Max) => (v.name, v.max).to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::All) => {
-                (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max).to_object(slf.py())
+        let mut ret = Vec::with_capacity(8);
+        if slf.usename {
+            ret.push(v.name.to_object(slf.py()));
+        }
+        match &slf.stats {
+            BigWigAverageOverBedStatistics::All => {
+                ret.push(v.size.to_object(slf.py()));
+                ret.push(v.bases.to_object(slf.py()));
+                ret.push(v.sum.to_object(slf.py()));
+                ret.push(v.mean0.to_object(slf.py()));
+                ret.push(v.mean.to_object(slf.py()));
+                ret.push(v.min.to_object(slf.py()));
+                ret.push(v.max.to_object(slf.py()));
             }
-            (false, BigWigAverageOverBedStatistics::Size) => v.size.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Bases) => v.bases.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Sum) => v.sum.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Mean0) => v.mean0.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Mean) => v.mean.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Min) => v.min.to_object(slf.py()),
-            (false, BigWigAverageOverBedStatistics::Max) => v.max.to_object(slf.py()),
-        }))
+            BigWigAverageOverBedStatistics::Size => ret.push(v.size.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Bases => ret.push(v.bases.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Mean0 => ret.push(v.mean0.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Mean => ret.push(v.mean.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
+            BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+        }
+        Ok(Some(PyTuple::new(slf.py(), ret).to_object(slf.py())))
     }
 }
 
