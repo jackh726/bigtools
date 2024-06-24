@@ -347,3 +347,58 @@ def test_values(bw, bb):
     assert list(vals) == [1.2572170068028603]
     vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
     assert list(vals) == [1.3408662900188324]
+
+def test_average_over_bed(bw, bb):
+    assert pytest.raises(ValueError, bb.average_over_bed, "ignored")
+
+    path = str(REPO_ROOT / "bigtools/resources/test/bwaob_intervals.bed")
+
+    assert list(bw.average_over_bed(path)) == [
+        0.520496068193632,
+        4.869557225811871,
+    ]
+
+    assert list(bw.average_over_bed(path, True)) == [
+        ('one', 0.520496068193632),
+        ('two', 4.869557225811871),
+    ]
+
+    assert list(bw.average_over_bed(path, False)) == [
+        ('chr17:59800-60000', 0.520496068193632),
+        ('chr17:62000-64000', 4.869557225811871),
+    ]
+
+    assert list(bw.average_over_bed(path, None, 'all')) == [
+        pybigtools.SummaryStatistics(size=200, bases=102, sum=53.090598955750465, mean0=0.26545299477875234, mean=0.520496068193632, min=0.06791999936103821, max=0.8688300251960754),
+        pybigtools.SummaryStatistics(size=2000, bases=1716, sum=8356.16019949317, mean0=4.178080099746585, mean=4.869557225811871, min=0.011739999987185001, max=21.906700134277344),
+    ]
+
+    assert list(bw.average_over_bed(path, True, 'all')) == [
+        ('one', pybigtools.SummaryStatistics(size=200, bases=102, sum=53.090598955750465, mean0=0.26545299477875234, mean=0.520496068193632, min=0.06791999936103821, max=0.8688300251960754)),
+        ('two', pybigtools.SummaryStatistics(size=2000, bases=1716, sum=8356.16019949317, mean0=4.178080099746585, mean=4.869557225811871, min=0.011739999987185001, max=21.906700134277344)),
+    ]
+
+    assert list(bw.average_over_bed(path, None, 'min')) == [
+        0.06791999936103821,
+        0.011739999987185001,
+    ]
+
+    assert list(bw.average_over_bed(path, True, 'min')) == [
+        ('one', 0.06791999936103821),
+        ('two', 0.011739999987185001),
+    ]
+
+
+    assert list(bw.average_over_bed(path, None, ['min', 'mean'])) == [
+        (0.06791999936103821, 0.520496068193632),
+        (0.011739999987185001, 4.869557225811871),
+    ]
+
+    assert list(bw.average_over_bed(path, True, ['min', 'mean'])) == [
+        ('one', (0.06791999936103821, 0.520496068193632)),
+        ('two', (0.011739999987185001, 4.869557225811871)),
+    ]
+
+    assert pytest.raises(ValueError, bw.average_over_bed, path, None, 'bad')
+    assert pytest.raises(ValueError, bw.average_over_bed, path, None, ['min', 'bad'])
+    assert pytest.raises(ValueError, bw.average_over_bed, path, None, ['min', 'all'])

@@ -26,7 +26,9 @@ use file_like::PyFileLikeObject;
 use numpy::ndarray::ArrayViewMut;
 use numpy::PyArray1;
 use pyo3::exceptions::{self, PyKeyError, PyTypeError};
-use pyo3::types::{IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyString, PyTuple};
+use pyo3::types::{
+    IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyList, PyString, PyTuple,
+};
 use pyo3::{create_exception, wrap_pyfunction};
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
@@ -1583,22 +1585,40 @@ impl BBIRead {
     /// bed : str
     ///     The path to the bed.
     /// names : bool or int, optional
-    ///     If ``None``, then each return value will be a single float, the
-    ///     average value over an interval in the bed file.  
+    ///     If ``None``, then no name is returned and the return value is only the
+    ///     statistics value (see the `stats` parameter).
     ///     
-    ///     If ``True``, then each return value will be a tuple of the value of
-    ///     column 4 and the average value over the interval with that name in the
-    ///     bed file.  
+    ///     If ``True``, then each return value will be a 2-length tuple of the value
+    ///     of column 4 and the statistics value.
     ///     
-    ///     If ``False``, then each return value will be a tuple of the interval
-    ///     in the format ``{chrom}:{start}-{end}`` and the average value over
-    ///     that interval.  
+    ///     If ``False``, then each return value will be a 2-length tuple of the
+    ///     interval in the format ``{chrom}:{start}-{end}`` and the statistics value.
     ///     
     ///     If ``0``, then each return value will match as if ``False`` was passed.
     ///   
     ///     If a ``1+``, then each return value will be a tuple of the value of
-    ///     column of this parameter (1-based) and the average value over the
-    ///     interval.  
+    ///     column of this parameter (1-based) and the statistics value.
+    /// stats : str or List[str], optional
+    ///     Calculate specific statistics for each bed entry.
+    ///
+    ///     If not specified, `mean` will be returned.
+    ///
+    ///     If ``"all"`` is specified, all summary statistics are returned in a named tuple.
+    ///
+    ///     If a single statistic is provided as a string, that statistic is returned
+    ///     as a float.
+    ///
+    ///     If a list of statistics are provided, a tuple is returned containing those
+    ///     statistics, in order.
+    ///
+    ///     Possible statistics are:
+    ///       - `size`: Size of bed entry (`int`)
+    ///       - `bases`: Bases covered by bigWig (`int`)
+    ///       - `sum`: Sum of values over all bases covered (`float`)
+    ///       - `mean0`: Average over bases with non-covered bases counting as zeroes (`float`)
+    ///       - `mean` or `None`: Average over just covered bases (`float`)
+    ///       - `min`: Minimum over all bases covered (`float`)
+    ///       - `max`: Maximum over all bases covered (`float`)
     ///
     /// Returns
     /// -------
@@ -1606,21 +1626,28 @@ impl BBIRead {
     ///
     /// Notes
     /// -----
-    /// If no ``name`` field is specified, returns a generator of floats.  
-    /// If a ``name`` column is specified, returns a generator of tuples
-    /// ``({name}, {average})``.
+    /// If no ``name`` field is specified, returns a generator of statistics
+    /// (either floats or tuples, as specified by the ``stats`` field).
+    /// If a ``name`` column is specified, returns a generator of 2-length
+    /// tuples of the form ``({name}, {average})``.
+    /// Importantly, if the statistics value is itself a tuple, then that
+    /// tuple will be **nested** as the second value of the outer tuple.
     fn average_over_bed(
         &mut self,
         py: Python,
         bed: String,
         names: Option<PyObject>,
-        stats: Option<String>,
+        stats: Option<PyObject>,
     ) -> PyResult<PyObject> {
+        if self.is_bigbed() {
+            // Minor thing: if current file is not a bigWig, don't even attempt to open the passed file
+            return Err(PyErr::new::<exceptions::PyValueError, _>("Not a bigWig."));
+        }
         let (name, usename) = {
             match names {
                 Some(names) => match names.extract::<bool>(py) {
                     Ok(true) => (Name::Column(3), true),
-                    Ok(false) => (Name::None, true),
+                    Ok(false) => (Name::Interval, true),
                     Err(_) => match names.extract::<isize>(py) {
                         Ok(col) => match col {
                             0 => (Name::None, true),
@@ -1636,22 +1663,58 @@ impl BBIRead {
                         }
                     },
                 },
-                None => (Name::None, false),
+                None => (Name::Interval, false),
             }
         };
         let stats = {
             match stats {
-                Some(stats) => match BigWigAverageOverBedStatistics::from_str(&stats) {
-                    Some(stat) => stat,
-                    None => {
-                        return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"size\", \"bases\", \"sum\", \"mean0\", \"min\", \"max\" or \"all\""));
+                Some(stats) => match stats.downcast::<PyString>(py) {
+                    Ok(stat) => {
+                        let stat = stat.to_str()?;
+                        if stat.eq_ignore_ascii_case("all") {
+                            None
+                        } else {
+                            let stat = match BigWigAverageOverBedStatistics::from_str(stat) {
+                                Some(stat) => stat,
+                                None => {
+                                    return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"size\", \"bases\", \"sum\", \"mean0\", \"min\", \"max\" or \"all\""));
+                                }
+                            };
+                            Some(vec![stat])
+                        }
                     }
+                    Err(_) => match stats.downcast::<PyList>(py) {
+                        Ok(stats) => {
+                            let mut ret_stats = Vec::with_capacity(stats.len());
+                            for stat in stats.into_iter() {
+                                let stat = stat.downcast::<PyString>();
+                                let Ok(stat) = stat else {
+                                    return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"all\" or a stat or list of stats."));
+                                };
+                                let stat = match BigWigAverageOverBedStatistics::from_str(
+                                    stat.to_str()?,
+                                ) {
+                                    Some(stat) => stat,
+                                    None => {
+                                        return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"size\", \"bases\", \"sum\", \"mean0\", \"min\", \"max\" or \"all\""));
+                                    }
+                                };
+                                ret_stats.push(stat);
+                            }
+                            Some(ret_stats)
+                        }
+                        Err(_) => {
+                            return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"all\" or a stat or list of stats."));
+                        }
+                    },
                 },
-                None => BigWigAverageOverBedStatistics::Mean,
+                None => Some(vec![BigWigAverageOverBedStatistics::Mean]),
             }
         };
         let bedin = BufReader::new(File::open(bed)?);
 
+        let module = PyModule::import(py, "pybigtools")?;
+        let summary_statistics = module.getattr("SummaryStatistics")?.to_object(py);
         let res = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
@@ -1661,6 +1724,7 @@ impl BBIRead {
                     iter,
                     usename,
                     stats,
+                    summary_statistics,
                 }
                 .into_py(py)
             }
@@ -1672,6 +1736,7 @@ impl BBIRead {
                     iter,
                     usename,
                     stats,
+                    summary_statistics,
                 }
                 .into_py(py)
             }
@@ -1682,14 +1747,17 @@ impl BBIRead {
                     iter,
                     usename,
                     stats,
+                    summary_statistics,
                 }
                 .into_py(py)
             }
             BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => {
-                return Err(BBIFileClosed::new_err("Not a bigWig."))
+                return Err(PyErr::new::<exceptions::PyValueError, _>("Not a bigWig."));
             }
             #[cfg(feature = "remote")]
-            BBIReadRaw::BigBedRemote(_) => return Err(BBIFileClosed::new_err("Not a bigWig.")),
+            BBIReadRaw::BigBedRemote(_) => {
+                return Err(PyErr::new::<exceptions::PyValueError, _>("Not a bigWig."))
+            }
         };
 
         Ok(res)
@@ -2129,7 +2197,6 @@ enum BigWigAverageOverBedStatistics {
     Mean,
     Min,
     Max,
-    All,
 }
 
 impl BigWigAverageOverBedStatistics {
@@ -2142,7 +2209,6 @@ impl BigWigAverageOverBedStatistics {
             "mean" => BigWigAverageOverBedStatistics::Mean,
             "min" => BigWigAverageOverBedStatistics::Min,
             "max" => BigWigAverageOverBedStatistics::Max,
-            "all" => BigWigAverageOverBedStatistics::All,
             _ => {
                 return None;
             }
@@ -2157,7 +2223,8 @@ struct BigWigAverageOverBedEntriesIterator {
         dyn Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> + Send,
     >,
     usename: bool,
-    stats: BigWigAverageOverBedStatistics,
+    stats: Option<Vec<BigWigAverageOverBedStatistics>>,
+    summary_statistics: PyObject,
 }
 
 #[pymethods]
@@ -2176,29 +2243,49 @@ impl BigWigAverageOverBedEntriesIterator {
         let Some(v) = v else {
             return Ok(None);
         };
-        let mut ret = Vec::with_capacity(8);
-        if slf.usename {
-            ret.push(v.name.to_object(slf.py()));
-        }
-        match &slf.stats {
-            BigWigAverageOverBedStatistics::All => {
-                ret.push(v.size.to_object(slf.py()));
-                ret.push(v.bases.to_object(slf.py()));
-                ret.push(v.sum.to_object(slf.py()));
-                ret.push(v.mean0.to_object(slf.py()));
-                ret.push(v.mean.to_object(slf.py()));
-                ret.push(v.min.to_object(slf.py()));
-                ret.push(v.max.to_object(slf.py()));
+        let stats = match &slf.stats {
+            Some(stats) => {
+                let mut ret = Vec::with_capacity(stats.len());
+                for stat in stats.iter() {
+                    match stat {
+                        BigWigAverageOverBedStatistics::Size => {
+                            ret.push(v.size.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Bases => {
+                            ret.push(v.bases.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Mean0 => {
+                            ret.push(v.mean0.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Mean => {
+                            ret.push(v.mean.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+                    }
+                }
+                if ret.len() == 1 {
+                    ret[0].to_object(slf.py())
+                } else {
+                    PyTuple::new(slf.py(), ret).to_object(slf.py())
+                }
             }
-            BigWigAverageOverBedStatistics::Size => ret.push(v.size.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Bases => ret.push(v.bases.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Mean0 => ret.push(v.mean0.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Mean => ret.push(v.mean.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
-            BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+            None => {
+                let summary_statistics = slf.summary_statistics.as_ref(slf.py());
+                //let summary_statistics = module.getattr("SummaryStatistics").unwrap();
+                let val = summary_statistics.call(
+                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
+                    None,
+                )?;
+                val.to_object(slf.py())
+            }
+        };
+
+        match slf.usename {
+            true => Ok(Some((v.name, stats).to_object(slf.py()))),
+            false => Ok(Some(stats)),
         }
-        Ok(Some(PyTuple::new(slf.py(), ret).to_object(slf.py())))
     }
 }
 
@@ -2411,7 +2498,7 @@ fn open_path_or_url(
 
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
 #[pymodule]
-fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
+fn pybigtools(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     m.add_wrapped(wrap_pyfunction!(open))?;
@@ -2424,6 +2511,18 @@ fn pybigtools(_py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
     m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
+
+    let collections = PyModule::import(py, "collections")?;
+    let namedtuple = collections.getattr("namedtuple")?;
+
+    let summary_statistics = namedtuple.call(
+        (
+            "SummaryStatistics".to_object(py),
+            ("size", "bases", "sum", "mean0", "mean", "min", "max").to_object(py),
+        ),
+        None,
+    )?;
+    m.add("SummaryStatistics", summary_statistics)?;
 
     Ok(())
 }
