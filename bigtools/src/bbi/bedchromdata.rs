@@ -125,14 +125,14 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
                 }
             };
             loop {
-                (curr_state, next_val) = match (curr_state, next_val) {
+                next_val = match (&mut curr_state, next_val) {
                     // There are no more values
-                    ((_, curr_state), None) => {
-                        advance(curr_state)?;
+                    ((_, _), None) => {
+                        advance(curr_state.1)?;
                         return Ok(());
                     }
                     // The next value is the same chromosome
-                    ((curr_chrom, mut curr_state), Some((chrom, val))) if chrom == &curr_chrom => {
+                    ((curr_chrom, curr_state), Some((chrom, val))) if chrom == curr_chrom => {
                         let next_val = self.bed_data.next();
                         let next_val = match next_val {
                             Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
@@ -144,15 +144,16 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
                             _ => None,
                         };
                         curr_state.do_process(val, next_value).await?;
-                        ((curr_chrom, curr_state), next_val)
+                        next_val
                     }
                     // The next value is a different chromosome
-                    ((curr_chrom, curr_state), Some((chrom, val))) => {
+                    (_, Some((chrom, val))) => {
+                        let (prev_chrom, prev_state) = curr_state;
                         // TODO: test this correctly fails
-                        if !self.allow_out_of_order_chroms && curr_chrom.as_str() >= chrom {
+                        if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
                             return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                         }
-                        advance(curr_state)?;
+                        advance(prev_state)?;
 
                         let chrom = chrom.to_string();
                         let mut p = start_processing(chrom.clone())?;
@@ -168,7 +169,8 @@ impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
                         };
 
                         p.do_process(val, next_value).await?;
-                        ((chrom, p), next_val)
+                        curr_state = (chrom, p);
+                        next_val
                     }
                 };
             }
