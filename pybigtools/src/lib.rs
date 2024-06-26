@@ -516,8 +516,8 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
             .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
             .unwrap_or(Some(bin_start))
         {
-            let bin_start = ((bin as f64) * bin_size).ceil() as i32;
-            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as i32;
+            let bin_start = ((bin as f64) * bin_size) as i32;
+            let bin_end = (((bin + 1) as f64) * bin_size) as i32;
 
             bin_data.push_back((bin, bin_start, bin_end, None));
         }
@@ -625,8 +625,8 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
             .unwrap_or(Some(bin_start))
         {
-            let bin_start = ((bin as f64) * bin_size).ceil() as i32;
-            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as i32;
+            let bin_start = ((bin as f64) * bin_size) as i32;
+            let bin_end = (((bin + 1) as f64) * bin_size) as i32;
 
             bin_data.push_back((bin, bin_start, bin_end, None));
         }
@@ -779,8 +779,8 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
             .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
             .unwrap_or(Some(bin_start))
         {
-            let bin_start = ((bin as f64) * bin_size).ceil() as i32;
-            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as i32;
+            let bin_start = ((bin as f64) * bin_size) as i32;
+            let bin_end = (((bin + 1) as f64) * bin_size) as i32;
 
             bin_data.push_back((
                 bin,
@@ -911,8 +911,8 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
             .unwrap_or(Some(bin_start))
         {
-            let bin_start = ((bin as f64) * bin_size).ceil() as i32;
-            let bin_end = (((bin + 1) as f64) * bin_size).ceil() as i32;
+            let bin_start = ((bin as f64) * bin_size) as i32;
+            let bin_end = (((bin + 1) as f64) * bin_size) as i32;
 
             bin_data.push_back((
                 bin,
