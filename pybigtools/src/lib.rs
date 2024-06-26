@@ -1582,7 +1582,7 @@ impl BBIRead {
     ///
     /// Parameters
     /// ----------
-    /// bed : str
+    /// bed : str or Path
     ///     The path to the bed.
     /// names : bool or int, optional
     ///     If ``None``, then no name is returned and the return value is only the
@@ -1606,7 +1606,7 @@ impl BBIRead {
     ///     If ``"all"`` is specified, all summary statistics are returned in a named tuple.
     ///
     ///     If a single statistic is provided as a string, that statistic is returned
-    ///     as a float.
+    ///     as a float or int depending on the statistic.
     ///
     ///     If a list of statistics are provided, a tuple is returned containing those
     ///     statistics, in order.
@@ -1635,7 +1635,7 @@ impl BBIRead {
     fn average_over_bed(
         &mut self,
         py: Python,
-        bed: String,
+        bed: PyObject,
         names: Option<PyObject>,
         stats: Option<PyObject>,
     ) -> PyResult<PyObject> {
@@ -1711,7 +1711,20 @@ impl BBIRead {
                 None => Some(vec![BigWigAverageOverBedStatistics::Mean]),
             }
         };
-        let bedin = BufReader::new(File::open(bed)?);
+        let bed = if let Ok(bed) = bed.downcast::<PyString>(py) {
+            bed
+        } else {
+            let path_class = py.import("pathlib")?.getattr("Path")?;
+            // If pathlib.Path, convert to string and try to open
+            if bed.as_ref(py).is_instance(path_class)? {
+                bed.as_ref(py).str()?
+            } else {
+                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                    "Unknown argument for `path`. Not a string or Path object.",
+                )));
+            }
+        };
+        let bedin = BufReader::new(File::open(bed.to_str()?)?);
 
         let module = PyModule::import(py, "pybigtools")?;
         let summary_statistics = module.getattr("SummaryStatistics")?.to_object(py);

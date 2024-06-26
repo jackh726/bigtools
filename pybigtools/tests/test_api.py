@@ -351,6 +351,8 @@ def test_values(bw, bb):
 def test_average_over_bed(bw, bb):
     assert pytest.raises(ValueError, bb.average_over_bed, "ignored")
 
+    assert pytest.raises(ValueError, bw.average_over_bed, 0)
+
     path = str(REPO_ROOT / "bigtools/resources/test/bwaob_intervals.bed")
 
     assert list(bw.average_over_bed(path)) == [
@@ -402,3 +404,9 @@ def test_average_over_bed(bw, bb):
     assert pytest.raises(ValueError, bw.average_over_bed, path, None, 'bad')
     assert pytest.raises(ValueError, bw.average_over_bed, path, None, ['min', 'bad'])
     assert pytest.raises(ValueError, bw.average_over_bed, path, None, ['min', 'all'])
+
+    x = list(bw.average_over_bed(path, stats=["mean0"]))
+    y = list(bw.average_over_bed(path, stats=["mean0"]))
+    assert x == y
+
+    bw.average_over_bed(REPO_ROOT / "bigtools/resources/test/bwaob_intervals.bed")
