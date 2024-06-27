@@ -766,7 +766,8 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                             .iter()
                             .any(|v| *v > 0)
                             .then(|| front.3.into_iter().sum::<i32>() as f64)
-                            .map(|c| front.4.into_iter().sum::<f64>() / c)
+                            // Map nan to 0 so the sum is non-nan
+                            .map(|c| front.4.into_iter().map(|c| c.max(0.0)).sum::<f64>() / c)
                             .unwrap_or(missing);
                     }
                 }
@@ -841,7 +842,8 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                     .iter()
                     .any(|v| *v > 0)
                     .then(|| front.3.into_iter().sum::<i32>() as f64)
-                    .map(|c| front.4.into_iter().sum::<f64>() / c)
+                    // Map nan to 0 so the sum is non-nan
+                    .map(|c| front.4.into_iter().map(|c| c.max(0.0)).sum::<f64>() / c)
                     .unwrap_or(missing);
             }
         }
@@ -898,7 +900,8 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                             .iter()
                             .any(|v| *v > 0)
                             .then(|| front.3.into_iter().sum::<i32>() as f64)
-                            .map(|c| front.4.into_iter().sum::<f64>() / c)
+                            // Map nan to 0 so the sum is non-nan
+                            .map(|c| front.4.into_iter().map(|c| c.max(0.0)).sum::<f64>() / c)
                             .unwrap_or(missing);
                     }
                 }
@@ -938,7 +941,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
 
-            let mean = interval.summary.sum / (interval.end - interval.start) as f64;
+            let mean = interval.summary.sum / (interval.summary.bases_covered) as f64;
             let range =
                 ((overlap_start - *bin_start) as usize)..((overlap_end - *bin_start) as usize);
             for i in &mut data[range.clone()] {
@@ -979,7 +982,8 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                     .iter()
                     .any(|v| *v > 0)
                     .then(|| front.3.into_iter().sum::<i32>() as f64)
-                    .map(|c| front.4.into_iter().sum::<f64>() / c)
+                    // Map nan to 0 so the sum is non-nan
+                    .map(|c| front.4.into_iter().map(|c| c.max(0.0)).sum::<f64>() / c)
                     .unwrap_or(missing);
             }
         }

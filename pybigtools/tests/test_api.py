@@ -325,6 +325,9 @@ def test_values(bw, bb):
     assert np.array_equal(arr, ret_arr, equal_nan=True)
 
     # Some differences in estimates between pybigtools to other libs
+    # Namely, bigtools calculates estimates by taking the
+    # sum of nanmeans over covered bases (summary.sum/summary.covered_bases) and dividing by covered bases (overlap between zooom and bin)
+    # So, including these as cases where the calculated value is different
     vals = bw.values("chr17", 85525, 85730, bins=2, exact=False)
     assert list(vals) == [0.15392776003070907, 2.728891665264241]
     vals = bw.values("chr17", 85525, 85730, bins=2, exact=True)
@@ -333,3 +336,8 @@ def test_values(bw, bb):
     assert list(vals) == [0.5358060553962108, 0.5513471488813751]
     vals = bw.values("chr17", 59900, 60105, bins=2, exact=True)
     assert list(vals) == [0.5362001863472602, 0.5527710799959679]
+
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False)
+    assert list(vals) == [1.2572170068028603]
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
+    assert list(vals) == [1.3408662900188324]
