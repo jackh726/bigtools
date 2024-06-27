@@ -60,6 +60,12 @@ def test_open_filelike():
         with pybigtools.open(f, "r") as b:
             assert b.chroms() == {'chr21': 48_129_895}
 
+def test_contextmanager_exception():
+    class RaisesException(Exception):
+        pass
+    with pytest.raises(RaisesException):
+        with pybigtools.open(REPO_ROOT / "bigtools/resources/test/valid.bigWig", "r"):
+            raise RaisesException()
 
 @pytest.fixture
 def bw():

@@ -1682,9 +1682,8 @@ impl BBIRead {
         _exc_type: PyObject,
         _exc_value: PyObject,
         _exc_traceback: PyObject,
-    ) -> Py<Self> {
+    ) {
         slf.borrow_mut(py).bbi = BBIReadRaw::Closed;
-        slf
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
