@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
@@ -52,6 +53,16 @@ pub struct BBIHeader {
     pub(crate) auto_sql_offset: u64,
     pub(crate) total_summary_offset: u64,
     pub(crate) uncompress_buf_size: u32,
+}
+
+impl BBIHeader {
+    pub fn is_compressed(&self) -> bool {
+        self.uncompress_buf_size > 0
+    }
+
+    pub fn primary_data_size(&self) -> u64 {
+        self.full_index_offset - self.full_data_offset
+    }
 }
 
 /// Information on a chromosome in a bbi file
@@ -546,10 +557,16 @@ impl<S: SeekableRead> BBIFileRead for S {
     }
 }
 
-pub struct CachedBBIFileRead<S: SeekableRead> {
+pub struct CachedBBIFileRead<S> {
     read: S,
     cir_tree_node_map: HashMap<u64, Either<Vec<CirTreeNodeLeaf>, Vec<CirTreeNodeNonLeaf>>>,
     block_data: HashMap<Block, Vec<u8>>,
+}
+
+impl<S> CachedBBIFileRead<S> {
+    pub fn inner_read(&self) -> &S {
+        &self.read
+    }
 }
 
 impl<S: SeekableRead> CachedBBIFileRead<S> {
@@ -1308,7 +1325,7 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
     chrom: u32,
     start: u32,
     end: u32,
-) -> Result<Box<dyn Iterator<Item = ZoomRecord> + Send>, BBIReadError> {
+) -> Result<std::vec::IntoIter<ZoomRecord>, BBIReadError> {
     let (read, info) = bbifile.reader_and_info();
     let data = read.get_block_data(info, &block)?;
     let mut bytes = BytesMut::with_capacity(data.len());
@@ -1379,30 +1396,34 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
     }
 
     *known_offset = block.offset + block.size;
-    Ok(Box::new(records.into_iter()))
+    Ok(records.into_iter())
 }
 
-pub(crate) struct ZoomIntervalIter<'a, I, B>
+pub(crate) struct ZoomIntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    B: BBIRead,
+    R: BBIRead,
+    B: BorrowMut<R>,
 {
-    bbifile: &'a mut B,
+    _r: std::marker::PhantomData<R>,
+    bbifile: B,
     known_offset: u64,
     blocks: I,
-    vals: Option<Box<dyn Iterator<Item = ZoomRecord> + Send + 'a>>,
+    vals: Option<std::vec::IntoIter<ZoomRecord>>,
     chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<'a, I, B> ZoomIntervalIter<'a, I, B>
+impl<I, R, B> ZoomIntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    B: BBIRead,
+    R: BBIRead,
+    B: BorrowMut<R>,
 {
-    pub fn new(bbifile: &'a mut B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
+    pub fn new(bbifile: B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
         ZoomIntervalIter {
+            _r: std::marker::PhantomData,
             bbifile,
             known_offset: 0,
             blocks,
@@ -1414,10 +1435,11 @@ where
     }
 }
 
-impl<'a, I, B> Iterator for ZoomIntervalIter<'a, I, B>
+impl<I, R, B> Iterator for ZoomIntervalIter<I, R, B>
 where
     I: Iterator<Item = Block> + Send,
-    B: BBIRead,
+    R: BBIRead,
+    B: BorrowMut<R>,
 {
     type Item = Result<ZoomRecord, BBIReadError>;
 
@@ -1434,8 +1456,9 @@ where
                 },
                 None => {
                     let current_block = self.blocks.next()?;
+                    let file = self.bbifile.borrow_mut();
                     match get_zoom_block_values(
-                        self.bbifile,
+                        file,
                         current_block,
                         &mut self.known_offset,
                         self.chrom,

@@ -190,8 +190,11 @@ impl<R: BBIFileRead> BigBedRead<R> {
     }
 
     /// Reads the autosql from this bigBed
-    pub fn autosql(&mut self) -> Result<String, BBIReadError> {
+    pub fn autosql(&mut self) -> Result<Option<String>, BBIReadError> {
         let auto_sql_offset = self.info.header.auto_sql_offset;
+        if auto_sql_offset == 0 {
+            return Ok(None);
+        }
         let reader = self.reader().raw_reader();
         let mut reader = BufReader::new(reader);
         reader.seek(SeekFrom::Start(auto_sql_offset))?;
@@ -200,7 +203,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         buffer.pop();
         let autosql = String::from_utf8(buffer)
             .map_err(|_| BBIReadError::InvalidFile("Invalid autosql: not UTF-8".to_owned()))?;
-        Ok(autosql)
+        Ok(Some(autosql))
     }
 
     pub fn item_count(&mut self) -> Result<u64, BBIReadError> {
@@ -212,6 +215,11 @@ impl<R: BBIFileRead> BigBedRead<R> {
             byteordered::Endianness::Big => reader.read_u64::<BigEndian>()?,
             byteordered::Endianness::Little => reader.read_u64::<LittleEndian>()?,
         })
+    }
+
+    /// Gets a reference to the inner `R` type, in order to access any info
+    pub fn inner_read(&self) -> &R {
+        &self.read
     }
 
     /// Returns the summary data from bigBed
@@ -322,6 +330,29 @@ impl<R: BBIFileRead> BigBedRead<R> {
         reduction_level: u32,
     ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
     {
+        let cir_tree = self
+            .zoom_cir_tree(reduction_level)
+            .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
+
+        let chrom = self.info.chrom_id(chrom_name)?;
+
+        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
+        Ok(ZoomIntervalIter::<
+            std::vec::IntoIter<Block>,
+            BigBedRead<R>,
+            &mut BigBedRead<R>,
+        >::new(self, blocks.into_iter(), chrom, start, end))
+    }
+
+    /// For a given chromosome, start, and end, returns an `Iterator` of the
+    /// intersecting `ZoomRecord`s.
+    pub fn get_zoom_interval_move<'a>(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+        reduction_level: u32,
+    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>>, ZoomIntervalError> {
         let cir_tree = self
             .zoom_cir_tree(reduction_level)
             .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;

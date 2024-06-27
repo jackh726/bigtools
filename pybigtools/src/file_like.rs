@@ -8,7 +8,7 @@ use pyo3::{
 /// traits, calling into python io methods.
 #[derive(Clone)]
 pub struct PyFileLikeObject {
-    inner: PyObject,
+    pub(crate) inner: PyObject,
 }
 
 impl PyFileLikeObject {

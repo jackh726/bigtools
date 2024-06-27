@@ -6,8 +6,32 @@ build-backend = "maturin"
 name = "pybigtools"
 description = "Python bindings to the Bigtools Rust library for high-performance BigWig and BigBed I/O"
 license = { text = "MIT" }
+keywords = [
+    "bigwig",
+    "bigbed",
+    "bbi",
+    "bioinformatics",
+    "genomics",
+    "kent",
+    "ucsc",
+    "rust",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Rust",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
 dependencies = [
     "numpy"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "smart_open[http]"
 ]
 
 [project.urls]
