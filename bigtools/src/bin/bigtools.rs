@@ -220,6 +220,7 @@ fn chromintersect(apath: String, bpath: String, outpath: String) -> Result<(), B
             })?;
             if chroms.contains(chrom) {
                 bedoutwriter.write(line.as_bytes())?;
+                bedoutwriter.write("\n".as_bytes())?;
             }
         }
         Ok(())
