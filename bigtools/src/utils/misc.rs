@@ -22,6 +22,8 @@ pub struct BigWigAverageOverBedEntry {
     pub sum: f64,
     pub mean0: f64,
     pub mean: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
 #[derive(Error, Debug)]
@@ -32,6 +34,9 @@ pub enum StatsError {
     InvalidNameCol(String),
 }
 
+/// Returns a `BigWigAverageOverBedEntry` for a bigWig over a given interval.
+/// If there are no values for the given region, then `f64::NAN` is given for
+/// `mean`, `min`, and `max`, and `0` is given for `mean0`.
 pub fn stats_for_bed_item<R: BBIFileRead>(
     name: Name,
     chrom: &str,
@@ -51,17 +56,21 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
 
     let mut bases = 0;
     let mut sum = 0.0;
+    let mut min = f64::MAX;
+    let mut max = f64::MIN;
     for val in interval {
         let num_bases = val.end - val.start;
         bases += num_bases;
         sum += f64::from(num_bases) * f64::from(val.value);
+        min = min.min(f64::from(val.value));
+        max = max.max(f64::from(val.value));
     }
     let size = end - start;
     let mean0 = sum / f64::from(size);
-    let mean = if bases == 0 {
-        0.0
+    let (mean, min, max) = if bases == 0 {
+        (f64::NAN, f64::NAN, f64::NAN)
     } else {
-        sum / f64::from(bases)
+        (sum / f64::from(bases), min, max)
     };
 
     let name = match name {
@@ -89,6 +98,8 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
         sum,
         mean0,
         mean,
+        min,
+        max,
     })
 }
 
