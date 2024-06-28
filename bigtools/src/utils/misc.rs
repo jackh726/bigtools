@@ -34,6 +34,9 @@ pub enum StatsError {
     InvalidNameCol(String),
 }
 
+/// Returns a `BigWigAverageOverBedEntry` for a bigWig over a given interval.
+/// If there are no values for the given region, then `f64::NAN` is given for
+/// `mean`, `min`, and `max`, and `0` is given for `mean0`.
 pub fn stats_for_bed_item<R: BBIFileRead>(
     name: Name,
     chrom: &str,
@@ -65,7 +68,7 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
     let size = end - start;
     let mean0 = sum / f64::from(size);
     let (mean, min, max) = if bases == 0 {
-        (0.0, 0.0, 0.0)
+        (f64::NAN, f64::NAN, f64::NAN)
     } else {
         (sum / f64::from(bases), min, max)
     };
