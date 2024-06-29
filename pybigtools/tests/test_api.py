@@ -247,6 +247,7 @@ def test_zoom_records(bw, bb):
     assert pytest.raises(KeyError, bw.zoom_records, 10, "chr11")
     assert pytest.raises(KeyError, bb.zoom_records, 3911, "chr11")
 
+
 def test_values_no_end(bw, bb):
     # (chrom, None, None) => all values on chrom
     assert len(bw.values("chr17")) == 83_257_441
@@ -256,17 +257,6 @@ def test_values_no_end(bw, bb):
     assert len(bw.values("chr17", 10)) == 83_257_441 - 10
     assert len(bb.values("chr21", 0)) == 48_129_895
     assert len(bb.values("chr21", 10)) == 48_129_895 - 10
-
-# def test_values_no_end(bw, bb):
-#     # (chrom, None, None) => all values on chrom
-#     assert len(bw.values("chr17")) == 83_257_441
-#     assert len(bb.values("chr21")) == 48_129_895
-
-#     # (chrom, start, None) => all values from (start, <chrom_end>)
-#     assert len(bw.values("chr17", 0)) == 83_257_441
-#     assert len(bw.values("chr17", 10)) == 83_257_441 - 10
-#     assert len(bb.values("chr21", 0)) == 48_129_895
-#     assert len(bb.values("chr21", 10)) == 48_129_895 - 10
 
 
 def test_values(bw, bb):
