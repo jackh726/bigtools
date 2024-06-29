@@ -3,6 +3,7 @@ dist/
 **/target
 **/*.rs.bk
 **/__pycache__
+html/
 
 **/workdir
 .vscode
