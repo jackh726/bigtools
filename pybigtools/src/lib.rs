@@ -491,7 +491,7 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
         let interval_start = (interval.start as i32).max(start) - start;
         let interval_end = (interval.end as i32).min(end) - start;
         let bin_start = ((interval_start as f64) / bin_size) as usize;
-        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        let bin_end = (((interval_end - 1) as f64) / bin_size) as usize;
 
         while let Some(front) = bin_data.front_mut() {
             if front.0 < bin_start {
@@ -514,8 +514,14 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
             }
         }
         while let Some(bin) = bin_data
-            .back_mut()
-            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .back()
+            .map(|last_bin| {
+                if last_bin.0 < bin_end {
+                    Some(last_bin.0 + 1)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(Some(bin_start))
         {
             let bin_start = ((bin as f64) * bin_size) as i32;
@@ -523,19 +529,16 @@ fn to_array_bins<I: Iterator<Item = Result<Value, _BBIReadError>>>(
 
             bin_data.push_back((bin, bin_start, bin_end, None));
         }
-        for bin in bin_data.iter() {
-            assert!(
-                (bin_start..bin_end).contains(&bin.0),
-                "{} not in {}..{}",
-                bin.0,
-                bin_start,
-                bin_end
-            );
-        }
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+            // Since bed files can have overlapping entries, a previous entry could have extended
+            // past the last bin for the current interval
+            // Not relevant here, but keeping for parity
+            if interval_end <= *bin_start {
+                break;
+            }
             let (c, v) = data.get_or_insert_with(|| {
                 match summary {
                     // min & max are defined for NAN and we are about to set it
@@ -600,7 +603,7 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
         let interval_start = (interval.start as i32).max(start) - start;
         let interval_end = (interval.end as i32).min(end) - start;
         let bin_start = ((interval_start as f64) / bin_size) as usize;
-        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        let bin_end = (((interval_end - 1) as f64) / bin_size) as usize;
 
         while let Some(front) = bin_data.front_mut() {
             if front.0 < bin_start {
@@ -623,8 +626,14 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             }
         }
         while let Some(bin) = bin_data
-            .back_mut()
-            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .back()
+            .map(|last_bin| {
+                if last_bin.0 < bin_end {
+                    Some(last_bin.0 + 1)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(Some(bin_start))
         {
             let bin_start = ((bin as f64) * bin_size) as i32;
@@ -632,19 +641,16 @@ fn to_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
 
             bin_data.push_back((bin, bin_start, bin_end, None));
         }
-        for bin in bin_data.iter() {
-            assert!(
-                (bin_start..bin_end).contains(&bin.0),
-                "{} not in {}..{}",
-                bin.0,
-                bin_start,
-                bin_end
-            );
-        }
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, data) in bin_data.iter_mut() {
+            // Since bed files can have overlapping entries, a previous entry could have extended
+            // past the last bin for the current interval
+            // Not relevant here, but keeping for parity
+            if interval_end <= *bin_start {
+                break;
+            }
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
             let overlap_size: i32 = overlap_end - overlap_start;
@@ -740,7 +746,7 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
         let interval_start = (interval.start as i32).max(start) - start;
         let interval_end = (interval.end as i32).min(end) - start;
         let bin_start = ((interval_start as f64) / bin_size) as usize;
-        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        let bin_end = (((interval_end - 1) as f64) / bin_size) as usize;
 
         while let Some(front) = bin_data.front_mut() {
             if front.0 < bin_start {
@@ -778,8 +784,14 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
             }
         }
         while let Some(bin) = bin_data
-            .back_mut()
-            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .back()
+            .map(|last_bin| {
+                if last_bin.0 < bin_end {
+                    Some(last_bin.0 + 1)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(Some(bin_start))
         {
             let bin_start = ((bin as f64) * bin_size) as i32;
@@ -793,19 +805,15 @@ fn to_entry_array_bins<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
                 vec![missing; (bin_end - bin_start) as usize],
             ));
         }
-        for bin in bin_data.iter() {
-            assert!(
-                (bin_start..bin_end).contains(&bin.0),
-                "{} not in {}..{}",
-                bin.0,
-                bin_start,
-                bin_end
-            );
-        }
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, covered, data) in bin_data.iter_mut() {
+            // Since bed files can have overlapping entries, a previous entry could have extended
+            // past the last bin for the current interval
+            if interval_end <= *bin_start {
+                break;
+            }
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
 
@@ -874,7 +882,7 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
         let interval_start = (interval.start as i32).max(start) - start;
         let interval_end = (interval.end as i32).min(end) - start;
         let bin_start = ((interval_start as f64) / bin_size) as usize;
-        let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
+        let bin_end = (((interval_end - 1) as f64) / bin_size) as usize;
 
         while let Some(front) = bin_data.front_mut() {
             if front.0 < bin_start {
@@ -912,8 +920,14 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
             }
         }
         while let Some(bin) = bin_data
-            .back_mut()
-            .map(|b| ((b.0 + 1) < bin_end).then(|| b.0 + 1))
+            .back()
+            .map(|last_bin| {
+                if last_bin.0 < bin_end {
+                    Some(last_bin.0 + 1)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(Some(bin_start))
         {
             let bin_start = ((bin as f64) * bin_size) as i32;
@@ -927,19 +941,15 @@ fn to_entry_array_zoom<I: Iterator<Item = Result<ZoomRecord, _BBIReadError>>>(
                 vec![missing; (bin_end - bin_start) as usize],
             ));
         }
-        for bin in bin_data.iter() {
-            assert!(
-                (bin_start..bin_end).contains(&bin.0),
-                "{} not in {}..{}",
-                bin.0,
-                bin_start,
-                bin_end
-            );
-        }
         for bin in bin_start..bin_end {
             assert!(bin_data.iter().find(|b| b.0 == bin).is_some());
         }
         for (_bin, bin_start, bin_end, covered, data) in bin_data.iter_mut() {
+            // Since bed files can have overlapping entries, a previous entry could have extended
+            // past the last bin for the current interval
+            if interval_end <= *bin_start {
+                break;
+            }
             let overlap_start = (*bin_start).max(interval_start);
             let overlap_end = (*bin_end).min(interval_end);
 

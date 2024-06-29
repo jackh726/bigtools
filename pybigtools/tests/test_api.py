@@ -357,6 +357,10 @@ def test_values(bw, bb):
     vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
     assert list(vals) == [1.3408662900188324]
 
+def test_big_gene_pred():
+    bb = pybigtools.open(REPO_ROOT / "bigtools/resources/test/bigGenePred.bb")
+    bb.values("chr21", 14_000_000, 18_000_000, 100)
+
 def test_average_over_bed(bw, bb):
     assert pytest.raises(ValueError, bb.average_over_bed, "ignored")
 
