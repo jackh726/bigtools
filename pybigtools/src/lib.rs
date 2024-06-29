@@ -285,7 +285,7 @@ fn intervals_to_array<R: BBIFileRead>(
                 .convert_err()?;
             to_array(start, end, iter, missing, array.as_array_mut()).convert_err()?;
 
-            (end - start) as f64
+            1.0
         }
     };
 
@@ -301,7 +301,7 @@ fn intervals_to_array<R: BBIFileRead>(
                 array[i] = oob;
             }
         }
-        if end >= length {
+        if end > length {
             let interval_start = (length as i32) - start;
             let interval_end = end - start;
             let bin_start = ((interval_start as f64) / bin_size) as usize;
@@ -421,7 +421,7 @@ fn entries_to_array<R: BBIFileRead>(
                 .convert_err()?;
             to_entry_array(start, end, iter, missing, array.as_array_mut()).convert_err()?;
 
-            (end - start) as f64
+            1.0
         }
     };
 
@@ -437,7 +437,7 @@ fn entries_to_array<R: BBIFileRead>(
                 array[i] = oob;
             }
         }
-        if end >= length {
+        if end > length {
             let interval_start = (length as i32) - start;
             let interval_end = end - start;
             let bin_start = ((interval_start as f64) / bin_size) as usize;
