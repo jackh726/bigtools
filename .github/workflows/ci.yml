@@ -9,7 +9,7 @@ on:
 
 jobs:
   test-lib:
-    name: Test
+    name: Test bigtools
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.rust == 'nightly' }}
     strategy:
@@ -38,6 +38,7 @@ jobs:
         run: cargo test --all
 
   test-python:
+    name: Test pybigtools
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -60,13 +61,13 @@ jobs:
           cd pybigtools
           pip install -e .[test]
   
-      - name: Install
+      - name: Run tests
         run: |
           cd pybigtools
           pytest -v
 
-  fmt:
-    name: Format
+  lint-rust:
+    name: Lint Rust
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the source code
@@ -84,3 +85,20 @@ jobs:
 
       - name: Check formatting of all crates in the workspace
         run: cargo fmt --all -- --check
+
+  lint-python:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Check formatting
+        run: |
+          cd pybigtools
+          ruff check
