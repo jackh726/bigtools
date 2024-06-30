@@ -151,6 +151,12 @@ def test_records(bw, bb):
     assert len(list(bw.records("chr17", 100_000, 110_000))) == 1515
     assert len(list(bb.records("chr21", 10_000_000, 20_000_000))) == 233
 
+    # Unknown chrom  => exception
+    assert pytest.raises(KeyError, bw.records, "chr11")
+    assert pytest.raises(KeyError, bb.records, "chr11")
+
+
+def test_records_oob(bw, bb):
     # Out of bounds start/end are truncated
     x = list(bw.records("chr17", 0, 100_000))
     assert len(x) == 8641
@@ -175,10 +181,6 @@ def test_records(bw, bb):
     assert len(list(bb.records("chr21", -1000, -500))) == 0
     assert len(list(bb.records("chr21", 48_129_895, 49_000_000))) == 0
 
-    # Unknown chrom  => exception
-    assert pytest.raises(KeyError, bw.records, "chr11")
-    assert pytest.raises(KeyError, bb.records, "chr11")
-
 
 def test_zoom_records(bw, bb):
     # (chrom, None, None) => all records on chrom
@@ -193,27 +195,6 @@ def test_zoom_records(bw, bb):
     assert len(list(bw.zoom_records(10, "chr17", 100_000, 110_000))) == 766
     assert len(list(bb.zoom_records(3911, "chr21", 10_000_000, 20_000_000))) == 154
 
-    # Out of bounds start/end are truncated
-    x = list(bw.zoom_records(10, "chr17", 0, 100_000))
-    assert len(x) == 2940
-    assert list(bw.zoom_records(10, "chr17", -1000, 100_000)) == x
-    x = list(bb.zoom_records(3911, "chr21", 0, 10_000_000))
-    assert len(x) == 6
-    assert list(bb.zoom_records(3911, "chr21", -1000, 10_000_000)) == x
-
-    y = list(bw.zoom_records(10, "chr17", 0, bw.chroms("chr17")))
-    assert len(y) == 13811
-    assert list(bw.zoom_records(10, "chr17", 0, bw.chroms("chr17") * 2)) == y
-    y = list(bb.zoom_records(3911, "chr21", 0, bb.chroms("chr21")))
-    assert len(y) == 1676
-    assert list(bb.zoom_records(3911, "chr21", 0, bb.chroms("chr21") * 2)) == y
-
-    # Fully out of bounds ranges return no records
-    assert len(list(bw.zoom_records(10, "chr17", -1000, -500))) == 0
-    assert len(list(bw.zoom_records(10, "chr17", 83_257_441, 84_000_000))) == 0
-    assert len(list(bb.zoom_records(3911, "chr21", -1000, -500))) == 0
-    assert len(list(bb.zoom_records(3911, "chr21", 48_129_895, 49_000_000))) == 0
-
     assert next(bw.zoom_records(10, "chr17", 0, 100_000)) == (
         59898,
         59908,
@@ -226,7 +207,7 @@ def test_zoom_records(bw, bb):
             "sum_squares": 0.2303919643163681,
         },
     )
-    assert next(bw.zoom_records(160, "chr17", 0, 100000)) == (
+    assert next(bw.zoom_records(160, "chr17", 0, 100_000)) == (
         59898,
         60058,
         {
@@ -248,21 +229,46 @@ def test_zoom_records(bw, bb):
     assert pytest.raises(KeyError, bb.zoom_records, 3911, "chr11")
 
 
-def test_values_no_end(bw, bb):
+def test_zoom_records_oob(bw, bb):
+    # Out of bounds start/end are truncated
+    x = list(bw.zoom_records(10, "chr17", 0, 100_000))
+    assert len(x) == 2940
+    assert list(bw.zoom_records(10, "chr17", -1000, 100_000)) == x
+    x = list(bb.zoom_records(3911, "chr21", 0, 10_000_000))
+    assert len(x) == 6
+    assert list(bb.zoom_records(3911, "chr21", -1000, 10_000_000)) == x
+
+    y = list(bw.zoom_records(10, "chr17", 0, bw.chroms("chr17")))
+    assert len(y) == 13811
+    assert list(bw.zoom_records(10, "chr17", 0, bw.chroms("chr17") * 2)) == y
+    y = list(bb.zoom_records(3911, "chr21", 0, bb.chroms("chr21")))
+    assert len(y) == 1676
+    assert list(bb.zoom_records(3911, "chr21", 0, bb.chroms("chr21") * 2)) == y
+
+    # Fully out of bounds ranges return no records
+    assert len(list(bw.zoom_records(10, "chr17", -1000, -500))) == 0
+    assert len(list(bw.zoom_records(10, "chr17", 83_257_441, 84_000_000))) == 0
+    assert len(list(bb.zoom_records(3911, "chr21", -1000, -500))) == 0
+    assert len(list(bb.zoom_records(3911, "chr21", 48_129_895, 49_000_000))) == 0
+
+
+def test_values_bp(bw, bb):
     # (chrom, None, None) => all values on chrom
     assert len(bw.values("chr17")) == 83_257_441
     assert len(bb.values("chr21")) == 48_129_895
+
     # (chrom, start, None) => all values from (start, <chrom_end>)
     assert len(bw.values("chr17", 0)) == 83_257_441
     assert len(bw.values("chr17", 10)) == 83_257_441 - 10
     assert len(bb.values("chr21", 0)) == 48_129_895
     assert len(bb.values("chr21", 10)) == 48_129_895 - 10
 
-
-def test_values(bw, bb):
+    # (chrom, start, end)
     assert len(bw.values("chr17", 100_000, 110_000)) == 10_000
     assert len(bb.values("chr21", 10_148_000, 10_158_000)) == 10_000
 
+
+def test_values_binned(bw, bb):
     assert len(bw.values("chr17", 100000, 110000, 10)) == 10
     assert len(bb.values("chr21", 10_148_000, 10_158_000, 10)) == 10
 
@@ -275,6 +281,8 @@ def test_values(bw, bb):
     assert bw.values("chr17", 100000, 110000, 10, "min")[0] == 0.05403999984264374
     assert bb.values("chr21", 10_148_000, 10_158_000, 10, "min")[0] == 0.0
 
+
+def test_values_binned_exact(bw, bb):
     assert (
         bw.values("chr17", 100000, 110000, 10, "mean", exact=True)[0]
         == 0.4542629980980206
@@ -294,6 +302,8 @@ def test_values(bw, bb):
         0.06791999936103821,
     ]
 
+
+def test_values_binned_missing_oob(bw, bb):
     assert list(
         bw.values("chr17", 59890, 59900, 10, "mean", exact=True, missing=-1.0)
     ) == [
@@ -321,6 +331,29 @@ def test_values(bw, bb):
     x = bb.values("chr21", -10, 10, 20, "mean", exact=True, missing=0.0, oob=0.0)
     assert x[0] == 0.0
 
+
+def test_values_binned_estimate_differences(bw, bb):
+    # Some differences in estimates between pybigtools to other libs
+    # Namely, bigtools calculates estimates by taking the
+    # sum of nanmeans over covered bases (summary.sum/summary.covered_bases)
+    # and dividing by covered bases (overlap between zoom and bin)
+    # So, including these as cases where the calculated value is different
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False)
+    assert list(vals) == [0.15392776003070907, 2.728891665264241]
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True)
+    assert list(vals) == [0.06770934917680595, 2.4864424403431347]
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False)
+    assert list(vals) == [0.5358060553962108, 0.5513471488813751]
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True)
+    assert list(vals) == [0.5362001863472602, 0.5527710799959679]
+
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False)
+    assert list(vals) == [1.2572170068028603]
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
+    assert list(vals) == [1.3408662900188324]
+
+
+def test_values_assign_to_array(bw, bb):
     # The returned array is the same as the one passed, so both show the same values
     arr = np.zeros(20)
     ret_arr = bw.values(
@@ -340,24 +373,6 @@ def test_values(bw, bb):
     assert math.isnan(ret_arr[0])
     assert ret_arr[19] == 0.0
     assert np.array_equal(arr, ret_arr, equal_nan=True)
-
-    # Some differences in estimates between pybigtools to other libs
-    # Namely, bigtools calculates estimates by taking the
-    # sum of nanmeans over covered bases (summary.sum/summary.covered_bases) and dividing by covered bases (overlap between zooom and bin)
-    # So, including these as cases where the calculated value is different
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False)
-    assert list(vals) == [0.15392776003070907, 2.728891665264241]
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True)
-    assert list(vals) == [0.06770934917680595, 2.4864424403431347]
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False)
-    assert list(vals) == [0.5358060553962108, 0.5513471488813751]
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True)
-    assert list(vals) == [0.5362001863472602, 0.5527710799959679]
-
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False)
-    assert list(vals) == [1.2572170068028603]
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
-    assert list(vals) == [1.3408662900188324]
 
 
 def test_big_gene_pred():
