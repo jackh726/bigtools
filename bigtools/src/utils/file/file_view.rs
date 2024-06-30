@@ -9,6 +9,8 @@ pub struct FileView {
 }
 
 impl FileView {
+    /// Creates a File view between two file offsets. Note that `end` will be
+    /// truncated to the actual end of the file.
     pub fn new(mut file: File, start: u64, end: u64) -> io::Result<FileView> {
         let file_end = file.seek(io::SeekFrom::End(0))?;
         file.seek(io::SeekFrom::Start(start))?;
