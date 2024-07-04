@@ -684,7 +684,7 @@ async fn write_chroms_without_zooms(
     Ok((file, max_uncompressed_buf_size, section_iter))
 }
 
-pub struct InternalProcessData(
+pub(crate) struct InternalProcessData(
     pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) BBIDataProcessoringInputSectionChannel,
     pub(crate) u32,
