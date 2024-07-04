@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
 use crate::{BBIDataProcessor, BBIReadError, BigWigRead, BigWigWrite};
-use crate::{BBIDataSource, ProcessChromError, Value};
+use crate::{BBIDataSource, BBIProcessError, Value};
 use tokio::runtime::{self, Runtime};
 
 use super::BBIWriteArgs;
@@ -351,14 +351,14 @@ impl BBIDataSource for ChromGroupReadImpl {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<Self::Error>> {
+    ) -> Result<(), BBIProcessError<Self::Error>> {
         loop {
             let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
                 self.iter.next();
@@ -369,7 +369,7 @@ impl BBIDataSource for ChromGroupReadImpl {
                     loop {
                         let current_val = match group.iter.next() {
                             Some(Ok(v)) => v,
-                            Some(Err(e)) => Err(ProcessChromError::SourceError(e))?,
+                            Some(Err(e)) => Err(BBIProcessError::SourceError(e))?,
                             None => break,
                         };
                         let next_val = match group.iter.peek() {
@@ -382,7 +382,7 @@ impl BBIDataSource for ChromGroupReadImpl {
 
                     advance(p)?;
                 }
-                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                 None => break,
             }
         }

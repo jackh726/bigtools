@@ -15,13 +15,14 @@ use crate::utils::tell::Tell;
 use crate::{
     write_info, BBIDataProcessor, BBIDataProcessoredData, BBIDataProcessoringInputSectionChannel,
     BBIDataSource, InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
-    NoZoomsInternalProcessedData, ZoomsInternalProcessData, ZoomsInternalProcessedData,
+    NoZoomsInternalProcessedData, ProcessDataError, ZoomsInternalProcessData,
+    ZoomsInternalProcessedData,
 };
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
-    self, encode_zoom_section, write_blank_headers, write_zooms, BBIWriteOptions,
-    ProcessChromError, SectionData,
+    self, encode_zoom_section, write_blank_headers, write_zooms, BBIProcessError, BBIWriteOptions,
+    SectionData,
 };
 
 /// The struct used to write a bigBed file
@@ -43,7 +44,7 @@ impl BigBedWrite {
     fn write_pre<E: Error>(
         file: &mut BufWriter<File>,
         autosql: &Option<String>,
-    ) -> Result<(u64, u64, u64, u64), ProcessChromError<E>> {
+    ) -> Result<(u64, u64, u64, u64), BBIProcessError<E>> {
         write_blank_headers(file)?;
 
         let autosql_offset = file.tell()?;
@@ -51,7 +52,7 @@ impl BigBedWrite {
             .clone()
             .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
-            ProcessChromError::InvalidInput("Invalid autosql: null byte in string".to_owned())
+            BBIProcessError::InvalidInput("Invalid autosql: null byte in string".to_owned())
         })?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
@@ -85,7 +86,7 @@ impl BigBedWrite {
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<V::Error>> {
+    ) -> Result<(), BBIProcessError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -142,10 +143,10 @@ impl BigBedWrite {
     /// high resolution zooms takes up a substantial portion of total processing time.
     pub fn write_multipass<V: BBIDataSource<Value = BedEntry>>(
         self,
-        make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
+        make_vals: impl Fn() -> Result<V, BBIProcessError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<V::Error>> {
+    ) -> Result<(), BBIProcessError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -211,7 +212,7 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val<E: Error + Send + 'static>(
+    async fn process_val(
         current_val: BedEntry,
         next_val: Option<&BedEntry>,
         chrom_length: u32,
@@ -223,20 +224,20 @@ impl BigBedWrite {
         runtime: &Handle,
         ftx: &mut BBIDataProcessoringInputSectionChannel,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         // Check a few preconditions:
         // - The current end is greater than or equal to the start
         // - The current end is at most the chromosome length
         // - If there is a next value, then it does not overlap value
         // TODO: test these correctly fails
         if current_val.start > current_val.end {
-            return Err(ProcessChromError::InvalidInput(format!(
+            return Err(ProcessDataError::InvalidInput(format!(
                 "Invalid bed: {} > {}",
                 current_val.start, current_val.end
             )));
         }
         if current_val.start >= chrom_length {
-            return Err(ProcessChromError::InvalidInput(format!(
+            return Err(ProcessDataError::InvalidInput(format!(
                 "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
                 current_val.start, chrom, chrom_length
             )));
@@ -245,7 +246,7 @@ impl BigBedWrite {
             None => (),
             Some(next_val) => {
                 if current_val.start > next_val.start {
-                    return Err(ProcessChromError::InvalidInput(format!(
+                    return Err(ProcessDataError::InvalidInput(format!(
                         "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
                         chrom,
                         current_val.start,
@@ -370,7 +371,7 @@ impl BigBedWrite {
         Ok(())
     }
 
-    async fn process_val_zoom<E: Error + Send + 'static>(
+    async fn process_val_zoom(
         zoom_items: &mut Vec<ZoomItem>,
         options: BBIWriteOptions,
         item_start: u32,
@@ -378,7 +379,7 @@ impl BigBedWrite {
         next_val: Option<&BedEntry>,
         runtime: &Handle,
         chrom_id: u32,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         // Then, add the item to the zoom item queues. This is a bit complicated.
         for zoom_item in zoom_items.iter_mut() {
             debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
@@ -614,11 +615,11 @@ impl BBIDataProcessorCreate for BigBedFullProcess {
 }
 impl BBIDataProcessor for BigBedFullProcess {
     type Value = BedEntry;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let Self {
             summary,
             total_items,
@@ -754,11 +755,11 @@ impl BBIDataProcessorCreate for BigBedNoZoomsProcess {
 
 impl BBIDataProcessor for BigBedNoZoomsProcess {
     type Value = BedEntry;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let BigBedNoZoomsProcess {
             ftx,
             chrom_id,
@@ -856,11 +857,11 @@ impl<E: Error> BBIDataProcessorCreate for BigBedZoomsProcess<E> {
 }
 impl<Er: Error + Send> BBIDataProcessor for BigBedZoomsProcess<Er> {
     type Value = BedEntry;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let BigBedZoomsProcess {
             chrom_id,
             options,

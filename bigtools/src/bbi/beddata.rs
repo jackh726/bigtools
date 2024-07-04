@@ -19,7 +19,7 @@ use crate::bed::bedparser::{
 };
 use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{BBIDataProcessor, BBIDataSource, BedEntry, ProcessChromError, Value};
+use crate::{BBIDataProcessor, BBIDataSource, BBIProcessError, BedEntry, Value};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: S,
@@ -91,19 +91,19 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<Self::Error>> {
+    ) -> Result<(), BBIProcessError<Self::Error>> {
         runtime.block_on(async move {
             let first_val = self.bed_data.next();
             let (mut curr_state, mut next_val) = match first_val {
                 // The first value is an error
-                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                 // There are no values at all
                 None => return Ok(()),
                 // The next value is the first
@@ -112,7 +112,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                     let mut p = start_processing(chrom.clone())?;
                     let next_val = self.bed_data.next();
                     let next_val = match next_val {
-                        Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                        Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                         Some(Ok(v)) => Some(v),
                         None => None,
                     };
@@ -135,7 +135,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                     ((curr_chrom, curr_state), Some((chrom, val))) if chrom == curr_chrom => {
                         let next_val = self.bed_data.next();
                         let next_val = match next_val {
-                            Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                            Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                             Some(Ok(v)) => Some(v),
                             None => None,
                         };
@@ -151,7 +151,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         let (prev_chrom, prev_state) = curr_state;
                         // TODO: test this correctly fails
                         if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
-                            return Err(ProcessChromError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
+                            return Err(BBIProcessError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                         }
                         advance(prev_state)?;
 
@@ -159,7 +159,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         let mut p = start_processing(chrom.clone())?;
                         let next_val = self.bed_data.next();
                         let next_val = match next_val {
-                            Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                            Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                             Some(Ok(v)) => Some(v),
                             None => None,
                         };
@@ -213,14 +213,14 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
+        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
     >(
         &mut self,
         runtime: &Runtime,
         start_processing: &mut StartProcessing,
         advance: &mut Advance,
-    ) -> Result<(), ProcessChromError<Self::Error>> {
+    ) -> Result<(), BBIProcessError<Self::Error>> {
         let mut remaining = true;
         let mut queued_reads: VecDeque<_> = VecDeque::new();
         loop {
@@ -235,7 +235,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                 next.map(|n| assert!(curr.1 != n.1));
                 // TODO: test this correctly fails
                 if !self.allow_out_of_order_chroms && next.map(|n| curr.1 > n.1).unwrap_or(false) {
-                    return Err(ProcessChromError::SourceError(BedValueError::InvalidInput(
+                    return Err(BBIProcessError::SourceError(BedValueError::InvalidInput(
                         "Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`."
                             .to_string(),
                     )));
@@ -243,7 +243,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
                 let file = match File::open(&self.path) {
                     Ok(f) => f,
-                    Err(err) => return Err(ProcessChromError::SourceError(err.into())),
+                    Err(err) => return Err(BBIProcessError::SourceError(err.into())),
                 };
                 let file = FileView::new(file, curr.0, next.map(|n| n.0).unwrap_or(u64::MAX))?;
                 let mut stream = BedFileStream {
@@ -253,7 +253,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
                 let mut p = start_processing(curr.1.clone())?;
                 let curr_chrom = curr.1.clone();
-                let data: tokio::task::JoinHandle<Result<P, ProcessChromError<BedValueError>>> =
+                let data: tokio::task::JoinHandle<Result<P, BBIProcessError<BedValueError>>> =
                     runtime.spawn(async move {
                         let mut next_val: Option<Result<(&str, V), BedValueError>> = None;
 
@@ -264,10 +264,10 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                             };
                             next_val = match curr_value {
                                 // The next value is an error
-                                Some(Err(e)) => return Err(ProcessChromError::SourceError(e)),
+                                Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                                 None => return Ok(p),
                                 Some(Ok((chrom, _))) if chrom != curr_chrom => {
-                                    return Err(ProcessChromError::InvalidInput(
+                                    return Err(BBIProcessError::InvalidInput(
                                         "File is not sorted.".to_string(),
                                     ));
                                 }
@@ -301,7 +301,7 @@ mod tests {
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
     use crate::process_internal::BBIDataProcessorCreate;
-    use crate::{ProcessChromError, Value};
+    use crate::{ProcessDataError, Value};
     use std::fs::File;
     use std::io;
     use std::path::PathBuf;
@@ -336,11 +336,11 @@ mod tests {
         }
         impl BBIDataProcessor for TestBBIDataProcessor {
             type Value = Value;
-            async fn do_process<E: std::error::Error + Send + 'static>(
+            async fn do_process(
                 &mut self,
                 _current_val: Self::Value,
                 _next_val: Option<&Self::Value>,
-            ) -> Result<(), ProcessChromError<E>> {
+            ) -> Result<(), ProcessDataError> {
                 self.count += 1;
 
                 Ok(())

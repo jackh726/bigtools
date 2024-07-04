@@ -54,13 +54,14 @@ use crate::utils::tell::Tell;
 use crate::{
     write_info, BBIDataProcessor, BBIDataProcessoredData, BBIDataProcessoringInputSectionChannel,
     BBIDataSource, InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
-    NoZoomsInternalProcessedData, ZoomsInternalProcessData, ZoomsInternalProcessedData,
+    NoZoomsInternalProcessedData, ProcessDataError, ZoomsInternalProcessData,
+    ZoomsInternalProcessedData,
 };
 
 use crate::bbi::{Summary, Value, ZoomRecord, BIGWIG_MAGIC};
 use crate::bbiwrite::{
-    self, encode_zoom_section, write_blank_headers, write_zooms, BBIWriteOptions,
-    ProcessChromError, SectionData,
+    self, encode_zoom_section, write_blank_headers, write_zooms, BBIProcessError, BBIWriteOptions,
+    SectionData,
 };
 
 struct ZoomItem {
@@ -89,7 +90,7 @@ impl BigWigWrite {
 
     fn write_pre<E: Error>(
         file: &mut BufWriter<File>,
-    ) -> Result<(u64, u64, u64), ProcessChromError<E>> {
+    ) -> Result<(u64, u64, u64), BBIProcessError<E>> {
         write_blank_headers(file)?;
 
         let total_summary_offset = file.tell()?;
@@ -115,7 +116,7 @@ impl BigWigWrite {
         chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<V::Error>> {
+    ) -> Result<(), BBIProcessError<V::Error>> {
         let options = self.options;
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
@@ -177,10 +178,10 @@ impl BigWigWrite {
     /// high resolution zooms takes up a substantial portion of total processing time.
     pub fn write_multipass<V: BBIDataSource<Value = Value>>(
         self,
-        make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
+        make_vals: impl Fn() -> Result<V, BBIProcessError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
-    ) -> Result<(), ProcessChromError<V::Error>> {
+    ) -> Result<(), BBIProcessError<V::Error>> {
         let fp = File::create(self.path.clone())?;
         let mut file = BufWriter::new(fp);
 
@@ -393,9 +394,9 @@ impl BigWigWrite {
 
 struct BigWigInvalidInput(String);
 
-impl<E: Error> From<BigWigInvalidInput> for ProcessChromError<E> {
+impl From<BigWigInvalidInput> for ProcessDataError {
     fn from(value: BigWigInvalidInput) -> Self {
-        ProcessChromError::InvalidInput(value.0)
+        ProcessDataError::InvalidInput(value.0)
     }
 }
 
@@ -475,11 +476,11 @@ impl BBIDataProcessorCreate for BigWigFullProcess {
 
 impl BBIDataProcessor for BigWigFullProcess {
     type Value = Value;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Value,
         next_val: Option<&Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let Self {
             summary,
             items,
@@ -606,11 +607,11 @@ impl BBIDataProcessorCreate for BigWigNoZoomsProcess {
 
 impl BBIDataProcessor for BigWigNoZoomsProcess {
     type Value = Value;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let BigWigNoZoomsProcess {
             ftx,
             chrom_id,
@@ -699,11 +700,11 @@ impl<E: Error> BBIDataProcessorCreate for BigWigZoomsProcess<E> {
 }
 impl<Er: Error + Send> BBIDataProcessor for BigWigZoomsProcess<Er> {
     type Value = Value;
-    async fn do_process<E: Error + Send + 'static>(
+    async fn do_process(
         &mut self,
         current_val: Self::Value,
         next_val: Option<&Self::Value>,
-    ) -> Result<(), ProcessChromError<E>> {
+    ) -> Result<(), ProcessDataError> {
         let BigWigZoomsProcess {
             chrom_id,
             options,
