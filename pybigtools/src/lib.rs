@@ -7,7 +7,7 @@ use std::ops::IndexMut;
 use std::path::Path;
 
 use bigtools::bed::autosql::parse::parse_autosql;
-use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::beddata::BedParserStreamingIterator;
 #[cfg(feature = "remote")]
 use bigtools::utils::file::remote_file::RemoteFile;
 use bigtools::utils::file::reopen::ReopenableFile;
@@ -2026,8 +2026,8 @@ impl BigWigWrite {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
                 Ok(v) => Ok(v),
             });
-            let chsi = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
-            match bigwig.write(chrom_map, chsi, runtime) {
+            let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
+            match bigwig.write(chrom_map, data, runtime) {
                 Err(e) => println!("{}", e),
                 Ok(_) => {}
             }
@@ -2178,8 +2178,8 @@ impl BigBedWrite {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
                 Ok(v) => Ok(v),
             });
-            let chsi = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
-            match bigbed.write(chrom_map, chsi, runtime) {
+            let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
+            match bigbed.write(chrom_map, data, runtime) {
                 Err(e) => {
                     println!("{}", e)
                 }

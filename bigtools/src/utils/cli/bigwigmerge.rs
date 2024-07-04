@@ -9,8 +9,8 @@ use thiserror::Error;
 
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::{BBIReadError, BigWigRead, BigWigWrite, ChromProcess};
-use crate::{ChromData, ProcessChromError, Value};
+use crate::{BBIDataProcessor, BBIReadError, BigWigRead, BigWigWrite};
+use crate::{BBIDataSource, ProcessChromError, Value};
 use tokio::runtime::{self, Runtime};
 
 use super::BBIWriteArgs;
@@ -345,12 +345,12 @@ struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
-impl ChromData for ChromGroupReadImpl {
+impl BBIDataSource for ChromGroupReadImpl {
     type Value = Value;
     type Error = MergingValuesError;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = Self::Value>,
+        P: BBIDataProcessor<Value = Self::Value>,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
         Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(

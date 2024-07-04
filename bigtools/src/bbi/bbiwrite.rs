@@ -126,7 +126,7 @@ pub(crate) struct TempZoomInfo<SourceError: Error> {
     pub sections: crossbeam_channel::Receiver<Section>,
 }
 
-pub(crate) type ChromProcessingInputSectionChannel =
+pub(crate) type BBIDataProcessoringInputSectionChannel =
     futures_mpsc::Sender<tokio::task::JoinHandle<io::Result<(SectionData, usize)>>>;
 
 const MAX_ZOOM_LEVELS: usize = 10;
@@ -537,23 +537,25 @@ pub(crate) fn write_zooms(
     Ok(zoom_entries)
 }
 
-/// Potential states encountered when reading `ChromData`
-pub enum ChromDataState<ChromOutput, Error> {
-    /// We've encountered a new chromosome
-    NewChrom(ChromOutput),
-    Finished,
-    Error(Error),
-}
+pub(crate) struct BBIDataProcessoredData(pub(crate) Summary);
 
-pub struct ChromProcessedData(pub(crate) Summary);
-
-/// Effectively like an Iterator of chromosome data
-pub trait ChromData: Sized {
+/// This trait abstracts over processing the data for a bbi file. Generally,
+/// users should not need to implement this directly, but rather use provided
+/// structs like `BedParserStreamingIterator`. However, this does provide a
+/// lower-level API that can be useful for custom value generation or
+/// scheduling logic.
+///
+/// When `process_to_bbi` is called, it is expected that the function
+/// `start_processing` is called with the chromosome name in-order. This
+/// function returns a `Result` for `P`, which represents the active state for
+/// writing the data for that chromosome. For each value, `do_process` should
+/// be called, which writes it to the file.
+pub trait BBIDataSource: Sized {
     type Value;
     type Error: Error + Send + 'static;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = Self::Value> + Send + 'static,
+        P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
         Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
@@ -674,8 +676,8 @@ async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
 }
 
 pub struct InternalProcessData(
-    pub(crate) Vec<(u32, ChromProcessingInputSectionChannel)>,
-    pub(crate) ChromProcessingInputSectionChannel,
+    pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
+    pub(crate) BBIDataProcessoringInputSectionChannel,
     pub(crate) u32,
     pub(crate) BBIWriteOptions,
     pub(crate) Handle,
@@ -684,7 +686,7 @@ pub struct InternalProcessData(
 );
 
 pub(crate) mod process_internal {
-    pub trait ChromProcessCreate {
+    pub trait BBIDataProcessorCreate {
         type I;
         type Out;
         fn create(internal_data: Self::I) -> Self;
@@ -692,7 +694,7 @@ pub(crate) mod process_internal {
     }
 }
 
-pub trait ChromProcess: process_internal::ChromProcessCreate {
+pub trait BBIDataProcessor: process_internal::BBIDataProcessorCreate {
     type Value: Send + 'static;
     fn do_process<E: Error + Send + 'static>(
         &mut self,
@@ -702,10 +704,12 @@ pub trait ChromProcess: process_internal::ChromProcessCreate {
 }
 
 pub(crate) fn write_vals<
-    V: ChromData,
-    P: ChromProcess<Value = V::Value>
-        + process_internal::ChromProcessCreate<I = InternalProcessData, Out = ChromProcessedData>
-        + Send
+    V: BBIDataSource,
+    P: BBIDataProcessor<Value = V::Value>
+        + process_internal::BBIDataProcessorCreate<
+            I = InternalProcessData,
+            Out = BBIDataProcessoredData,
+        > + Send
         + 'static,
 >(
     mut vals_iter: V,
@@ -753,8 +757,8 @@ pub(crate) fn write_vals<
         options: BBIWriteOptions,
         runtime: &Runtime,
     ) -> (
-        Vec<(u32, ChromProcessingInputSectionChannel)>,
-        ChromProcessingInputSectionChannel,
+        Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
+        BBIDataProcessoringInputSectionChannel,
     ) {
         let (ftx, sections_handle, buf, section_receiver) =
             future_channel(options.channel_size, runtime.handle(), options.inmemory);
@@ -815,7 +819,7 @@ pub(crate) fn write_vals<
 
     let mut advance = |p: P| {
         let data = p.destroy();
-        let ChromProcessedData(chrom_summary) = data;
+        let BBIDataProcessoredData(chrom_summary) = data;
         match &mut summary {
             None => summary = Some(chrom_summary),
             Some(summary) => {
@@ -870,7 +874,7 @@ pub(crate) fn write_vals<
 }
 
 pub(crate) struct NoZoomsInternalProcessData(
-    pub(crate) ChromProcessingInputSectionChannel,
+    pub(crate) BBIDataProcessoringInputSectionChannel,
     pub(crate) u32,
     pub(crate) BBIWriteOptions,
     pub(crate) Handle,
@@ -880,9 +884,9 @@ pub(crate) struct NoZoomsInternalProcessData(
 pub(crate) struct NoZoomsInternalProcessedData(pub(crate) Summary, pub(crate) Vec<(u64, u64)>);
 
 pub(crate) fn write_vals_no_zoom<
-    V: ChromData,
-    P: ChromProcess<Value = V::Value>
-        + process_internal::ChromProcessCreate<
+    V: BBIDataSource,
+    P: BBIDataProcessor<Value = V::Value>
+        + process_internal::BBIDataProcessorCreate<
             I = NoZoomsInternalProcessData,
             Out = NoZoomsInternalProcessedData,
         > + Send
@@ -1020,7 +1024,7 @@ pub(crate) struct InternalTempZoomInfo<SourceError: Error> {
 
 pub(crate) struct ZoomsInternalProcessData<E: Error>(
     pub(crate) Vec<InternalTempZoomInfo<E>>,
-    pub(crate) Vec<(u32, ChromProcessingInputSectionChannel)>,
+    pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) u32,
     pub(crate) BBIWriteOptions,
     pub(crate) Handle,
@@ -1028,9 +1032,9 @@ pub(crate) struct ZoomsInternalProcessData<E: Error>(
 pub(crate) struct ZoomsInternalProcessedData<E: Error>(pub(crate) Vec<InternalTempZoomInfo<E>>);
 
 pub(crate) fn write_zoom_vals<
-    V: ChromData,
-    P: ChromProcess<Value = V::Value>
-        + process_internal::ChromProcessCreate<
+    V: BBIDataSource,
+    P: BBIDataProcessor<Value = V::Value>
+        + process_internal::BBIDataProcessorCreate<
             I = ZoomsInternalProcessData<V::Error>,
             Out = ZoomsInternalProcessedData<V::Error>,
         > + Send
@@ -1301,7 +1305,7 @@ pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'sta
     runtime: &Handle,
     inmemory: bool,
 ) -> (
-    ChromProcessingInputSectionChannel,
+    BBIDataProcessoringInputSectionChannel,
     tokio::task::JoinHandle<Result<(usize, usize), ProcessChromError<Err>>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tempfile;
 
 use bigtools::bed::bedparser::{BedFileStream, StreamingBedValues};
-use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::beddata::BedParserStreamingIterator;
 use bigtools::{BigWigRead, BigWigWrite, Value};
 use tokio::runtime;
 
@@ -37,8 +37,8 @@ fn test() -> Result<(), Box<dyn Error>> {
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
 
-    let chsi = BedParserStreamingIterator::from_bedgraph_file(infile, false);
-    outb.write(chrom_map, chsi, runtime).unwrap();
+    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
+    outb.write(chrom_map, data, runtime).unwrap();
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 
@@ -85,8 +85,8 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
     outb.write_multipass(
         || {
             let infile = File::open(single_chrom_bedgraph.clone())?;
-            let chsi = BedParserStreamingIterator::from_bedgraph_file(infile, false);
-            Ok(chsi)
+            let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
+            Ok(data)
         },
         chrom_map,
         runtime,
@@ -134,8 +134,8 @@ fn test_multi_chrom() -> io::Result<()> {
     chrom_map.insert("chr5".to_string(), 181538259);
     chrom_map.insert("chr6".to_string(), 170805979);
 
-    let chsi = BedParserStreamingIterator::from_bedgraph_file(infile, false);
-    outb.write(chrom_map, chsi, runtime).unwrap();
+    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
+    outb.write(chrom_map, data, runtime).unwrap();
 
     let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 

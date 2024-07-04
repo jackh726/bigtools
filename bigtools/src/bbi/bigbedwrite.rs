@@ -9,12 +9,12 @@ use futures::sink::SinkExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::bbiwrite::process_internal::ChromProcessCreate;
+use crate::bbiwrite::process_internal::BBIDataProcessorCreate;
 use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
-    write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
-    InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
+    write_info, BBIDataProcessor, BBIDataProcessoredData, BBIDataProcessoringInputSectionChannel,
+    BBIDataSource, InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
     NoZoomsInternalProcessedData, ZoomsInternalProcessData, ZoomsInternalProcessedData,
 };
 
@@ -80,7 +80,7 @@ impl BigBedWrite {
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
-    pub fn write<V: ChromData<Value = BedEntry>>(
+    pub fn write<V: BBIDataSource<Value = BedEntry>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
@@ -140,7 +140,7 @@ impl BigBedWrite {
     /// Write the values from `V` as a bigBed. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
     /// high resolution zooms takes up a substantial portion of total processing time.
-    pub fn write_multipass<V: ChromData<Value = BedEntry>>(
+    pub fn write_multipass<V: BBIDataSource<Value = BedEntry>>(
         self,
         make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
@@ -221,7 +221,7 @@ impl BigBedWrite {
         overlap: &mut IndexList<Value>,
         options: BBIWriteOptions,
         runtime: &Handle,
-        ftx: &mut ChromProcessingInputSectionChannel,
+        ftx: &mut BBIDataProcessoringInputSectionChannel,
         chrom_id: u32,
     ) -> Result<(), ProcessChromError<E>> {
         // Check a few preconditions:
@@ -525,7 +525,7 @@ struct ZoomItem {
     live_info: Option<(ZoomRecord, u64)>,
     overlap: IndexList<Value>,
     records: Vec<ZoomRecord>,
-    channel: ChromProcessingInputSectionChannel,
+    channel: BBIDataProcessoringInputSectionChannel,
 }
 struct EntriesSection {
     items: Vec<BedEntry>,
@@ -538,7 +538,7 @@ pub(crate) struct BigBedFullProcess {
     state_val: EntriesSection,
     total_items: u64,
 
-    ftx: ChromProcessingInputSectionChannel,
+    ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -546,10 +546,10 @@ pub(crate) struct BigBedFullProcess {
     length: u32,
 }
 
-impl ChromProcessCreate for BigBedFullProcess {
+impl BBIDataProcessorCreate for BigBedFullProcess {
     type I = InternalProcessData;
-    type Out = ChromProcessedData;
-    fn destroy(self) -> ChromProcessedData {
+    type Out = BBIDataProcessoredData;
+    fn destroy(self) -> BBIDataProcessoredData {
         let Self {
             summary,
             total_items,
@@ -575,7 +575,7 @@ impl ChromProcessCreate for BigBedFullProcess {
             Some(summary) => summary,
         };
         summary_complete.total_items = total_items;
-        ChromProcessedData(summary_complete)
+        BBIDataProcessoredData(summary_complete)
     }
     fn create(internal_data: InternalProcessData) -> Self {
         let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
@@ -612,7 +612,7 @@ impl ChromProcessCreate for BigBedFullProcess {
         }
     }
 }
-impl ChromProcess for BigBedFullProcess {
+impl BBIDataProcessor for BigBedFullProcess {
     type Value = BedEntry;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
@@ -675,7 +675,7 @@ struct ZoomCounts {
     counts: u64,
 }
 struct BigBedNoZoomsProcess {
-    ftx: ChromProcessingInputSectionChannel,
+    ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -689,7 +689,7 @@ struct BigBedNoZoomsProcess {
     total_items: u64,
 }
 
-impl ChromProcessCreate for BigBedNoZoomsProcess {
+impl BBIDataProcessorCreate for BigBedNoZoomsProcess {
     type I = NoZoomsInternalProcessData;
     type Out = NoZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
@@ -752,7 +752,7 @@ impl ChromProcessCreate for BigBedNoZoomsProcess {
     }
 }
 
-impl ChromProcess for BigBedNoZoomsProcess {
+impl BBIDataProcessor for BigBedNoZoomsProcess {
     type Value = BedEntry;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
@@ -817,7 +817,7 @@ struct BigBedZoomsProcess<E: Error> {
     zoom_items: Vec<ZoomItem>,
 }
 
-impl<E: Error> ChromProcessCreate for BigBedZoomsProcess<E> {
+impl<E: Error> BBIDataProcessorCreate for BigBedZoomsProcess<E> {
     type I = ZoomsInternalProcessData<E>;
     type Out = ZoomsInternalProcessedData<E>;
     fn create(internal_data: Self::I) -> Self {
@@ -854,7 +854,7 @@ impl<E: Error> ChromProcessCreate for BigBedZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error + Send> ChromProcess for BigBedZoomsProcess<Er> {
+impl<Er: Error + Send> BBIDataProcessor for BigBedZoomsProcess<Er> {
     type Value = BedEntry;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,

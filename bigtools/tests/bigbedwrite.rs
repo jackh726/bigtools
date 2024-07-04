@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use bigtools::bed::bedparser::{BedFileStream, StreamingBedValues};
-use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::beddata::BedParserStreamingIterator;
 use tokio::runtime;
 
 #[test]
@@ -48,8 +48,8 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     chrom_map.insert("chr19".to_string(), 58617616);
 
     let infile = File::open(bed)?;
-    let chsi = BedParserStreamingIterator::from_bed_file(infile, false);
-    outb.write(chrom_map, chsi, runtime).unwrap();
+    let data = BedParserStreamingIterator::from_bed_file(infile, false);
+    outb.write(chrom_map, data, runtime).unwrap();
 
     let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
 

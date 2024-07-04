@@ -27,22 +27,16 @@ Generally, bigWig and bigBed writing is done per chromosome, with compression
 and io being done on an async Runtime.
 
 The source for data to be written to bigWigs and bigBeds come from the
-[`ChromData`] trait. It's effectively like a powerful `Iterator` of
-`ChromData::Output` values, which itself is like peekable `Iterator` of values
-(either [`Value`]s or [`BedEntry`]s for bigWigs or bigBeds respectively) over a
-chromosome. The [`ChromData::advance`] method takes a function that the current
-chromosome and returns a `Future` that will asynchronously process chromosomal
-data. This data can be returned immediately from the `advance` method, or can
-be stored (with the correct implementation) to queue multiple chromosomes
-simulatenously. The
-[`BedParserStreamingIterator`][crate::bbi::bedchromdata::BedParserStreamingIterator]
-and
-[`BedParserParallelStreamingIterator`][crate::bbi::bedchromdata::BedParserParallelStreamingIterator]
-types provide serial processing of a bed-like value stream (either from a
-file or an iterator) or concurrent processing from a file. Generally, these
-underlying details aren't necessary unless implementing a new data source.
+[`BBIDataSource`] trait. It is used to abstracts over processing the data
+for a bbi file. It is a lower-level API that can be useful for custom value
+generation or scheduling logic. Generally though, users should not need to
+implement this directly, but rather use provided structs [`BedParserStreamingIterator`][crate::bbi::beddata::BedParserStreamingIterator]
+and [`BedParserParallelStreamingIterator`][crate::bbi::beddata::BedParserParallelStreamingIterator]
+types providing serial processing of a bed-like value stream (either from a
+file or an iterator) or concurrent processing from a file. See the documentation on the trait for more
+detailed information on how to implement.
 
-Given some implementation of [`ChromData`] (like [`BedParserStreamingIterator`][crate::bbi::bedchromdata::BedParserStreamingIterator]),
+Given some implementation of [`BBIDataSource`] (like [`BedParserStreamingIterator`][crate::bbi::beddata::BedParserStreamingIterator]),
 a bigWig can be created using [`BigWigWrite::write`] or a bigBed with
 [`BigBedWrite::write`]. Both take a map of chromosome sizes, the aforementioned
 data, and a `Runtime` to spawn processing on.

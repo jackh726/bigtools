@@ -19,7 +19,7 @@ use crate::bed::bedparser::{
 };
 use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{BedEntry, ChromData, ChromProcess, ProcessChromError, Value};
+use crate::{BBIDataProcessor, BBIDataSource, BedEntry, ProcessChromError, Value};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: S,
@@ -85,12 +85,12 @@ impl<V: Clone, C: Into<String> + for<'a> PartialEq<&'a str>, I: Iterator<Item = 
     }
 }
 
-impl<S: StreamingBedValues> ChromData for BedParserStreamingIterator<S> {
+impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
     type Value = S::Value;
     type Error = BedValueError;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = Self::Value>,
+        P: BBIDataProcessor<Value = Self::Value>,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
         Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
@@ -207,12 +207,12 @@ impl<V> BedParserParallelStreamingIterator<V> {
     }
 }
 
-impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
+impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> {
     type Value = V;
     type Error = BedValueError;
 
     fn process_to_bbi<
-        P: ChromProcess<Value = Self::Value> + Send + 'static,
+        P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
         StartProcessing: FnMut(String) -> Result<P, ProcessChromError<Self::Error>>,
         Advance: FnMut(P) -> Result<(), ProcessChromError<Self::Error>>,
     >(
@@ -300,7 +300,7 @@ impl<V: Send + 'static> ChromData for BedParserParallelStreamingIterator<V> {
 mod tests {
     use super::*;
     use crate::bed::bedparser::parse_bedgraph;
-    use crate::process_internal::ChromProcessCreate;
+    use crate::process_internal::BBIDataProcessorCreate;
     use crate::{ProcessChromError, Value};
     use std::fs::File;
     use std::io;
@@ -315,7 +315,7 @@ mod tests {
         let chrom_indices: Vec<(u64, String)> =
             crate::bed::indexer::index_chroms(File::open(dir.clone())?)?.unwrap();
 
-        let mut chsi = BedParserParallelStreamingIterator::new(
+        let mut data = BedParserParallelStreamingIterator::new(
             chrom_indices,
             true,
             PathBuf::from(dir.clone()),
@@ -323,18 +323,18 @@ mod tests {
         );
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let mut counts = vec![];
-        struct TestChromProcess {
+        struct TestBBIDataProcessor {
             count: usize,
         }
-        impl ChromProcessCreate for TestChromProcess {
+        impl BBIDataProcessorCreate for TestBBIDataProcessor {
             type I = ();
             type Out = ();
             fn create(_: Self::I) -> Self {
-                TestChromProcess { count: 0 }
+                TestBBIDataProcessor { count: 0 }
             }
             fn destroy(self) -> Self::Out {}
         }
-        impl ChromProcess for TestChromProcess {
+        impl BBIDataProcessor for TestBBIDataProcessor {
             type Value = Value;
             async fn do_process<E: std::error::Error + Send + 'static>(
                 &mut self,
@@ -346,13 +346,13 @@ mod tests {
                 Ok(())
             }
         }
-        let mut start_processing = |_: String| Ok(TestChromProcess::create(()));
-        let mut advance = |p: TestChromProcess| {
+        let mut start_processing = |_: String| Ok(TestBBIDataProcessor::create(()));
+        let mut advance = |p: TestBBIDataProcessor| {
             counts.push(p.count);
             let _ = p.destroy();
             Ok(())
         };
-        chsi.process_to_bbi(&runtime, &mut start_processing, &mut advance)
+        data.process_to_bbi(&runtime, &mut start_processing, &mut advance)
             .unwrap();
         assert_eq!(counts, vec![200, 200, 200, 200, 200, 2000]);
 

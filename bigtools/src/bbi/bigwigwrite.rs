@@ -8,7 +8,7 @@ Provides the interface for writing bigWig files.
 # use std::path::PathBuf;
 # use std::fs::File;
 # use bigtools::BigWigWrite;
-# use bigtools::bedchromdata::BedParserStreamingIterator;
+# use bigtools::beddata::BedParserStreamingIterator;
 # fn main() -> Result<(), Box<dyn Error>> {
 # let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 # dir.push("resources/test");
@@ -49,11 +49,11 @@ use futures::sink::SinkExt;
 use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::bbiwrite::process_internal::ChromProcessCreate;
+use crate::bbiwrite::process_internal::BBIDataProcessorCreate;
 use crate::utils::tell::Tell;
 use crate::{
-    write_info, ChromData, ChromProcess, ChromProcessedData, ChromProcessingInputSectionChannel,
-    InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
+    write_info, BBIDataProcessor, BBIDataProcessoredData, BBIDataProcessoringInputSectionChannel,
+    BBIDataSource, InternalProcessData, InternalTempZoomInfo, NoZoomsInternalProcessData,
     NoZoomsInternalProcessedData, ZoomsInternalProcessData, ZoomsInternalProcessedData,
 };
 
@@ -70,7 +70,7 @@ struct ZoomItem {
     live_info: Option<ZoomRecord>,
     // All zoom entries in the current section
     records: Vec<ZoomRecord>,
-    channel: ChromProcessingInputSectionChannel,
+    channel: BBIDataProcessoringInputSectionChannel,
 }
 
 /// The struct used to write a bigWig file
@@ -110,7 +110,7 @@ impl BigWigWrite {
     }
 
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
-    pub fn write<V: ChromData<Value = Value>>(
+    pub fn write<V: BBIDataSource<Value = Value>>(
         self,
         chrom_sizes: HashMap<String, u32>,
         vals: V,
@@ -175,7 +175,7 @@ impl BigWigWrite {
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     /// This will take two passes on the provided values: first to write the values themselves, then the zooms. This is beneficial over `write` on smaller files, where the encoding of
     /// high resolution zooms takes up a substantial portion of total processing time.
-    pub fn write_multipass<V: ChromData<Value = Value>>(
+    pub fn write_multipass<V: BBIDataSource<Value = Value>>(
         self,
         make_vals: impl Fn() -> Result<V, ProcessChromError<V::Error>>,
         chrom_sizes: HashMap<String, u32>,
@@ -253,7 +253,7 @@ impl BigWigWrite {
         items: &mut Vec<Value>,
         options: BBIWriteOptions,
         runtime: &Handle,
-        ftx: &mut ChromProcessingInputSectionChannel,
+        ftx: &mut BBIDataProcessoringInputSectionChannel,
         chrom_id: u32,
     ) -> Result<(), BigWigInvalidInput> {
         // Check a few preconditions:
@@ -404,7 +404,7 @@ pub(crate) struct BigWigFullProcess {
     items: Vec<Value>,
     zoom_items: Vec<ZoomItem>,
 
-    ftx: ChromProcessingInputSectionChannel,
+    ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -412,9 +412,9 @@ pub(crate) struct BigWigFullProcess {
     length: u32,
 }
 
-impl ChromProcessCreate for BigWigFullProcess {
+impl BBIDataProcessorCreate for BigWigFullProcess {
     type I = InternalProcessData;
-    type Out = ChromProcessedData;
+    type Out = BBIDataProcessoredData;
     fn create(internal_data: InternalProcessData) -> Self {
         let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
             internal_data;
@@ -451,7 +451,7 @@ impl ChromProcessCreate for BigWigFullProcess {
             length,
         }
     }
-    fn destroy(self) -> ChromProcessedData {
+    fn destroy(self) -> BBIDataProcessoredData {
         let Self {
             mut summary,
             items,
@@ -469,11 +469,11 @@ impl ChromProcessCreate for BigWigFullProcess {
             summary.min_val = 0.0;
             summary.max_val = 0.0;
         }
-        ChromProcessedData(summary)
+        BBIDataProcessoredData(summary)
     }
 }
 
-impl ChromProcess for BigWigFullProcess {
+impl BBIDataProcessor for BigWigFullProcess {
     type Value = Value;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
@@ -530,7 +530,7 @@ struct ZoomCounts {
     counts: u64,
 }
 struct BigWigNoZoomsProcess {
-    ftx: ChromProcessingInputSectionChannel,
+    ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -542,7 +542,7 @@ struct BigWigNoZoomsProcess {
     zoom_counts: Vec<ZoomCounts>,
 }
 
-impl ChromProcessCreate for BigWigNoZoomsProcess {
+impl BBIDataProcessorCreate for BigWigNoZoomsProcess {
     type I = NoZoomsInternalProcessData;
     type Out = NoZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
@@ -604,7 +604,7 @@ impl ChromProcessCreate for BigWigNoZoomsProcess {
     }
 }
 
-impl ChromProcess for BigWigNoZoomsProcess {
+impl BBIDataProcessor for BigWigNoZoomsProcess {
     type Value = Value;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,
@@ -661,7 +661,7 @@ struct BigWigZoomsProcess<E: Error> {
     zoom_items: Vec<ZoomItem>,
 }
 
-impl<E: Error> ChromProcessCreate for BigWigZoomsProcess<E> {
+impl<E: Error> BBIDataProcessorCreate for BigWigZoomsProcess<E> {
     type I = ZoomsInternalProcessData<E>;
     type Out = ZoomsInternalProcessedData<E>;
     fn create(internal_data: Self::I) -> Self {
@@ -697,7 +697,7 @@ impl<E: Error> ChromProcessCreate for BigWigZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error + Send> ChromProcess for BigWigZoomsProcess<Er> {
+impl<Er: Error + Send> BBIDataProcessor for BigWigZoomsProcess<Er> {
     type Value = Value;
     async fn do_process<E: Error + Send + 'static>(
         &mut self,

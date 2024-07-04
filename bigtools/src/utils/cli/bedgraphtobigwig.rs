@@ -6,7 +6,7 @@ use tokio::runtime;
 
 use crate::bed::bedparser::parse_bedgraph;
 use crate::bed::indexer::index_chroms;
-use crate::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
+use crate::beddata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use crate::{BigWigWrite, InputSortType};
 
 use super::BBIWriteArgs;
@@ -133,24 +133,24 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         };
         if let Some(chrom_indices) = chrom_indices {
             if args.single_pass {
-                let chsi = BedParserParallelStreamingIterator::new(
+                let data = BedParserParallelStreamingIterator::new(
                     chrom_indices,
                     allow_out_of_order_chroms,
                     PathBuf::from(bedgraphpath),
                     parse_bedgraph,
                 );
-                outb.write(chrom_map, chsi, runtime)?;
+                outb.write(chrom_map, data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
-                        let chsi = BedParserParallelStreamingIterator::new(
+                        let data = BedParserParallelStreamingIterator::new(
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
                             PathBuf::from(bedgraphpath.clone()),
                             parse_bedgraph,
                         );
 
-                        Ok(chsi)
+                        Ok(data)
                     },
                     chrom_map,
                     runtime,
