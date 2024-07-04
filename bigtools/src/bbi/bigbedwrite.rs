@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -41,10 +40,10 @@ impl BigBedWrite {
         }
     }
 
-    fn write_pre<E: Error>(
+    fn write_pre(
         file: &mut BufWriter<File>,
         autosql: &Option<String>,
-    ) -> Result<(u64, u64, u64, u64), BBIProcessError<E>> {
+    ) -> Result<(u64, u64, u64, u64), ProcessDataError> {
         write_blank_headers(file)?;
 
         let autosql_offset = file.tell()?;
@@ -52,7 +51,7 @@ impl BigBedWrite {
             .clone()
             .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
-            BBIProcessError::InvalidInput("Invalid autosql: null byte in string".to_owned())
+            ProcessDataError::InvalidInput("Invalid autosql: null byte in string".to_owned())
         })?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
@@ -177,7 +176,7 @@ impl BigBedWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_zoom_vals::<_, BigBedZoomsProcess<_>>(
+        let output = bbiwrite::write_zoom_vals::<_, BigBedZoomsProcess>(
             vals,
             self.options,
             &runtime,
@@ -809,8 +808,8 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
     }
 }
 
-struct BigBedZoomsProcess<E: Error> {
-    temp_zoom_items: Vec<InternalTempZoomInfo<E>>,
+struct BigBedZoomsProcess {
+    temp_zoom_items: Vec<InternalTempZoomInfo>,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -818,9 +817,9 @@ struct BigBedZoomsProcess<E: Error> {
     zoom_items: Vec<ZoomItem>,
 }
 
-impl<E: Error> BBIDataProcessorCreate for BigBedZoomsProcess<E> {
-    type I = ZoomsInternalProcessData<E>;
-    type Out = ZoomsInternalProcessedData<E>;
+impl BBIDataProcessorCreate for BigBedZoomsProcess {
+    type I = ZoomsInternalProcessData;
+    type Out = ZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
         let ZoomsInternalProcessData(temp_zoom_items, zooms_channels, chrom_id, options, runtime) =
             internal_data;
@@ -855,7 +854,7 @@ impl<E: Error> BBIDataProcessorCreate for BigBedZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error + Send> BBIDataProcessor for BigBedZoomsProcess<Er> {
+impl BBIDataProcessor for BigBedZoomsProcess {
     type Value = BedEntry;
     async fn do_process(
         &mut self,

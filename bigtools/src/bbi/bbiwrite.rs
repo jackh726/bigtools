@@ -128,10 +128,9 @@ impl<E: Error> From<ProcessDataError> for BBIProcessError<E> {
     }
 }
 
-pub(crate) struct TempZoomInfo<SourceError: Error> {
+pub(crate) struct TempZoomInfo {
     pub resolution: u32,
-    pub data_write_future:
-        tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<SourceError>>>,
+    pub data_write_future: tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
     pub data: TempFileBuffer<TempFileBufferWriter<File>>,
     pub sections: crossbeam_channel::Receiver<Section>,
 }
@@ -151,7 +150,7 @@ pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn write_info<Err: Error>(
+pub(crate) fn write_info(
     file: &mut BufWriter<File>,
     magic: u32,
     num_zooms: u16,
@@ -166,7 +165,7 @@ pub(crate) fn write_info<Err: Error>(
     zoom_entries: Vec<ZoomHeader>,
     summary: Summary,
     data_count: u64,
-) -> Result<(), BBIProcessError<Err>> {
+) -> Result<(), ProcessDataError> {
     file.seek(SeekFrom::Start(0))?;
     file.write_u32::<NativeEndian>(magic)?;
     file.write_u16::<NativeEndian>(4)?;
@@ -566,8 +565,8 @@ pub trait BBIDataSource: Sized {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Runtime,
@@ -582,22 +581,22 @@ pub(crate) type ZoomValue = (
     TempFileBuffer<File>,
     Option<TempFileBufferWriter<File>>,
 );
-type Data<Error> = (
+type Data = (
     crossbeam_channel::Receiver<Section>,
     TempFileBuffer<BufWriter<File>>,
-    tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<Error>>>,
-    Vec<TempZoomInfo<Error>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
+    Vec<TempZoomInfo>,
 );
-type DataWithoutzooms<Error> = (
+type DataWithoutzooms = (
     crossbeam_channel::Receiver<Section>,
     TempFileBuffer<BufWriter<File>>,
-    tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<Error>>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
 );
 
-async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
+async fn write_chroms_with_zooms(
     mut file: BufWriter<File>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
-    mut receiver: futures_mpsc::UnboundedReceiver<Data<Err>>,
+    mut receiver: futures_mpsc::UnboundedReceiver<Data>,
 ) -> Result<
     (
         BufWriter<File>,
@@ -605,7 +604,7 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
         Vec<crossbeam_channel::IntoIter<Section>>,
         BTreeMap<u32, ZoomValue>,
     ),
-    BBIProcessError<Err>,
+    ProcessDataError,
 > {
     let mut section_iter = vec![];
     let mut max_uncompressed_buf_size = 0;
@@ -653,16 +652,16 @@ async fn write_chroms_with_zooms<Err: Error + Send + 'static>(
     Ok((file, max_uncompressed_buf_size, section_iter, zooms_map))
 }
 
-async fn write_chroms_without_zooms<Err: Error + Send + 'static>(
+async fn write_chroms_without_zooms(
     mut file: BufWriter<File>,
-    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms<Err>>,
+    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms>,
 ) -> Result<
     (
         BufWriter<File>,
         usize,
         Vec<crossbeam_channel::IntoIter<Section>>,
     ),
-    BBIProcessError<Err>,
+    ProcessDataError,
 > {
     let mut section_iter = vec![];
     let mut max_uncompressed_buf_size = 0;
@@ -768,12 +767,12 @@ pub(crate) fn write_vals<
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
     let write_fut_handle = runtime.spawn(write_fut);
 
-    fn setup_chrom<E: Error + Send + 'static>(
+    fn setup_chrom(
         send: &mut futures_mpsc::UnboundedSender<(
             crossbeam_channel::Receiver<Section>,
             TempFileBuffer<BufWriter<File>>,
-            tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<E>>>,
-            Vec<TempZoomInfo<E>>,
+            tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
+            Vec<TempZoomInfo>,
         )>,
         options: BBIWriteOptions,
         runtime: &Runtime,
@@ -811,11 +810,11 @@ pub(crate) fn write_vals<
 
         (zooms_channels, ftx)
     }
-    let mut do_read = |chrom: String| -> Result<_, BBIProcessError<_>> {
+    let mut do_read = |chrom: String| -> Result<_, ProcessDataError> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
-                return Err(BBIProcessError::InvalidChromosome(format!(
+                return Err(ProcessDataError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
                 )));
@@ -852,7 +851,6 @@ pub(crate) fn write_vals<
                 summary.sum_squares += chrom_summary.sum_squares;
             }
         }
-        Ok(())
     };
 
     vals_iter.process_to_bbi(&runtime, &mut do_read, &mut advance)?;
@@ -938,7 +936,7 @@ pub(crate) fn write_vals_no_zoom<
 
     let mut summary: Option<Summary> = None;
     let (send, recv) = futures_mpsc::unbounded();
-    let write_fut = write_chroms_without_zooms::<V::Error>(file, recv);
+    let write_fut = write_chroms_without_zooms(file, recv);
     let write_fut_handle = runtime.spawn(write_fut);
 
     let setup_chrom = || {
@@ -950,11 +948,11 @@ pub(crate) fn write_vals_no_zoom<
 
         ftx
     };
-    let mut do_read = |chrom: String| -> Result<_, BBIProcessError<_>> {
+    let mut do_read = |chrom: String| -> Result<_, ProcessDataError> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
-                return Err(BBIProcessError::InvalidChromosome(format!(
+                return Err(ProcessDataError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
                 )));
@@ -997,7 +995,6 @@ pub(crate) fn write_vals_no_zoom<
             let chrom_zoom_count = zoom_count_map.get(&zoom_count.0).copied().unwrap_or(1);
             *zoom_count.1 += chrom_zoom_count;
         }
-        Ok(())
     };
 
     vals_iter.process_to_bbi(&runtime, &mut do_read, &mut advance)?;
@@ -1034,30 +1031,29 @@ type ZoomSender<E> = futures_mpsc::Sender<(
     crossbeam_channel::Receiver<Section>,
 )>;
 
-pub(crate) struct InternalTempZoomInfo<SourceError: Error> {
+pub(crate) struct InternalTempZoomInfo {
     pub resolution: u32,
 
-    pub data_write_future:
-        tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<SourceError>>>,
+    pub data_write_future: tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
     pub data: TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
     pub sections: crossbeam_channel::Receiver<Section>,
 }
 
-pub(crate) struct ZoomsInternalProcessData<E: Error>(
-    pub(crate) Vec<InternalTempZoomInfo<E>>,
+pub(crate) struct ZoomsInternalProcessData(
+    pub(crate) Vec<InternalTempZoomInfo>,
     pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) u32,
     pub(crate) BBIWriteOptions,
     pub(crate) Handle,
 );
-pub(crate) struct ZoomsInternalProcessedData<E: Error>(pub(crate) Vec<InternalTempZoomInfo<E>>);
+pub(crate) struct ZoomsInternalProcessedData(pub(crate) Vec<InternalTempZoomInfo>);
 
 pub(crate) fn write_zoom_vals<
     V: BBIDataSource,
     P: BBIDataProcessor<Value = V::Value>
         + process_internal::BBIDataProcessorCreate<
-            I = ZoomsInternalProcessData<V::Error>,
-            Out = ZoomsInternalProcessedData<V::Error>,
+            I = ZoomsInternalProcessData,
+            Out = ZoomsInternalProcessedData,
         > + Send
         + 'static,
 >(
@@ -1073,7 +1069,7 @@ pub(crate) fn write_zoom_vals<
     let min_first_zoom_size = average_size.max(10) * 4;
     let mut zoom_receivers = vec![];
     let mut zoom_files = vec![];
-    let mut zooms_map: BTreeMap<u32, ZoomSender<BBIProcessError<V::Error>>> = zoom_counts
+    let mut zooms_map: BTreeMap<u32, ZoomSender<ProcessDataError>> = zoom_counts
         .into_iter()
         .skip_while(|z| z.0 > min_first_zoom_size as u64)
         .skip_while(|z| {
@@ -1103,7 +1099,7 @@ pub(crate) fn write_zoom_vals<
 
     let mut max_uncompressed_buf_size = 0;
 
-    let mut do_read = |chrom: String| -> Result<P, BBIProcessError<V::Error>> {
+    let mut do_read = |chrom: String| -> Result<P, ProcessDataError> {
         // Make a new id for the chromosome
         let chrom_id = *chrom_ids
             .get(&chrom)
@@ -1153,8 +1149,6 @@ pub(crate) fn write_zoom_vals<
             let zoom = zooms_map.get_mut(&resolution).unwrap();
             zoom.try_send((data_write_future, data, sections)).unwrap();
         }
-
-        Ok(())
     };
 
     let mut zooms = Vec::with_capacity(zoom_receivers.len());
@@ -1253,14 +1247,14 @@ pub(crate) fn write_zoom_vals<
     Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
-pub(crate) fn write_mid<E: Error>(
+pub(crate) fn write_mid(
     file: &mut BufWriter<File>,
     pre_data: u64,
     raw_sections_iter: impl Iterator<Item = Section>,
     chrom_sizes: HashMap<String, u32>,
     chrom_ids: &HashMap<String, u32>,
     options: BBIWriteOptions,
-) -> Result<(u64, u64, u64, u64), BBIProcessError<E>> {
+) -> Result<(u64, u64, u64, u64), ProcessDataError> {
     let data_size = file.tell()? - pre_data;
     let mut current_offset = pre_data;
     let sections_iter = raw_sections_iter.map(|mut section| {
@@ -1293,11 +1287,11 @@ pub(crate) fn write_mid<E: Error>(
     Ok((data_size, chrom_index_start, index_start, total_sections))
 }
 
-async fn write_data<W: Write, SourceError: Error + Send>(
+async fn write_data<W: Write>(
     mut data_file: W,
     section_sender: crossbeam_channel::Sender<Section>,
     mut frx: futures_mpsc::Receiver<tokio::task::JoinHandle<io::Result<(SectionData, usize)>>>,
-) -> Result<(usize, usize), BBIProcessError<SourceError>> {
+) -> Result<(usize, usize), ProcessDataError> {
     let mut current_offset = 0;
     let mut total = 0;
     let mut max_uncompressed_buf_size = 0;
@@ -1321,13 +1315,13 @@ async fn write_data<W: Write, SourceError: Error + Send>(
     Ok((total, max_uncompressed_buf_size))
 }
 
-pub(crate) fn future_channel<Err: Error + Send + 'static, R: Write + Send + 'static>(
+pub(crate) fn future_channel<R: Write + Send + 'static>(
     channel_size: usize,
     runtime: &Handle,
     inmemory: bool,
 ) -> (
     BBIDataProcessoringInputSectionChannel,
-    tokio::task::JoinHandle<Result<(usize, usize), BBIProcessError<Err>>>,
+    tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
     TempFileBuffer<R>,
     crossbeam_channel::Receiver<Section>,
 ) {

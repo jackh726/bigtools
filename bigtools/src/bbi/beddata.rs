@@ -19,7 +19,7 @@ use crate::bed::bedparser::{
 };
 use crate::utils::file_view::FileView;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{BBIDataProcessor, BBIDataSource, BBIProcessError, BedEntry, Value};
+use crate::{BBIDataProcessor, BBIDataSource, BBIProcessError, BedEntry, ProcessDataError, Value};
 
 pub struct BedParserStreamingIterator<S: StreamingBedValues> {
     bed_data: S,
@@ -91,8 +91,8 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Runtime,
@@ -128,7 +128,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                 next_val = match (&mut curr_state, next_val) {
                     // There are no more values
                     ((_, _), None) => {
-                        advance(curr_state.1)?;
+                        advance(curr_state.1);
                         return Ok(());
                     }
                     // The next value is the same chromosome
@@ -153,7 +153,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         if !self.allow_out_of_order_chroms && prev_chrom.as_str() >= chrom {
                             return Err(BBIProcessError::SourceError(BedValueError::InvalidInput("Input bedGraph not sorted by chromosome. Sort with `sort -k1,1 -k2,2n`.".to_string())));
                         }
-                        advance(prev_state)?;
+                        advance(prev_state);
 
                         let chrom = chrom.to_string();
                         let mut p = start_processing(chrom.clone())?;
@@ -213,8 +213,8 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Runtime,
@@ -289,7 +289,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                 break;
             };
             let p = runtime.block_on(next_chrom).unwrap()?;
-            advance(p)?;
+            advance(p);
         }
 
         Ok(())
@@ -350,7 +350,6 @@ mod tests {
         let mut advance = |p: TestBBIDataProcessor| {
             counts.push(p.count);
             let _ = p.destroy();
-            Ok(())
         };
         data.process_to_bbi(&runtime, &mut start_processing, &mut advance)
             .unwrap();

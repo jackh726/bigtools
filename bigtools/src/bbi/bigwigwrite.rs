@@ -39,7 +39,6 @@ out.write(chrom_map, vals, runtime)?;
 ```
 */
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::vec;
@@ -88,9 +87,7 @@ impl BigWigWrite {
         }
     }
 
-    fn write_pre<E: Error>(
-        file: &mut BufWriter<File>,
-    ) -> Result<(u64, u64, u64), BBIProcessError<E>> {
+    fn write_pre(file: &mut BufWriter<File>) -> Result<(u64, u64, u64), ProcessDataError> {
         write_blank_headers(file)?;
 
         let total_summary_offset = file.tell()?;
@@ -211,7 +208,7 @@ impl BigWigWrite {
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_zoom_vals::<_, BigWigZoomsProcess<_>>(
+        let output = bbiwrite::write_zoom_vals::<_, BigWigZoomsProcess>(
             vals,
             self.options,
             &runtime,
@@ -653,8 +650,8 @@ impl BBIDataProcessor for BigWigNoZoomsProcess {
     }
 }
 
-struct BigWigZoomsProcess<E: Error> {
-    temp_zoom_items: Vec<InternalTempZoomInfo<E>>,
+struct BigWigZoomsProcess {
+    temp_zoom_items: Vec<InternalTempZoomInfo>,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -662,9 +659,9 @@ struct BigWigZoomsProcess<E: Error> {
     zoom_items: Vec<ZoomItem>,
 }
 
-impl<E: Error> BBIDataProcessorCreate for BigWigZoomsProcess<E> {
-    type I = ZoomsInternalProcessData<E>;
-    type Out = ZoomsInternalProcessedData<E>;
+impl BBIDataProcessorCreate for BigWigZoomsProcess {
+    type I = ZoomsInternalProcessData;
+    type Out = ZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
         let ZoomsInternalProcessData(temp_zoom_items, zooms_channels, chrom_id, options, runtime) =
             internal_data;
@@ -698,7 +695,7 @@ impl<E: Error> BBIDataProcessorCreate for BigWigZoomsProcess<E> {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl<Er: Error + Send> BBIDataProcessor for BigWigZoomsProcess<Er> {
+impl BBIDataProcessor for BigWigZoomsProcess {
     type Value = Value;
     async fn do_process(
         &mut self,

@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::{BBIDataProcessor, BBIReadError, BigWigRead, BigWigWrite};
+use crate::{BBIDataProcessor, BBIReadError, BigWigRead, BigWigWrite, ProcessDataError};
 use crate::{BBIDataSource, BBIProcessError, Value};
 use tokio::runtime::{self, Runtime};
 
@@ -351,8 +351,8 @@ impl BBIDataSource for ChromGroupReadImpl {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, BBIProcessError<Self::Error>>,
-        Advance: FnMut(P) -> Result<(), BBIProcessError<Self::Error>>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        Advance: FnMut(P),
     >(
         &mut self,
         runtime: &Runtime,
@@ -380,7 +380,7 @@ impl BBIDataSource for ChromGroupReadImpl {
                         runtime.block_on(read)?;
                     }
 
-                    advance(p)?;
+                    advance(p);
                 }
                 Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                 None => break,
