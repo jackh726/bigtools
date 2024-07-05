@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, Seek};
+use std::path::PathBuf;
 
 /// A helper trait that for things that implement `Read`, `Seek`, and `Send`
 pub trait SeekableRead: Seek + Read {}
@@ -12,7 +13,7 @@ pub trait Reopen: Sized {
 }
 
 pub struct ReopenableFile {
-    pub path: String,
+    pub path: PathBuf,
     pub file: File,
 }
 

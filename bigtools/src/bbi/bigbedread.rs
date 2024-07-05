@@ -1,6 +1,7 @@
 use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::path::Path;
 use std::vec::Vec;
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -149,14 +150,14 @@ impl<R> BigBedRead<R> {
 
 impl BigBedRead<ReopenableFile> {
     /// Opens a new `BigBedRead` from a given path as a file.
-    pub fn open_file(path: &str) -> Result<Self, BigBedReadOpenError> {
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self, BigBedReadOpenError> {
         let reopen = ReopenableFile {
-            path: path.to_string(),
-            file: File::open(path)?,
+            file: File::open(&path)?,
+            path: path.as_ref().to_owned(),
         };
         let b = BigBedRead::open(reopen);
         if b.is_err() {
-            eprintln!("Error when opening: {}", path);
+            eprintln!("Error when opening: {:?}", path.as_ref());
         }
         b
     }

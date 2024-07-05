@@ -7,12 +7,10 @@ use std::path::PathBuf;
 use clap::Parser;
 use tokio::runtime;
 
-use crate::bed::bedparser::parse_bed;
+use crate::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
 use crate::bed::indexer::index_chroms;
-use crate::bedchromdata::BedParserParallelStreamingIterator;
-use crate::{
-    bed::bedparser::BedParser, bedchromdata::BedParserStreamingIterator, BigBedWrite, InputSortType,
-};
+use crate::beddata::BedParserParallelStreamingIterator;
+use crate::{beddata::BedParserStreamingIterator, BigBedWrite, InputSortType};
 
 use super::BBIWriteArgs;
 
@@ -74,11 +72,6 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let mut outb = BigBedWrite::create_file(bigwigpath);
-    outb.options.max_zooms = args.write_args.nzooms;
-    outb.options.compress = !args.write_args.uncompressed;
-    outb.options.input_sort_type = input_sort_type;
-    outb.options.inmemory = args.write_args.inmemory;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {
@@ -95,6 +88,11 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
+    let mut outb = BigBedWrite::create_file(bigwigpath, chrom_map)?;
+    outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.compress = !args.write_args.uncompressed;
+    outb.options.input_sort_type = input_sort_type;
+    outb.options.inmemory = args.write_args.inmemory;
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
@@ -107,12 +105,9 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
 
     let autosql = match args.autosql.as_ref() {
         None => {
-            use crate::utils::chromvalues::ChromValues;
             let infile = File::open(&bedpath)?;
-            let mut vals_iter = BedParser::from_bed_file(infile);
-            let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-            let first = group.peek().unwrap().unwrap();
-            crate::bed::autosql::bed_autosql(&first.rest)
+            let mut vals_iter = BedFileStream::from_bed_file(infile);
+            crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest)
         }
         Some(file) => std::fs::read_to_string(file)?,
     };
@@ -121,10 +116,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedpath == "-" || bedpath == "stdin" {
         let stdin = std::io::stdin().lock();
-        let vals_iter = BedParser::from_bed_file(stdin);
-
-        let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-        outb.write_singlethreaded(chrom_map, chsi, runtime)?;
+        let data = BedParserStreamingIterator::from_bed_file(stdin, allow_out_of_order_chroms);
+        outb.write(data, runtime)?;
     } else {
         let infile = File::open(&bedpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
@@ -157,47 +150,45 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         };
         if let Some(chrom_indices) = chrom_indices {
             if args.single_pass {
-                let chsi = BedParserParallelStreamingIterator::new(
+                let data = BedParserParallelStreamingIterator::new(
                     chrom_indices,
                     allow_out_of_order_chroms,
                     PathBuf::from(bedpath),
                     parse_bed,
                 );
-                outb.write(chrom_map, chsi, runtime)?;
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
-                        let chsi = BedParserParallelStreamingIterator::new(
+                        let data = BedParserParallelStreamingIterator::new(
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
                             PathBuf::from(bedpath.clone()),
                             parse_bed,
                         );
 
-                        Ok(chsi)
+                        Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }
         } else {
             let infile = File::open(&bedpath)?;
             if args.single_pass {
-                let vals_iter = BedParser::from_bed_file(infile);
-
-                let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-                outb.write(chrom_map, chsi, runtime)?;
+                let data =
+                    BedParserStreamingIterator::from_bed_file(infile, allow_out_of_order_chroms);
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
                         let infile = File::open(&bedpath)?;
-                        let vals_iter = BedParser::from_bed_file(infile);
-                        let chsi =
-                            BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
+                        let data = BedParserStreamingIterator::from_bed_file(
+                            infile,
+                            allow_out_of_order_chroms,
+                        );
 
-                        Ok(chsi)
+                        Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }

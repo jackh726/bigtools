@@ -12,9 +12,8 @@ Provides the interface for reading bigWig files.
 # dir.push("resources/test");
 # let mut bigwig = dir.clone();
 # bigwig.push("valid.bigWig");
-# let bigwig = bigwig.to_string_lossy();
-// First, we open a bigWig using a file name (as a `&str`).
-let mut bwread = BigWigRead::open_file(&bigwig)?;
+// First, we open a bigWig using a file name.
+let mut bwread = BigWigRead::open_file(bigwig)?;
 
 // Then, we could get the chromosomes and lengths
 let chroms = bwread.chroms();
@@ -42,6 +41,7 @@ assert_eq!(first_interval.value, 0.06792);
 use std::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom};
+use std::path::Path;
 use std::vec::Vec;
 
 use byteordered::{ByteOrdered, Endianness};
@@ -195,14 +195,14 @@ impl<R> BigWigRead<R> {
 
 impl BigWigRead<ReopenableFile> {
     /// Opens a new `BigWigRead` from a given path as a file.
-    pub fn open_file(path: &str) -> Result<Self, BigWigReadOpenError> {
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self, BigWigReadOpenError> {
         let reopen = ReopenableFile {
-            path: path.to_string(),
-            file: File::open(path)?,
+            file: File::open(&path)?,
+            path: path.as_ref().to_owned(),
         };
         let b = BigWigRead::open(reopen);
         if b.is_err() {
-            eprintln!("Error when opening: {}", path);
+            eprintln!("Error when opening: {:?}", path.as_ref());
         }
         b
     }

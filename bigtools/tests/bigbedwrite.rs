@@ -1,6 +1,7 @@
 use std::error::Error;
 
-use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::bed::bedparser::{BedFileStream, StreamingBedValues};
+use bigtools::beddata::BedParserStreamingIterator;
 use tokio::runtime;
 
 #[test]
@@ -11,8 +12,6 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     use tempfile;
 
-    use bigtools::bed::bedparser::BedParser;
-    use bigtools::utils::chromvalues::ChromValues;
     use bigtools::{BigBedRead, BigBedWrite};
 
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -23,9 +22,8 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
 
     let first = {
         let infile = File::open(bed.clone())?;
-        let mut vals_iter = BedParser::from_bed_file(infile);
-        let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        group.next().unwrap().unwrap()
+        let mut vals_iter = BedFileStream::from_bed_file(infile);
+        vals_iter.next().unwrap().unwrap().1
     };
 
     let runtime = runtime::Builder::new_multi_thread()
@@ -33,26 +31,28 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         .build()
         .expect("Unable to create runtime.");
 
-    let infile = File::open(bed)?;
     let tempfile = tempfile::NamedTempFile::new()?;
-    let mut vals_iter = BedParser::from_bed_file(infile);
-    let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
-    outb.autosql = {
-        let (_, mut group) = vals_iter.next_chrom().unwrap().unwrap();
-        let first = group.peek().unwrap().unwrap();
-        Some(bigtools::bed::autosql::bed_autosql(&first.rest))
-    };
-    outb.options.compress = false;
 
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
     chrom_map.insert("chr18".to_string(), 80373285);
     chrom_map.insert("chr19".to_string(), 58617616);
 
-    let chsi = BedParserStreamingIterator::new(vals_iter, false);
-    outb.write(chrom_map, chsi, runtime).unwrap();
+    let mut outb = BigBedWrite::create_file(tempfile.path(), chrom_map).unwrap();
+    outb.autosql = {
+        let infile = File::open(&bed)?;
+        let mut vals_iter = BedFileStream::from_bed_file(infile);
+        Some(bigtools::bed::autosql::bed_autosql(
+            &vals_iter.next().unwrap().unwrap().1.rest,
+        ))
+    };
+    outb.options.compress = false;
 
-    let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+    let infile = File::open(bed)?;
+    let data = BedParserStreamingIterator::from_bed_file(infile, false);
+    outb.write(data, runtime).unwrap();
+
+    let mut bwread = BigBedRead::open_file(tempfile.path()).unwrap();
 
     let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 3);

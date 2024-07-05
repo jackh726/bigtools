@@ -69,8 +69,8 @@ pub fn bigwigaverageoverbed(
     let add_min_max = args.min_max;
 
     let reopen = ReopenableFile {
-        path: bigwigpath.to_string(),
-        file: File::open(bigwigpath)?,
+        file: File::open(&bigwigpath)?,
+        path: bigwigpath.into(),
     };
     let mut inbigwig = BigWigRead::open(reopen)?.cached();
 

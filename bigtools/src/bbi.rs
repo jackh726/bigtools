@@ -3,7 +3,7 @@ pub(crate) mod bbiread;
 #[cfg(feature = "write")]
 pub(crate) mod bbiwrite;
 #[cfg(feature = "write")]
-pub mod bedchromdata;
+pub mod beddata;
 #[cfg(feature = "read")]
 pub(crate) mod bigbedread;
 #[cfg(feature = "write")]

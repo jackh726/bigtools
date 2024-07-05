@@ -4,9 +4,9 @@ use std::{collections::HashMap, error::Error, fs::File, path::PathBuf};
 use clap::Parser;
 use tokio::runtime;
 
-use crate::bed::bedparser::{parse_bedgraph, BedParser};
+use crate::bed::bedparser::parse_bedgraph;
 use crate::bed::indexer::index_chroms;
-use crate::bedchromdata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
+use crate::beddata::{BedParserParallelStreamingIterator, BedParserStreamingIterator};
 use crate::{BigWigWrite, InputSortType};
 
 use super::BBIWriteArgs;
@@ -64,12 +64,6 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         }
     };
 
-    let mut outb = BigWigWrite::create_file(bigwigpath);
-    outb.options.max_zooms = args.write_args.nzooms;
-    outb.options.compress = !args.write_args.uncompressed;
-    outb.options.input_sort_type = input_sort_type;
-    outb.options.block_size = args.write_args.block_size;
-    outb.options.inmemory = args.write_args.inmemory;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {
@@ -86,6 +80,13 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         })
         .collect();
 
+    let mut outb = BigWigWrite::create_file(bigwigpath, chrom_map)?;
+    outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.compress = !args.write_args.uncompressed;
+    outb.options.input_sort_type = input_sort_type;
+    outb.options.block_size = args.write_args.block_size;
+    outb.options.inmemory = args.write_args.inmemory;
+
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
@@ -99,10 +100,8 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedgraphpath == "-" || bedgraphpath == "stdin" {
         let stdin = std::io::stdin().lock();
-        let vals_iter = BedParser::from_bedgraph_file(stdin);
-
-        let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-        outb.write_singlethreaded(chrom_map, chsi, runtime)?;
+        let vals = BedParserStreamingIterator::from_bedgraph_file(stdin, allow_out_of_order_chroms);
+        outb.write(vals, runtime)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
@@ -135,47 +134,45 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         };
         if let Some(chrom_indices) = chrom_indices {
             if args.single_pass {
-                let chsi = BedParserParallelStreamingIterator::new(
+                let data = BedParserParallelStreamingIterator::new(
                     chrom_indices,
                     allow_out_of_order_chroms,
                     PathBuf::from(bedgraphpath),
                     parse_bedgraph,
                 );
-                outb.write(chrom_map, chsi, runtime)?;
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
-                        let chsi = BedParserParallelStreamingIterator::new(
+                        let data = BedParserParallelStreamingIterator::new(
                             chrom_indices.clone(),
                             allow_out_of_order_chroms,
                             PathBuf::from(bedgraphpath.clone()),
                             parse_bedgraph,
                         );
 
-                        Ok(chsi)
+                        Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }
         } else {
             let infile = File::open(&bedgraphpath)?;
             if args.single_pass {
-                let vals_iter = BedParser::from_bedgraph_file(infile);
-
-                let chsi = BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-                outb.write(chrom_map, chsi, runtime)?;
+                let vals = BedParserStreamingIterator::from_bedgraph_file(
+                    infile,
+                    allow_out_of_order_chroms,
+                );
+                outb.write(vals, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
                         let infile = File::open(&bedgraphpath)?;
-                        let vals_iter = BedParser::from_bedgraph_file(infile);
-                        let chsi =
-                            BedParserStreamingIterator::new(vals_iter, allow_out_of_order_chroms);
-
-                        Ok(chsi)
+                        Ok(BedParserStreamingIterator::from_bedgraph_file(
+                            infile,
+                            allow_out_of_order_chroms,
+                        ))
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }

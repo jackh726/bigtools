@@ -7,13 +7,11 @@ use clap::Parser;
 use crossbeam_channel::unbounded;
 use thiserror::Error;
 
-use crate::utils::chromvalues::ChromValues;
 use crate::utils::merge::merge_sections_many;
 use crate::utils::reopen::ReopenableFile;
-use crate::Value;
-use crate::{BBIReadError, BigWigRead, BigWigWrite};
-use crate::{ChromData, ChromDataState, ChromProcessingKey, ProcessChromError};
-use tokio::runtime;
+use crate::{BBIDataProcessor, BBIReadError, BigWigRead, BigWigWrite, ProcessDataError};
+use crate::{BBIDataSource, BBIProcessError, Value};
+use tokio::runtime::{self, Runtime};
 
 use super::BBIWriteArgs;
 
@@ -124,7 +122,7 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
     };
     match output_type {
         OutputType::BigWig => {
-            let outb = BigWigWrite::create_file(output);
+            let outb = BigWigWrite::create_file(output, chrom_map)?;
             let runtime = if nthreads == 1 {
                 runtime::Builder::new_current_thread().build().unwrap()
             } else {
@@ -136,7 +134,7 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
             let all_values = ChromGroupReadImpl {
                 iter: Box::new(iter),
             };
-            outb.write(chrom_map, all_values, runtime)?;
+            outb.write(all_values, runtime)?;
         }
         OutputType::BedGraph => {
             // TODO: convert to multi-threaded
@@ -147,8 +145,13 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
 
             for v in iter {
                 let (chrom, _, mut values) = v?;
-                while let Some(val) = values.next() {
-                    let val = val?;
+
+                loop {
+                    let val = match values.iter.next() {
+                        Some(Ok(v)) => v,
+                        Some(Err(e)) => Err(e)?,
+                        None => break,
+                    };
                     writer.write_fmt(format_args!(
                         "{}\t{}\t{}\t{}\n",
                         chrom, val.start, val.end, val.value
@@ -209,27 +212,6 @@ pub enum MergingValuesError {
     IoError(#[from] io::Error),
 }
 
-impl ChromValues for MergingValues {
-    type Value = Value;
-    type Error = MergingValuesError;
-
-    fn next(&mut self) -> Option<Result<Value, MergingValuesError>> {
-        match self.iter.next() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(e)) => Some(Err(e.into())),
-            None => None,
-        }
-    }
-
-    fn peek(&mut self) -> Option<Result<&Value, &MergingValuesError>> {
-        match self.iter.peek() {
-            Some(Ok(v)) => Some(Ok(v)),
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
-        }
-    }
-}
-
 pub fn get_merged_vals(
     bigwigs: Vec<BigWigRead<ReopenableFile>>,
     max_zooms: usize,
@@ -281,7 +263,7 @@ pub fn get_merged_vals(
                     }
                 }
                 // We don't want to a new file descriptor for every chrom
-                bws.push((w.info().clone(), w.inner_read().path.to_string()));
+                bws.push((w.info().clone(), w.inner_read().path.clone()));
             }
             let size = size.unwrap();
 
@@ -324,8 +306,12 @@ pub fn get_merged_vals(
                         let chunk = vals.by_ref().take(max_bw_fds).collect::<Vec<_>>();
                         let mut mergingvalues = MergingValues::new(chunk, threshold, adjust, clip);
                         let (sender, receiver) = unbounded::<Value>();
-                        while let Some(val) = mergingvalues.next() {
-                            let val = val?;
+                        loop {
+                            let val = match mergingvalues.iter.next() {
+                                Some(Ok(v)) => v,
+                                Some(Err(e)) => Err(e)?,
+                                None => break,
+                            };
                             sender.send(val).unwrap();
                         }
 
@@ -359,34 +345,48 @@ struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
-impl ChromData for ChromGroupReadImpl {
-    type Values = MergingValues;
+impl BBIDataSource for ChromGroupReadImpl {
+    type Value = Value;
+    type Error = MergingValuesError;
 
-    fn advance<
-        State,
-        F: FnMut(
-            String,
-            MergingValues,
-            &mut State,
-        ) -> Result<ChromProcessingKey, ProcessChromError<MergingValuesError>>,
+    fn process_to_bbi<
+        P: BBIDataProcessor<Value = Self::Value>,
+        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        Advance: FnMut(P),
     >(
         &mut self,
-        do_read: &mut F,
-        state: &mut State,
-    ) -> Result<
-        ChromDataState<ChromProcessingKey, MergingValuesError>,
-        ProcessChromError<MergingValuesError>,
-    > {
-        let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
-            self.iter.next();
-        Ok(match next {
-            Some(Err(err)) => ChromDataState::Error(err.into()),
-            Some(Ok((chrom, _, mergingvalues))) => {
-                let read = do_read(chrom, mergingvalues, state)?;
+        runtime: &Runtime,
+        start_processing: &mut StartProcessing,
+        advance: &mut Advance,
+    ) -> Result<(), BBIProcessError<Self::Error>> {
+        loop {
+            let next: Option<Result<(String, u32, MergingValues), MergingValuesError>> =
+                self.iter.next();
+            match next {
+                Some(Ok((chrom, _, mut group))) => {
+                    let mut p = start_processing(chrom)?;
 
-                ChromDataState::NewChrom(read)
+                    loop {
+                        let current_val = match group.iter.next() {
+                            Some(Ok(v)) => v,
+                            Some(Err(e)) => Err(BBIProcessError::SourceError(e))?,
+                            None => break,
+                        };
+                        let next_val = match group.iter.peek() {
+                            Some(Ok(v)) => Some(v),
+                            Some(Err(_)) | None => None,
+                        };
+                        let read = p.do_process(current_val, next_val);
+                        runtime.block_on(read)?;
+                    }
+
+                    advance(p);
+                }
+                Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
+                None => break,
             }
-            None => ChromDataState::Finished,
-        })
+        }
+
+        Ok(())
     }
 }

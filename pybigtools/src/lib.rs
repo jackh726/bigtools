@@ -7,8 +7,7 @@ use std::ops::IndexMut;
 use std::path::Path;
 
 use bigtools::bed::autosql::parse::parse_autosql;
-use bigtools::bed::bedparser::BedParser;
-use bigtools::bedchromdata::BedParserStreamingIterator;
+use bigtools::beddata::BedParserStreamingIterator;
 #[cfg(feature = "remote")]
 use bigtools::utils::file::remote_file::RemoteFile;
 use bigtools::utils::file::reopen::ReopenableFile;
@@ -1909,7 +1908,7 @@ impl BigBedEntriesIterator {
 /// Interface for writing to a BigWig file.
 #[pyclass(module = "pybigtools")]
 struct BigWigWrite {
-    bigwig: Option<BigWigWriteRaw>,
+    bigwig: Option<String>,
 }
 
 #[pymethods]
@@ -1942,10 +1941,6 @@ impl BigWigWrite {
             .build()
             .expect("Unable to create thread pool.");
 
-        let bigwig = self
-            .bigwig
-            .take()
-            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
@@ -1954,6 +1949,18 @@ impl BigWigWrite {
                 Ok((chrom, length))
             })
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
+
+        let bigwig = self
+            .bigwig
+            .take()
+            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("Can only write once."))?;
+        let bigwig = BigWigWriteRaw::create_file(bigwig, chrom_map).map_err(|e| {
+            PyErr::new::<exceptions::PyException, _>(format!(
+                "Error occured when creating file: {}",
+                e
+            ))
+        })?;
+
         struct IterError(String);
         struct Iter {
             inner: PyObject,
@@ -2037,9 +2044,8 @@ impl BigWigWrite {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
                 Ok(v) => Ok(v),
             });
-            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, true);
-            match bigwig.write(chrom_map, chsi, runtime) {
+            let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
+            match bigwig.write(data, runtime) {
                 Err(e) => println!("{}", e),
                 Ok(_) => {}
             }
@@ -2060,7 +2066,7 @@ impl BigWigWrite {
 /// Interface for writing to a BigBed file.
 #[pyclass(module = "pybigtools")]
 struct BigBedWrite {
-    bigbed: Option<BigBedWriteRaw>,
+    bigbed: Option<String>,
 }
 
 #[pymethods]
@@ -2094,10 +2100,6 @@ impl BigBedWrite {
             .build()
             .expect("Unable to create thread pool.");
 
-        let bigbed = self
-            .bigbed
-            .take()
-            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
@@ -2106,6 +2108,18 @@ impl BigBedWrite {
                 Ok((chrom, length))
             })
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
+
+        let bigbed = self
+            .bigbed
+            .take()
+            .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
+        let bigbed = BigBedWriteRaw::create_file(bigbed, chrom_map).map_err(|e| {
+            PyErr::new::<exceptions::PyException, _>(format!(
+                "Error occured when creating file: {}",
+                e
+            ))
+        })?;
+
         struct IterError(String);
         struct Iter {
             inner: PyObject,
@@ -2190,9 +2204,8 @@ impl BigBedWrite {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
                 Ok(v) => Ok(v),
             });
-            let vals_iter = BedParser::wrap_iter(vals_iter_raw);
-            let chsi = BedParserStreamingIterator::new(vals_iter, true);
-            match bigbed.write(chrom_map, chsi, runtime) {
+            let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
+            match bigbed.write(data, runtime) {
                 Err(e) => {
                     println!("{}", e)
                 }
@@ -2417,11 +2430,11 @@ fn open_path_or_url(
         }
         match extension.as_ref() {
             "bw" | "bigWig" | "bigwig" => BigWigWrite {
-                bigwig: Some(BigWigWriteRaw::create_file(path_url_or_file_like)),
+                bigwig: Some(path_url_or_file_like),
             }
             .into_py(py),
             "bb" | "bigBed" | "bigbed" => BigBedWrite {
-                bigbed: Some(BigBedWriteRaw::create_file(path_url_or_file_like)),
+                bigbed: Some(path_url_or_file_like),
             }
             .into_py(py),
             _ => {
