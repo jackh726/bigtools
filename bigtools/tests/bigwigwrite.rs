@@ -32,15 +32,16 @@ fn test() -> Result<(), Box<dyn Error>> {
 
     let infile = File::open(single_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
-    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
 
-    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
-    outb.write(chrom_map, data, runtime).unwrap();
+    let outb = BigWigWrite::create_file(tempfile.path(), chrom_map)?;
 
-    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
+    outb.write(data, runtime).unwrap();
+
+    let mut bwread = BigWigRead::open_file(tempfile.path()).unwrap();
 
     let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 1);
@@ -77,10 +78,11 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
 
     let tempfile = tempfile::NamedTempFile::new()?;
 
-    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
-
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr17".to_string(), 83257441);
+
+    let outb =
+        BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string(), chrom_map).unwrap();
 
     outb.write_multipass(
         || {
@@ -88,12 +90,11 @@ fn test_multi_pass() -> Result<(), Box<dyn Error>> {
             let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
             Ok(data)
         },
-        chrom_map,
         runtime,
     )
     .unwrap();
 
-    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigWigRead::open_file(tempfile.path()).unwrap();
 
     let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 1);
@@ -124,7 +125,6 @@ fn test_multi_chrom() -> io::Result<()> {
 
     let infile = File::open(multi_chrom_bedgraph)?;
     let tempfile = tempfile::NamedTempFile::new()?;
-    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
 
     let mut chrom_map = HashMap::new();
     chrom_map.insert("chr1".to_string(), 248956422);
@@ -134,10 +134,12 @@ fn test_multi_chrom() -> io::Result<()> {
     chrom_map.insert("chr5".to_string(), 181538259);
     chrom_map.insert("chr6".to_string(), 170805979);
 
-    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
-    outb.write(chrom_map, data, runtime).unwrap();
+    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string(), chrom_map)?;
 
-    let mut bwread = BigWigRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+    let data = BedParserStreamingIterator::from_bedgraph_file(infile, false);
+    outb.write(data, runtime).unwrap();
+
+    let mut bwread = BigWigRead::open_file(tempfile.path()).unwrap();
 
     let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 6);
@@ -185,6 +187,7 @@ fn test_iter() {
         .expect("Unable to create runtime.");
 
     let tempfile = tempfile::NamedTempFile::new().unwrap();
-    let outb = BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string());
-    outb.write(chrom_map, vals_iter, runtime).unwrap();
+    let outb =
+        BigWigWrite::create_file(tempfile.path().to_string_lossy().to_string(), chrom_map).unwrap();
+    outb.write(vals_iter, runtime).unwrap();
 }

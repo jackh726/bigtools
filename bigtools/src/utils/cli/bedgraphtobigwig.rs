@@ -64,12 +64,6 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         }
     };
 
-    let mut outb = BigWigWrite::create_file(bigwigpath);
-    outb.options.max_zooms = args.write_args.nzooms;
-    outb.options.compress = !args.write_args.uncompressed;
-    outb.options.input_sort_type = input_sort_type;
-    outb.options.block_size = args.write_args.block_size;
-    outb.options.inmemory = args.write_args.inmemory;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {
@@ -86,6 +80,13 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         })
         .collect();
 
+    let mut outb = BigWigWrite::create_file(bigwigpath, chrom_map)?;
+    outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.compress = !args.write_args.uncompressed;
+    outb.options.input_sort_type = input_sort_type;
+    outb.options.block_size = args.write_args.block_size;
+    outb.options.inmemory = args.write_args.inmemory;
+
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
@@ -100,7 +101,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
     if bedgraphpath == "-" || bedgraphpath == "stdin" {
         let stdin = std::io::stdin().lock();
         let vals = BedParserStreamingIterator::from_bedgraph_file(stdin, allow_out_of_order_chroms);
-        outb.write(chrom_map, vals, runtime)?;
+        outb.write(vals, runtime)?;
     } else {
         let infile = File::open(&bedgraphpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
@@ -139,7 +140,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
                     PathBuf::from(bedgraphpath),
                     parse_bedgraph,
                 );
-                outb.write(chrom_map, data, runtime)?;
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -152,7 +153,6 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
 
                         Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }
@@ -163,7 +163,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
                     infile,
                     allow_out_of_order_chroms,
                 );
-                outb.write(chrom_map, vals, runtime)?;
+                outb.write(vals, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -173,7 +173,6 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
                             allow_out_of_order_chroms,
                         ))
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }

@@ -122,7 +122,7 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
     };
     match output_type {
         OutputType::BigWig => {
-            let outb = BigWigWrite::create_file(output);
+            let outb = BigWigWrite::create_file(output, chrom_map)?;
             let runtime = if nthreads == 1 {
                 runtime::Builder::new_current_thread().build().unwrap()
             } else {
@@ -134,7 +134,7 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
             let all_values = ChromGroupReadImpl {
                 iter: Box::new(iter),
             };
-            outb.write(chrom_map, all_values, runtime)?;
+            outb.write(all_values, runtime)?;
         }
         OutputType::BedGraph => {
             // TODO: convert to multi-threaded
@@ -263,7 +263,7 @@ pub fn get_merged_vals(
                     }
                 }
                 // We don't want to a new file descriptor for every chrom
-                bws.push((w.info().clone(), w.inner_read().path.to_string()));
+                bws.push((w.info().clone(), w.inner_read().path.clone()));
             }
             let size = size.unwrap();
 

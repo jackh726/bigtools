@@ -140,7 +140,9 @@ pub(crate) type BBIDataProcessoringInputSectionChannel =
 
 const MAX_ZOOM_LEVELS: usize = 10;
 
-pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> {
+pub(crate) fn write_blank_headers<W: Write + Seek + Send + 'static>(
+    file: &mut BufWriter<W>,
+) -> io::Result<()> {
     file.seek(SeekFrom::Start(0))?;
     // Common header
     file.write_all(&[0; 64])?;
@@ -150,8 +152,8 @@ pub(crate) fn write_blank_headers(file: &mut BufWriter<File>) -> io::Result<()> 
     Ok(())
 }
 
-pub(crate) fn write_info(
-    file: &mut BufWriter<File>,
+pub(crate) fn write_info<W: Write + Seek + Send + 'static>(
+    file: &mut BufWriter<W>,
     magic: u32,
     num_zooms: u16,
     chrom_index_start: u64,
@@ -205,8 +207,8 @@ pub(crate) fn write_info(
     Ok(())
 }
 
-pub(crate) fn write_chrom_tree(
-    file: &mut BufWriter<File>,
+pub(crate) fn write_chrom_tree<W: Write + Seek + Send + 'static>(
+    file: &mut BufWriter<W>,
     chrom_sizes: std::collections::HashMap<String, u32>,
     chrom_ids: &std::collections::HashMap<String, u32>,
 ) -> io::Result<()> {
@@ -493,8 +495,8 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
     Ok(())
 }
 
-pub(crate) fn write_zooms(
-    mut file: &mut BufWriter<File>,
+pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
+    mut file: &mut BufWriter<W>,
     zooms: Vec<ZoomInfo>,
     data_size: u64,
     options: BBIWriteOptions,
@@ -528,7 +530,7 @@ pub(crate) fn write_zooms(
         let zoom_index_offset = file.tell()?;
         //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.resolution, zoom_data_offset, zoom_index_offset);
         assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
-        write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+        write_rtreeindex(file, nodes, levels, total_sections, options)?;
 
         zoom_entries.push(ZoomHeader {
             reduction_level: zoom.resolution,
@@ -581,25 +583,25 @@ pub(crate) type ZoomValue = (
     TempFileBuffer<File>,
     Option<TempFileBufferWriter<File>>,
 );
-type Data = (
+type Data<W> = (
     crossbeam_channel::Receiver<Section>,
-    TempFileBuffer<BufWriter<File>>,
+    TempFileBuffer<BufWriter<W>>,
     tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
     Vec<TempZoomInfo>,
 );
-type DataWithoutzooms = (
+type DataWithoutzooms<W> = (
     crossbeam_channel::Receiver<Section>,
-    TempFileBuffer<BufWriter<File>>,
+    TempFileBuffer<BufWriter<W>>,
     tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
 );
 
-async fn write_chroms_with_zooms(
-    mut file: BufWriter<File>,
+async fn write_chroms_with_zooms<W: Write + Seek + Send + 'static>(
+    mut file: BufWriter<W>,
     mut zooms_map: BTreeMap<u32, ZoomValue>,
-    mut receiver: futures_mpsc::UnboundedReceiver<Data>,
+    mut receiver: futures_mpsc::UnboundedReceiver<Data<W>>,
 ) -> Result<
     (
-        BufWriter<File>,
+        BufWriter<W>,
         usize,
         Vec<crossbeam_channel::IntoIter<Section>>,
         BTreeMap<u32, ZoomValue>,
@@ -652,12 +654,12 @@ async fn write_chroms_with_zooms(
     Ok((file, max_uncompressed_buf_size, section_iter, zooms_map))
 }
 
-async fn write_chroms_without_zooms(
-    mut file: BufWriter<File>,
-    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms>,
+async fn write_chroms_without_zooms<W: Write + Seek + Send + 'static>(
+    mut file: BufWriter<W>,
+    mut receiver: futures_mpsc::UnboundedReceiver<DataWithoutzooms<W>>,
 ) -> Result<
     (
-        BufWriter<File>,
+        BufWriter<W>,
         usize,
         Vec<crossbeam_channel::IntoIter<Section>>,
     ),
@@ -724,6 +726,7 @@ pub trait BBIDataProcessor: process_internal::BBIDataProcessorCreate {
 }
 
 pub(crate) fn write_vals<
+    W: Write + Seek + Send + 'static,
     V: BBIDataSource,
     P: BBIDataProcessor<Value = V::Value>
         + process_internal::BBIDataProcessorCreate<
@@ -733,15 +736,15 @@ pub(crate) fn write_vals<
         + 'static,
 >(
     mut vals_iter: V,
-    file: BufWriter<File>,
+    file: BufWriter<W>,
     options: BBIWriteOptions,
     runtime: Runtime,
-    chrom_sizes: HashMap<String, u32>,
+    chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
     (
         IdMap,
         Summary,
-        BufWriter<File>,
+        BufWriter<W>,
         Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         Vec<ZoomInfo>,
         usize,
@@ -767,10 +770,10 @@ pub(crate) fn write_vals<
     let write_fut = write_chroms_with_zooms(file, zooms_map, recv);
     let write_fut_handle = runtime.spawn(write_fut);
 
-    fn setup_chrom(
+    fn setup_chrom<W: Write + Seek + Send + 'static>(
         send: &mut futures_mpsc::UnboundedSender<(
             crossbeam_channel::Receiver<Section>,
-            TempFileBuffer<BufWriter<File>>,
+            TempFileBuffer<BufWriter<W>>,
             tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
             Vec<TempZoomInfo>,
         )>,
@@ -903,6 +906,7 @@ pub(crate) struct NoZoomsInternalProcessData(
 pub(crate) struct NoZoomsInternalProcessedData(pub(crate) Summary, pub(crate) Vec<(u64, u64)>);
 
 pub(crate) fn write_vals_no_zoom<
+    W: Write + Seek + Send + 'static,
     V: BBIDataSource,
     P: BBIDataProcessor<Value = V::Value>
         + process_internal::BBIDataProcessorCreate<
@@ -912,16 +916,16 @@ pub(crate) fn write_vals_no_zoom<
         + 'static,
 >(
     mut vals_iter: V,
-    file: BufWriter<File>,
+    file: BufWriter<W>,
     options: BBIWriteOptions,
     runtime: &Runtime,
-    chrom_sizes: HashMap<String, u32>,
+    chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
     (
         IdMap,
         Summary,
         BTreeMap<u64, u64>,
-        BufWriter<File>,
+        BufWriter<W>,
         Flatten<vec::IntoIter<crossbeam_channel::IntoIter<Section>>>,
         usize,
     ),
@@ -1025,35 +1029,38 @@ pub(crate) fn write_vals_no_zoom<
 }
 
 // Zooms have to be double-buffered: first because chroms could be processed in parallel and second because we don't know the offset of each zoom immediately
-type ZoomSender<E> = futures_mpsc::Sender<(
+type ZoomSender<W, E> = futures_mpsc::Sender<(
     tokio::task::JoinHandle<Result<(usize, usize), E>>,
-    TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
+    TempFileBuffer<TempFileBufferWriter<BufWriter<W>>>,
     crossbeam_channel::Receiver<Section>,
 )>;
 
-pub(crate) struct InternalTempZoomInfo {
+pub(crate) struct InternalTempZoomInfo<W: Write + Send + Seek + 'static> {
     pub resolution: u32,
 
     pub data_write_future: tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
-    pub data: TempFileBuffer<TempFileBufferWriter<BufWriter<File>>>,
+    pub data: TempFileBuffer<TempFileBufferWriter<BufWriter<W>>>,
     pub sections: crossbeam_channel::Receiver<Section>,
 }
 
-pub(crate) struct ZoomsInternalProcessData(
-    pub(crate) Vec<InternalTempZoomInfo>,
+pub(crate) struct ZoomsInternalProcessData<W: Write + Seek + Send + 'static>(
+    pub(crate) Vec<InternalTempZoomInfo<W>>,
     pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) u32,
     pub(crate) BBIWriteOptions,
     pub(crate) Handle,
 );
-pub(crate) struct ZoomsInternalProcessedData(pub(crate) Vec<InternalTempZoomInfo>);
+pub(crate) struct ZoomsInternalProcessedData<W: Write + Seek + Send + 'static>(
+    pub(crate) Vec<InternalTempZoomInfo<W>>,
+);
 
 pub(crate) fn write_zoom_vals<
+    W: Write + Seek + Send + 'static,
     V: BBIDataSource,
     P: BBIDataProcessor<Value = V::Value>
         + process_internal::BBIDataProcessorCreate<
-            I = ZoomsInternalProcessData,
-            Out = ZoomsInternalProcessedData,
+            I = ZoomsInternalProcessData<W>,
+            Out = ZoomsInternalProcessedData<W>,
         > + Send
         + 'static,
 >(
@@ -1063,13 +1070,13 @@ pub(crate) fn write_zoom_vals<
     chrom_ids: &HashMap<String, u32>,
     average_size: u32,
     zoom_counts: BTreeMap<u64, u64>,
-    mut file: BufWriter<File>,
+    mut file: BufWriter<W>,
     data_size: u64,
-) -> Result<(BufWriter<File>, Vec<ZoomHeader>, usize), BBIProcessError<V::Error>> {
+) -> Result<(BufWriter<W>, Vec<ZoomHeader>, usize), BBIProcessError<V::Error>> {
     let min_first_zoom_size = average_size.max(10) * 4;
     let mut zoom_receivers = vec![];
     let mut zoom_files = vec![];
-    let mut zooms_map: BTreeMap<u32, ZoomSender<ProcessDataError>> = zoom_counts
+    let mut zooms_map: BTreeMap<u32, ZoomSender<W, ProcessDataError>> = zoom_counts
         .into_iter()
         .skip_while(|z| z.0 > min_first_zoom_size as u64)
         .skip_while(|z| {
@@ -1247,8 +1254,8 @@ pub(crate) fn write_zoom_vals<
     Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
-pub(crate) fn write_mid(
-    file: &mut BufWriter<File>,
+pub(crate) fn write_mid<W: Write + Seek + Send + 'static>(
+    file: &mut BufWriter<W>,
     pre_data: u64,
     raw_sections_iter: impl Iterator<Item = Section>,
     chrom_sizes: HashMap<String, u32>,

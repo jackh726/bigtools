@@ -501,8 +501,8 @@ impl GenericBBIRead<ReopenableFile> {
     /// Opens a generic bbi file
     pub fn open_file(path: &str) -> Result<Self, GenericBBIFileOpenError> {
         let reopen = ReopenableFile {
-            path: path.to_string(),
-            file: File::open(path)?,
+            file: File::open(&path)?,
+            path: path.into(),
         };
         let b = GenericBBIRead::open(reopen);
         if b.is_err() {

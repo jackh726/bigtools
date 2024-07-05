@@ -32,7 +32,13 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         .expect("Unable to create runtime.");
 
     let tempfile = tempfile::NamedTempFile::new()?;
-    let mut outb = BigBedWrite::create_file(tempfile.path().to_string_lossy().to_string());
+
+    let mut chrom_map = HashMap::new();
+    chrom_map.insert("chr17".to_string(), 83257441);
+    chrom_map.insert("chr18".to_string(), 80373285);
+    chrom_map.insert("chr19".to_string(), 58617616);
+
+    let mut outb = BigBedWrite::create_file(tempfile.path(), chrom_map).unwrap();
     outb.autosql = {
         let infile = File::open(&bed)?;
         let mut vals_iter = BedFileStream::from_bed_file(infile);
@@ -42,16 +48,11 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
     };
     outb.options.compress = false;
 
-    let mut chrom_map = HashMap::new();
-    chrom_map.insert("chr17".to_string(), 83257441);
-    chrom_map.insert("chr18".to_string(), 80373285);
-    chrom_map.insert("chr19".to_string(), 58617616);
-
     let infile = File::open(bed)?;
     let data = BedParserStreamingIterator::from_bed_file(infile, false);
-    outb.write(chrom_map, data, runtime).unwrap();
+    outb.write(data, runtime).unwrap();
 
-    let mut bwread = BigBedRead::open_file(&tempfile.path().to_string_lossy()).unwrap();
+    let mut bwread = BigBedRead::open_file(tempfile.path()).unwrap();
 
     let chroms = bwread.chroms();
     assert_eq!(chroms.len(), 3);

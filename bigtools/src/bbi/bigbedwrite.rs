@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Seek, Write};
+use std::path::Path;
 
 use futures::sink::SinkExt;
 
@@ -25,23 +26,35 @@ use crate::bbiwrite::{
 };
 
 /// The struct used to write a bigBed file
-pub struct BigBedWrite {
-    pub path: String,
+pub struct BigBedWrite<W: Write + Seek + Send + 'static> {
+    out: W,
+    chrom_sizes: HashMap<String, u32>,
     pub options: BBIWriteOptions,
     pub autosql: Option<String>,
 }
 
-impl BigBedWrite {
-    pub fn create_file(path: String) -> Self {
+impl BigBedWrite<File> {
+    pub fn create_file(
+        path: impl AsRef<Path>,
+        chrom_sizes: HashMap<String, u32>,
+    ) -> io::Result<Self> {
+        let out = File::create(path)?;
+        Ok(BigBedWrite::new(out, chrom_sizes))
+    }
+}
+
+impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
+    pub fn new(out: W, chrom_sizes: HashMap<String, u32>) -> Self {
         BigBedWrite {
-            path,
+            out,
+            chrom_sizes,
             options: BBIWriteOptions::default(),
             autosql: None,
         }
     }
 
     fn write_pre(
-        file: &mut BufWriter<File>,
+        file: &mut BufWriter<W>,
         autosql: &Option<String>,
     ) -> Result<(u64, u64, u64, u64), ProcessDataError> {
         write_blank_headers(file)?;
@@ -82,22 +95,20 @@ impl BigBedWrite {
     /// Write the values from `V` as a bigWig. Will utilize the provided runtime for encoding values and for reading through the values (potentially parallelized by chromosome).
     pub fn write<V: BBIDataSource<Value = BedEntry>>(
         self,
-        chrom_sizes: HashMap<String, u32>,
         vals: V,
         runtime: Runtime,
     ) -> Result<(), BBIProcessError<V::Error>> {
-        let fp = File::create(self.path.clone())?;
-        let mut file = BufWriter::new(fp);
+        let mut file = BufWriter::new(self.out);
 
         let (autosql_offset, total_summary_offset, full_data_offset, pre_data) =
             BigBedWrite::write_pre(&mut file, &self.autosql)?;
 
-        let output = bbiwrite::write_vals::<_, BigBedFullProcess>(
+        let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
             vals,
             file,
             self.options,
             runtime,
-            chrom_sizes.clone(),
+            &self.chrom_sizes,
         );
         let (chrom_ids, summary, mut file, raw_sections_iter, zoom_infos, uncompress_buf_size) =
             output?;
@@ -107,7 +118,7 @@ impl BigBedWrite {
             &mut file,
             pre_data,
             raw_sections_iter,
-            chrom_sizes,
+            self.chrom_sizes,
             &chrom_ids,
             self.options,
         )?;
@@ -143,23 +154,21 @@ impl BigBedWrite {
     pub fn write_multipass<V: BBIDataSource<Value = BedEntry>>(
         self,
         make_vals: impl Fn() -> Result<V, BBIProcessError<V::Error>>,
-        chrom_sizes: HashMap<String, u32>,
         runtime: Runtime,
     ) -> Result<(), BBIProcessError<V::Error>> {
-        let fp = File::create(self.path.clone())?;
-        let mut file = BufWriter::new(fp);
+        let mut file = BufWriter::new(self.out);
 
         let (autosql_offset, total_summary_offset, full_data_offset, pre_data) =
             BigBedWrite::write_pre(&mut file, &self.autosql)?;
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_vals_no_zoom::<_, BigBedNoZoomsProcess>(
+        let output = bbiwrite::write_vals_no_zoom::<_, _, BigBedNoZoomsProcess>(
             vals,
             file,
             self.options,
             &runtime,
-            chrom_sizes.clone(),
+            &self.chrom_sizes,
         );
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             output?;
@@ -169,14 +178,14 @@ impl BigBedWrite {
             &mut file,
             pre_data,
             raw_sections_iter,
-            chrom_sizes,
+            self.chrom_sizes,
             &chrom_ids,
             self.options,
         )?;
 
         let vals = make_vals()?;
 
-        let output = bbiwrite::write_zoom_vals::<_, BigBedZoomsProcess>(
+        let output = bbiwrite::write_zoom_vals::<_, _, BigBedZoomsProcess<W>>(
             vals,
             self.options,
             &runtime,
@@ -210,180 +219,69 @@ impl BigBedWrite {
 
         Ok(())
     }
+}
 
-    async fn process_val(
-        current_val: BedEntry,
-        next_val: Option<&BedEntry>,
-        chrom_length: u32,
-        chrom: &String,
-        summary: &mut Option<Summary>,
-        items: &mut Vec<BedEntry>,
-        overlap: &mut IndexList<Value>,
-        options: BBIWriteOptions,
-        runtime: &Handle,
-        ftx: &mut BBIDataProcessoringInputSectionChannel,
-        chrom_id: u32,
-    ) -> Result<(), ProcessDataError> {
-        // Check a few preconditions:
-        // - The current end is greater than or equal to the start
-        // - The current end is at most the chromosome length
-        // - If there is a next value, then it does not overlap value
-        // TODO: test these correctly fails
-        if current_val.start > current_val.end {
-            return Err(ProcessDataError::InvalidInput(format!(
-                "Invalid bed: {} > {}",
-                current_val.start, current_val.end
-            )));
-        }
-        if current_val.start >= chrom_length {
-            return Err(ProcessDataError::InvalidInput(format!(
-                "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
-                current_val.start, chrom, chrom_length
-            )));
-        }
-        match next_val {
-            None => (),
-            Some(next_val) => {
-                if current_val.start > next_val.start {
-                    return Err(ProcessDataError::InvalidInput(format!(
-                        "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
-                        chrom,
-                        current_val.start,
-                        current_val.end,
-                        next_val.start,
-                        next_val.end,
-                    )));
-                }
+async fn process_val(
+    current_val: BedEntry,
+    next_val: Option<&BedEntry>,
+    chrom_length: u32,
+    chrom: &String,
+    summary: &mut Option<Summary>,
+    items: &mut Vec<BedEntry>,
+    overlap: &mut IndexList<Value>,
+    options: BBIWriteOptions,
+    runtime: &Handle,
+    ftx: &mut BBIDataProcessoringInputSectionChannel,
+    chrom_id: u32,
+) -> Result<(), ProcessDataError> {
+    // Check a few preconditions:
+    // - The current end is greater than or equal to the start
+    // - The current end is at most the chromosome length
+    // - If there is a next value, then it does not overlap value
+    // TODO: test these correctly fails
+    if current_val.start > current_val.end {
+        return Err(ProcessDataError::InvalidInput(format!(
+            "Invalid bed: {} > {}",
+            current_val.start, current_val.end
+        )));
+    }
+    if current_val.start >= chrom_length {
+        return Err(ProcessDataError::InvalidInput(format!(
+            "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
+            current_val.start, chrom, chrom_length
+        )));
+    }
+    match next_val {
+        None => (),
+        Some(next_val) => {
+            if current_val.start > next_val.start {
+                return Err(ProcessDataError::InvalidInput(format!(
+                    "Invalid bed: not sorted on chromosome {} at {}-{} (first) and {}-{} (second). Use sort -k1,1 -k2,2n to sort the bed before input.",
+                    chrom,
+                    current_val.start,
+                    current_val.end,
+                    next_val.start,
+                    next_val.end,
+                )));
             }
         }
-
-        // Now, actually process the value.
-
-        // First, update the summary.
-        let add_interval_to_summary =
-            move |overlap: &mut IndexList<Value>,
-                  summary: &mut Option<Summary>,
-                  item_start: u32,
-                  item_end: u32,
-                  next_start_opt: Option<u32>| {
-                // If any overlaps exists, it must be starting at the current start (else it would have to be after the current entry)
-                // If the overlap starts before, the entry wasn't correctly cut last iteration
-                debug_assert!(overlap
-                    .head()
-                    .map(|f| f.start == item_start)
-                    .unwrap_or(true));
-
-                // For each item in `overlap` that overlaps the current
-                // item, add `1` to the value.
-                let mut index = overlap.head_index();
-                while let Some(i) = index {
-                    match overlap.get_mut(i) {
-                        None => break,
-                        Some(o) => {
-                            o.value += 1.0;
-                            if item_end < o.end {
-                                let value = o.value - 1.0;
-                                let end = o.end;
-                                o.end = item_end;
-                                overlap.insert_after(
-                                    i,
-                                    Value {
-                                        start: item_end,
-                                        end,
-                                        value,
-                                    },
-                                );
-                                break;
-                            }
-                            index = overlap.next_index(i);
-                        }
-                    }
-                }
-
-                debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
-
-                if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
-                    overlap.push_back(Value {
-                        start: item_start,
-                        end: item_end,
-                        value: 1.0,
-                    });
-                }
-
-                let next_start = next_start_opt.unwrap_or(u32::max_value());
-
-                while overlap
-                    .head()
-                    .map(|f| f.start < next_start)
-                    .unwrap_or(false)
-                {
-                    let mut removed = overlap.pop_front().unwrap();
-                    let (len, val) = if removed.end <= next_start {
-                        (removed.end - removed.start, f64::from(removed.value))
-                    } else {
-                        let len = next_start - removed.start;
-                        let val = f64::from(removed.value);
-                        removed.start = next_start;
-                        overlap.push_front(removed);
-                        (len, val)
-                    };
-
-                    match summary {
-                        None => {
-                            *summary = Some(Summary {
-                                total_items: 0,
-                                bases_covered: u64::from(len),
-                                min_val: val,
-                                max_val: val,
-                                sum: f64::from(len) * val,
-                                sum_squares: f64::from(len) * val * val,
-                            })
-                        }
-                        Some(summary) => {
-                            summary.bases_covered += u64::from(len);
-                            summary.min_val = summary.min_val.min(val);
-                            summary.max_val = summary.max_val.max(val);
-                            summary.sum += f64::from(len) * val;
-                            summary.sum_squares += f64::from(len) * val * val;
-                        }
-                    }
-                }
-            };
-
-        add_interval_to_summary(
-            overlap,
-            summary,
-            current_val.start,
-            current_val.end,
-            next_val.map(|v| v.start),
-        );
-
-        // Then, add the current item to the actual values, and encode if full, or last item
-        items.push(current_val);
-        if next_val.is_none() || items.len() >= options.items_per_slot as usize {
-            let items =
-                std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
-            let handle = runtime.spawn(encode_section(options.compress, items, chrom_id));
-            ftx.send(handle).await.expect("Couldn't send");
-        }
-
-        Ok(())
     }
 
-    async fn process_val_zoom(
-        zoom_items: &mut Vec<ZoomItem>,
-        options: BBIWriteOptions,
-        item_start: u32,
-        item_end: u32,
-        next_val: Option<&BedEntry>,
-        runtime: &Handle,
-        chrom_id: u32,
-    ) -> Result<(), ProcessDataError> {
-        // Then, add the item to the zoom item queues. This is a bit complicated.
-        for zoom_item in zoom_items.iter_mut() {
-            debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+    // Now, actually process the value.
 
-            let overlap = &mut zoom_item.overlap;
+    // First, update the summary.
+    let add_interval_to_summary =
+        move |overlap: &mut IndexList<Value>,
+              summary: &mut Option<Summary>,
+              item_start: u32,
+              item_end: u32,
+              next_start_opt: Option<u32>| {
+            // If any overlaps exists, it must be starting at the current start (else it would have to be after the current entry)
+            // If the overlap starts before, the entry wasn't correctly cut last iteration
+            debug_assert!(overlap
+                .head()
+                .map(|f| f.start == item_start)
+                .unwrap_or(true));
 
             // For each item in `overlap` that overlaps the current
             // item, add `1` to the value.
@@ -422,7 +320,7 @@ impl BigBedWrite {
                 });
             }
 
-            let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
+            let next_start = next_start_opt.unwrap_or(u32::max_value());
 
             while overlap
                 .head()
@@ -430,95 +328,206 @@ impl BigBedWrite {
                 .unwrap_or(false)
             {
                 let mut removed = overlap.pop_front().unwrap();
-                let val = f64::from(removed.value);
-                let (removed_start, removed_end) = if removed.end <= next_start {
-                    (removed.start, removed.end)
+                let (len, val) = if removed.end <= next_start {
+                    (removed.end - removed.start, f64::from(removed.value))
                 } else {
-                    let start = removed.start;
+                    let len = next_start - removed.start;
+                    let val = f64::from(removed.value);
                     removed.start = next_start;
                     overlap.push_front(removed);
-                    (start, next_start)
+                    (len, val)
                 };
 
-                let mut add_start = removed_start;
-                loop {
-                    if add_start >= removed_end {
-                        if next_val.is_none() {
-                            if let Some((mut zoom2, total_items)) = zoom_item.live_info.take() {
-                                zoom2.summary.total_items = total_items;
-                                zoom_item.records.push(zoom2);
-                            }
-                            if !zoom_item.records.is_empty() {
-                                let items = std::mem::take(&mut zoom_item.records);
-                                let handle =
-                                    runtime.spawn(encode_zoom_section(options.compress, items));
-                                zoom_item.channel.send(handle).await.expect("Couln't send");
-                            }
-                        }
-                        break;
+                match summary {
+                    None => {
+                        *summary = Some(Summary {
+                            total_items: 0,
+                            bases_covered: u64::from(len),
+                            min_val: val,
+                            max_val: val,
+                            sum: f64::from(len) * val,
+                            sum_squares: f64::from(len) * val * val,
+                        })
                     }
-                    let (zoom2, _) = zoom_item.live_info.get_or_insert((
-                        ZoomRecord {
-                            chrom: chrom_id,
-                            start: add_start,
-                            end: add_start,
-                            summary: Summary {
-                                total_items: 0,
-                                bases_covered: 0,
-                                min_val: 1.0,
-                                max_val: 1.0,
-                                sum: 0.0,
-                                sum_squares: 0.0,
-                            },
-                        },
-                        0,
-                    ));
-                    // The end of zoom record
-                    let next_end = zoom2.start + zoom_item.size;
-                    // End of bases that we could add
-                    let add_end = std::cmp::min(next_end, removed_end);
-                    // If the last zoom ends before this value starts, we don't add anything
-                    if add_end >= add_start {
-                        let added_bases = add_end - add_start;
-                        zoom2.end = add_end;
-                        zoom2.summary.total_items += 1; // XXX
-                        zoom2.summary.bases_covered += u64::from(added_bases);
-                        zoom2.summary.min_val = zoom2.summary.min_val.min(val);
-                        zoom2.summary.max_val = zoom2.summary.max_val.max(val);
-                        zoom2.summary.sum += f64::from(added_bases) * val;
-                        zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
-                    }
-                    // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
-                    // or we added to the end of the zoom), then write this zooms to the current section
-                    if add_end == next_end {
-                        zoom_item.records.push(
-                            zoom_item
-                                .live_info
-                                .take()
-                                .map(|(mut zoom_item, total_items)| {
-                                    zoom_item.summary.total_items = total_items;
-                                    zoom_item
-                                })
-                                .unwrap(),
-                        );
-                    }
-                    // Set where we would start for next time
-                    add_start = std::cmp::max(add_end, removed_start);
-                    // Write section if full
-                    if zoom_item.records.len() == options.items_per_slot as usize {
-                        let items = std::mem::take(&mut zoom_item.records);
-                        let handle = runtime.spawn(encode_zoom_section(options.compress, items));
-                        zoom_item.channel.send(handle).await.expect("Couln't send");
+                    Some(summary) => {
+                        summary.bases_covered += u64::from(len);
+                        summary.min_val = summary.min_val.min(val);
+                        summary.max_val = summary.max_val.max(val);
+                        summary.sum += f64::from(len) * val;
+                        summary.sum_squares += f64::from(len) * val * val;
                     }
                 }
             }
+        };
 
-            debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+    add_interval_to_summary(
+        overlap,
+        summary,
+        current_val.start,
+        current_val.end,
+        next_val.map(|v| v.start),
+    );
+
+    // Then, add the current item to the actual values, and encode if full, or last item
+    items.push(current_val);
+    if next_val.is_none() || items.len() >= options.items_per_slot as usize {
+        let items = std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
+        let handle = runtime.spawn(encode_section(options.compress, items, chrom_id));
+        ftx.send(handle).await.expect("Couldn't send");
+    }
+
+    Ok(())
+}
+
+async fn process_val_zoom(
+    zoom_items: &mut Vec<ZoomItem>,
+    options: BBIWriteOptions,
+    item_start: u32,
+    item_end: u32,
+    next_val: Option<&BedEntry>,
+    runtime: &Handle,
+    chrom_id: u32,
+) -> Result<(), ProcessDataError> {
+    // Then, add the item to the zoom item queues. This is a bit complicated.
+    for zoom_item in zoom_items.iter_mut() {
+        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+
+        let overlap = &mut zoom_item.overlap;
+
+        // For each item in `overlap` that overlaps the current
+        // item, add `1` to the value.
+        let mut index = overlap.head_index();
+        while let Some(i) = index {
+            match overlap.get_mut(i) {
+                None => break,
+                Some(o) => {
+                    o.value += 1.0;
+                    if item_end < o.end {
+                        let value = o.value - 1.0;
+                        let end = o.end;
+                        o.end = item_end;
+                        overlap.insert_after(
+                            i,
+                            Value {
+                                start: item_end,
+                                end,
+                                value,
+                            },
+                        );
+                        break;
+                    }
+                    index = overlap.next_index(i);
+                }
+            }
         }
 
-        Ok(())
+        debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
+
+        if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
+            overlap.push_back(Value {
+                start: item_start,
+                end: item_end,
+                value: 1.0,
+            });
+        }
+
+        let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
+
+        while overlap
+            .head()
+            .map(|f| f.start < next_start)
+            .unwrap_or(false)
+        {
+            let mut removed = overlap.pop_front().unwrap();
+            let val = f64::from(removed.value);
+            let (removed_start, removed_end) = if removed.end <= next_start {
+                (removed.start, removed.end)
+            } else {
+                let start = removed.start;
+                removed.start = next_start;
+                overlap.push_front(removed);
+                (start, next_start)
+            };
+
+            let mut add_start = removed_start;
+            loop {
+                if add_start >= removed_end {
+                    if next_val.is_none() {
+                        if let Some((mut zoom2, total_items)) = zoom_item.live_info.take() {
+                            zoom2.summary.total_items = total_items;
+                            zoom_item.records.push(zoom2);
+                        }
+                        if !zoom_item.records.is_empty() {
+                            let items = std::mem::take(&mut zoom_item.records);
+                            let handle =
+                                runtime.spawn(encode_zoom_section(options.compress, items));
+                            zoom_item.channel.send(handle).await.expect("Couln't send");
+                        }
+                    }
+                    break;
+                }
+                let (zoom2, _) = zoom_item.live_info.get_or_insert((
+                    ZoomRecord {
+                        chrom: chrom_id,
+                        start: add_start,
+                        end: add_start,
+                        summary: Summary {
+                            total_items: 0,
+                            bases_covered: 0,
+                            min_val: 1.0,
+                            max_val: 1.0,
+                            sum: 0.0,
+                            sum_squares: 0.0,
+                        },
+                    },
+                    0,
+                ));
+                // The end of zoom record
+                let next_end = zoom2.start + zoom_item.size;
+                // End of bases that we could add
+                let add_end = std::cmp::min(next_end, removed_end);
+                // If the last zoom ends before this value starts, we don't add anything
+                if add_end >= add_start {
+                    let added_bases = add_end - add_start;
+                    zoom2.end = add_end;
+                    zoom2.summary.total_items += 1; // XXX
+                    zoom2.summary.bases_covered += u64::from(added_bases);
+                    zoom2.summary.min_val = zoom2.summary.min_val.min(val);
+                    zoom2.summary.max_val = zoom2.summary.max_val.max(val);
+                    zoom2.summary.sum += f64::from(added_bases) * val;
+                    zoom2.summary.sum_squares += f64::from(added_bases) * val * val;
+                }
+                // If we made it to the end of the zoom (whether it was because the zoom ended before this value started,
+                // or we added to the end of the zoom), then write this zooms to the current section
+                if add_end == next_end {
+                    zoom_item.records.push(
+                        zoom_item
+                            .live_info
+                            .take()
+                            .map(|(mut zoom_item, total_items)| {
+                                zoom_item.summary.total_items = total_items;
+                                zoom_item
+                            })
+                            .unwrap(),
+                    );
+                }
+                // Set where we would start for next time
+                add_start = std::cmp::max(add_end, removed_start);
+                // Write section if full
+                if zoom_item.records.len() == options.items_per_slot as usize {
+                    let items = std::mem::take(&mut zoom_item.records);
+                    let handle = runtime.spawn(encode_zoom_section(options.compress, items));
+                    zoom_item.channel.send(handle).await.expect("Couln't send");
+                }
+            }
+        }
+
+        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
     }
+
+    Ok(())
 }
+
 // While we do technically lose precision here by using the f32 in Value, we can reuse the same merge_into method
 struct ZoomItem {
     size: u32,
@@ -638,7 +647,7 @@ impl BBIDataProcessor for BigBedFullProcess {
         let item_start = current_val.start;
         let item_end = current_val.end;
 
-        BigBedWrite::process_val(
+        process_val(
             current_val,
             next_val,
             length,
@@ -653,7 +662,7 @@ impl BBIDataProcessor for BigBedFullProcess {
         )
         .await?;
 
-        BigBedWrite::process_val_zoom(
+        process_val_zoom(
             &mut state_val.zoom_items,
             *options,
             item_start,
@@ -778,7 +787,7 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
         let item_start = current_val.start;
         let item_end = current_val.end;
 
-        BigBedWrite::process_val(
+        process_val(
             current_val,
             next_val,
             *length,
@@ -808,8 +817,8 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
     }
 }
 
-struct BigBedZoomsProcess {
-    temp_zoom_items: Vec<InternalTempZoomInfo>,
+struct BigBedZoomsProcess<W: Write + Seek + Send + 'static> {
+    temp_zoom_items: Vec<InternalTempZoomInfo<W>>,
     chrom_id: u32,
     options: BBIWriteOptions,
     runtime: Handle,
@@ -817,9 +826,9 @@ struct BigBedZoomsProcess {
     zoom_items: Vec<ZoomItem>,
 }
 
-impl BBIDataProcessorCreate for BigBedZoomsProcess {
-    type I = ZoomsInternalProcessData;
-    type Out = ZoomsInternalProcessedData;
+impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigBedZoomsProcess<W> {
+    type I = ZoomsInternalProcessData<W>;
+    type Out = ZoomsInternalProcessedData<W>;
     fn create(internal_data: Self::I) -> Self {
         let ZoomsInternalProcessData(temp_zoom_items, zooms_channels, chrom_id, options, runtime) =
             internal_data;
@@ -854,7 +863,7 @@ impl BBIDataProcessorCreate for BigBedZoomsProcess {
         ZoomsInternalProcessedData(self.temp_zoom_items)
     }
 }
-impl BBIDataProcessor for BigBedZoomsProcess {
+impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigBedZoomsProcess<W> {
     type Value = BedEntry;
     async fn do_process(
         &mut self,
@@ -869,7 +878,7 @@ impl BBIDataProcessor for BigBedZoomsProcess {
             ..
         } = self;
 
-        BigBedWrite::process_val_zoom(
+        process_val_zoom(
             zoom_items,
             *options,
             current_val.start,

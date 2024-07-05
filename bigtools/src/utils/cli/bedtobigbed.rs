@@ -72,11 +72,6 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let mut outb = BigBedWrite::create_file(bigwigpath);
-    outb.options.max_zooms = args.write_args.nzooms;
-    outb.options.compress = !args.write_args.uncompressed;
-    outb.options.input_sort_type = input_sort_type;
-    outb.options.inmemory = args.write_args.inmemory;
     let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
         .lines()
         .filter(|l| match l {
@@ -93,6 +88,11 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
+    let mut outb = BigBedWrite::create_file(bigwigpath, chrom_map)?;
+    outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.compress = !args.write_args.uncompressed;
+    outb.options.input_sort_type = input_sort_type;
+    outb.options.inmemory = args.write_args.inmemory;
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
         runtime::Builder::new_current_thread().build().unwrap()
@@ -117,7 +117,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
     if bedpath == "-" || bedpath == "stdin" {
         let stdin = std::io::stdin().lock();
         let data = BedParserStreamingIterator::from_bed_file(stdin, allow_out_of_order_chroms);
-        outb.write(chrom_map, data, runtime)?;
+        outb.write(data, runtime)?;
     } else {
         let infile = File::open(&bedpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
@@ -156,7 +156,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
                     PathBuf::from(bedpath),
                     parse_bed,
                 );
-                outb.write(chrom_map, data, runtime)?;
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -169,7 +169,6 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
 
                         Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }
@@ -178,7 +177,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
             if args.single_pass {
                 let data =
                     BedParserStreamingIterator::from_bed_file(infile, allow_out_of_order_chroms);
-                outb.write(chrom_map, data, runtime)?;
+                outb.write(data, runtime)?;
             } else {
                 outb.write_multipass(
                     || {
@@ -190,7 +189,6 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
 
                         Ok(data)
                     },
-                    chrom_map,
                     runtime,
                 )?;
             }
