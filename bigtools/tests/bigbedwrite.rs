@@ -63,6 +63,7 @@ fn bigbedwrite_test() -> Result<(), Box<dyn Error>> {
         &bwread.autosql().unwrap().unwrap(),
         "table bed\n\"Browser Extensible Data\"\n(\n    string chrom;       \"Reference sequence chromosome or scaffold\"\n    uint   chromStart;  \"Start position in chromosome\"\n    uint   chromEnd;    \"End position in chromosome\"\n   string name;        \"Name of item.\"\n   uint score;          \"Score (0-1000)\"\n)",
     );
+    assert_eq!(bwread.info().header.field_count, 5);
 
     let mut intervals = bwread.get_interval("chr17", 0, 83257441)?;
     let first_interval = intervals.next().unwrap().unwrap();

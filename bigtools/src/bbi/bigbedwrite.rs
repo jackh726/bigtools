@@ -24,6 +24,7 @@ use crate::bbiwrite::{
     self, encode_zoom_section, write_blank_headers, write_zooms, BBIProcessError, BBIWriteOptions,
     SectionData,
 };
+use crate::bed::autosql::parse::parse_autosql;
 
 /// The struct used to write a bigBed file
 pub struct BigBedWrite<W: Write + Seek + Send + 'static> {
@@ -55,17 +56,28 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
 
     fn write_pre(
         file: &mut BufWriter<W>,
-        autosql: &Option<String>,
-    ) -> Result<(u64, u64, u64, u64), ProcessDataError> {
+        autosql: Option<String>,
+    ) -> Result<(u64, u64, u64, u64, u16), ProcessDataError> {
         write_blank_headers(file)?;
 
-        let autosql_offset = file.tell()?;
-        let autosql = autosql
-            .clone()
-            .unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
+        let autosql = autosql.unwrap_or_else(|| crate::bed::autosql::BED3.to_string());
+
+        let field_count = 'field_count: {
+            let Ok(mut declarations) = parse_autosql(&autosql) else {
+                break 'field_count None;
+            };
+            let Some(decl) = declarations.pop() else {
+                break 'field_count None;
+            };
+            Some(decl.fields.len())
+        };
+        let field_count = field_count.unwrap_or(3) as u16;
+
         let autosql = CString::new(autosql.into_bytes()).map_err(|_| {
             ProcessDataError::InvalidInput("Invalid autosql: null byte in string".to_owned())
         })?;
+
+        let autosql_offset = file.tell()?;
         file.write_all(autosql.as_bytes_with_nul())?;
 
         let total_summary_offset = file.tell()?;
@@ -89,6 +101,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             total_summary_offset,
             full_data_offset,
             pre_data,
+            field_count,
         ))
     }
 
@@ -100,8 +113,8 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
     ) -> Result<(), BBIProcessError<V::Error>> {
         let mut file = BufWriter::new(self.out);
 
-        let (autosql_offset, total_summary_offset, full_data_offset, pre_data) =
-            BigBedWrite::write_pre(&mut file, &self.autosql)?;
+        let (autosql_offset, total_summary_offset, full_data_offset, pre_data, field_count) =
+            BigBedWrite::write_pre(&mut file, self.autosql)?;
 
         let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
             vals,
@@ -133,9 +146,10 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             chrom_index_start,
             full_data_offset,
             index_start,
-            // TODO: actually write the correct values for the following
-            3,
-            3,
+            field_count,
+            // No separate option to specify field count, so use field count
+            // defined in autosql
+            field_count,
             autosql_offset,
             total_summary_offset,
             uncompress_buf_size,
@@ -158,8 +172,8 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
     ) -> Result<(), BBIProcessError<V::Error>> {
         let mut file = BufWriter::new(self.out);
 
-        let (autosql_offset, total_summary_offset, full_data_offset, pre_data) =
-            BigBedWrite::write_pre(&mut file, &self.autosql)?;
+        let (autosql_offset, total_summary_offset, full_data_offset, pre_data, field_count) =
+            BigBedWrite::write_pre(&mut file, self.autosql)?;
 
         let vals = make_vals()?;
 
@@ -206,9 +220,10 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             chrom_index_start,
             full_data_offset,
             index_start,
-            // TODO: actually write the correct values for the following
-            3,
-            3,
+            field_count,
+            // No separate option to specify field count, so use field count
+            // defined in autosql
+            field_count,
             autosql_offset,
             total_summary_offset,
             uncompress_buf_size,
