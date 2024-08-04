@@ -258,7 +258,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             args: ChromIntersectArgs { a, b, out },
         } => chromintersect(a, b, out),
         SubCommands::BedGraphToBigWig { args } => bedgraphtobigwig(args),
-        SubCommands::BedToBigBed { args } => bedtobigbed(args),
+        SubCommands::BedToBigBed { args } => {
+            bedtobigbed(args)?;
+            Ok(())
+        }
         SubCommands::BigBedInfo { args } => bigbedinfo(args),
         SubCommands::BigBedToBed { args } => bigbedtobed(args),
         SubCommands::BigWigAverageOverBed { args } => {

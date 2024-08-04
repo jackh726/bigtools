@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use tokio::runtime;
 
@@ -51,7 +51,7 @@ pub struct BedToBigBedArgs {
     pub write_args: BBIWriteArgs,
 }
 
-pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
+pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
     let bedpath = args.bed;
     let chrom_map = args.chromsizes;
     let bigwigpath = args.output;
@@ -72,7 +72,9 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let chrom_map: HashMap<String, u32> = BufReader::new(File::open(chrom_map)?)
+    let chrom_map = File::open(&chrom_map)
+        .with_context(|| format!("Failed to open chrom sizes file `{}`", &chrom_map))?;
+    let chrom_map: HashMap<String, u32> = BufReader::new(chrom_map)
         .lines()
         .filter(|l| match l {
             Ok(s) => !s.is_empty(),
@@ -88,7 +90,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
-    let mut outb = BigBedWrite::create_file(bigwigpath, chrom_map)?;
+    let mut outb = BigBedWrite::create_file(bigwigpath, chrom_map)
+        .with_context(|| format!("Failed to create bigBed file."))?;
     outb.options.max_zooms = args.write_args.nzooms;
     outb.options.compress = !args.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
@@ -103,23 +106,26 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
             .unwrap()
     };
 
-    let autosql = match args.autosql.as_ref() {
-        None => {
-            let infile = File::open(&bedpath)?;
-            let mut vals_iter = BedFileStream::from_bed_file(infile);
-            crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest)
-        }
-        Some(file) => std::fs::read_to_string(file)?,
-    };
-    outb.autosql = Some(autosql);
-
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedpath == "-" || bedpath == "stdin" {
         let stdin = std::io::stdin().lock();
         let data = BedParserStreamingIterator::from_bed_file(stdin, allow_out_of_order_chroms);
-        outb.write(data, runtime)?;
+        outb.write(data, runtime)
+            .with_context(|| format!("Failed to write bigBed."))?;
     } else {
-        let infile = File::open(&bedpath)?;
+        let autosql = match args.autosql.as_ref() {
+            None => {
+                let infile = File::open(&bedpath)
+                    .with_context(|| format!("Failed to open bed file `{}`", &bedpath))?;
+                let mut vals_iter = BedFileStream::from_bed_file(infile);
+                crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest)
+            }
+            Some(file) => std::fs::read_to_string(file)?,
+        };
+        outb.autosql = Some(autosql);
+
+        let infile = File::open(&bedpath)
+            .with_context(|| format!("Failed to open bed file `{}`.", &bedpath))?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
             (1, _) | (_, "no") => (false, false),
             (_, "auto") => (infile.metadata()?.len() >= 200_000_000, false),
@@ -135,7 +141,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
         let chrom_indices = match parallel {
             false => None,
             true => {
-                let index = index_chroms(infile)?;
+                let index = index_chroms(infile)
+                    .with_context(|| format!("Failed to index chromosomes."))?;
                 match (index, parallel_required) {
                     (Some(index), _) => Some(index),
                     (None, true) => {
@@ -156,7 +163,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
                     PathBuf::from(bedpath),
                     parse_bed,
                 );
-                outb.write(data, runtime)?;
+                outb.write(data, runtime)
+                    .with_context(|| format!("Failed to write bigBed."))?;
             } else {
                 outb.write_multipass(
                     || {
@@ -170,14 +178,17 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
                         Ok(data)
                     },
                     runtime,
-                )?;
+                )
+                .with_context(|| format!("Failed to write bigBed."))?;
             }
         } else {
-            let infile = File::open(&bedpath)?;
             if args.single_pass {
+                let infile = File::open(&bedpath)
+                    .with_context(|| format!("Failed to open bed file `{}`.", &bedpath))?;
                 let data =
                     BedParserStreamingIterator::from_bed_file(infile, allow_out_of_order_chroms);
-                outb.write(data, runtime)?;
+                outb.write(data, runtime)
+                    .with_context(|| format!("Failed to write bigBed."))?;
             } else {
                 outb.write_multipass(
                     || {
@@ -190,7 +201,8 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> Result<(), Box<dyn Error>> {
                         Ok(data)
                     },
                     runtime,
-                )?;
+                )
+                .with_context(|| format!("Failed to write bigBed."))?;
             }
         }
     };
