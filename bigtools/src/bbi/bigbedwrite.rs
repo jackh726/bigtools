@@ -10,7 +10,6 @@ use byteorder::{NativeEndian, WriteBytesExt};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::bbiwrite::process_internal::BBIDataProcessorCreate;
-use crate::utils::indexlist::IndexList;
 use crate::utils::tell::Tell;
 use crate::{
     write_info, BBIDataProcessor, BBIDataProcessoredData, BBIDataProcessoringInputSectionChannel,
@@ -18,6 +17,7 @@ use crate::{
     NoZoomsInternalProcessedData, ProcessDataError, ZoomsInternalProcessData,
     ZoomsInternalProcessedData,
 };
+use index_list::IndexList;
 
 use crate::bbi::{BedEntry, Summary, Value, ZoomRecord, BIGBED_MAGIC};
 use crate::bbiwrite::{
@@ -294,15 +294,15 @@ async fn process_val(
             // If any overlaps exists, it must be starting at the current start (else it would have to be after the current entry)
             // If the overlap starts before, the entry wasn't correctly cut last iteration
             debug_assert!(overlap
-                .head()
+                .get_first()
                 .map(|f| f.start == item_start)
                 .unwrap_or(true));
 
             // For each item in `overlap` that overlaps the current
             // item, add `1` to the value.
-            let mut index = overlap.head_index();
-            while let Some(i) = index {
-                match overlap.get_mut(i) {
+            let mut index = overlap.first_index();
+            while index.is_some() {
+                match overlap.get_mut(index) {
                     None => break,
                     Some(o) => {
                         o.value += 1.0;
@@ -311,7 +311,7 @@ async fn process_val(
                             let end = o.end;
                             o.end = item_end;
                             overlap.insert_after(
-                                i,
+                                index,
                                 Value {
                                     start: item_end,
                                     end,
@@ -320,15 +320,18 @@ async fn process_val(
                             );
                             break;
                         }
-                        index = overlap.next_index(i);
+                        index = overlap.next_index(index);
                     }
                 }
             }
 
-            debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
+            debug_assert!(overlap
+                .get_last()
+                .map(|o| o.end >= item_start)
+                .unwrap_or(true));
 
-            if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
-                overlap.push_back(Value {
+            if overlap.get_last().map(|o| o.end).unwrap_or(item_start) == item_start {
+                overlap.insert_last(Value {
                     start: item_start,
                     end: item_end,
                     value: 1.0,
@@ -338,18 +341,18 @@ async fn process_val(
             let next_start = next_start_opt.unwrap_or(u32::max_value());
 
             while overlap
-                .head()
+                .get_first()
                 .map(|f| f.start < next_start)
                 .unwrap_or(false)
             {
-                let mut removed = overlap.pop_front().unwrap();
+                let mut removed = overlap.remove_first().unwrap();
                 let (len, val) = if removed.end <= next_start {
                     (removed.end - removed.start, f64::from(removed.value))
                 } else {
                     let len = next_start - removed.start;
                     let val = f64::from(removed.value);
                     removed.start = next_start;
-                    overlap.push_front(removed);
+                    overlap.insert_first(removed);
                     (len, val)
                 };
 
@@ -411,9 +414,9 @@ async fn process_val_zoom(
 
         // For each item in `overlap` that overlaps the current
         // item, add `1` to the value.
-        let mut index = overlap.head_index();
-        while let Some(i) = index {
-            match overlap.get_mut(i) {
+        let mut index = overlap.first_index();
+        while index.is_some() {
+            match overlap.get_mut(index) {
                 None => break,
                 Some(o) => {
                     o.value += 1.0;
@@ -422,7 +425,7 @@ async fn process_val_zoom(
                         let end = o.end;
                         o.end = item_end;
                         overlap.insert_after(
-                            i,
+                            index,
                             Value {
                                 start: item_end,
                                 end,
@@ -431,15 +434,18 @@ async fn process_val_zoom(
                         );
                         break;
                     }
-                    index = overlap.next_index(i);
+                    index = overlap.next_index(index);
                 }
             }
         }
 
-        debug_assert!(overlap.tail().map(|o| o.end >= item_start).unwrap_or(true));
+        debug_assert!(overlap
+            .get_last()
+            .map(|o| o.end >= item_start)
+            .unwrap_or(true));
 
-        if overlap.tail().map(|o| o.end).unwrap_or(item_start) == item_start {
-            overlap.push_back(Value {
+        if overlap.get_last().map(|o| o.end).unwrap_or(item_start) == item_start {
+            overlap.insert_last(Value {
                 start: item_start,
                 end: item_end,
                 value: 1.0,
@@ -449,18 +455,18 @@ async fn process_val_zoom(
         let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
 
         while overlap
-            .head()
+            .get_first()
             .map(|f| f.start < next_start)
             .unwrap_or(false)
         {
-            let mut removed = overlap.pop_front().unwrap();
+            let mut removed = overlap.remove_first().unwrap();
             let val = f64::from(removed.value);
             let (removed_start, removed_end) = if removed.end <= next_start {
                 (removed.start, removed.end)
             } else {
                 let start = removed.start;
                 removed.start = next_start;
-                overlap.push_front(removed);
+                overlap.insert_first(removed);
                 (start, next_start)
             };
 

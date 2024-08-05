@@ -4,7 +4,8 @@ Utilities for indexing a bed file that is start-sorted (chromosomes may be out o
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 
-use crate::utils::indexlist::{Index, IndexList};
+use index_list::{IndexList, ListIndex};
+
 use crate::utils::tell::Tell;
 
 /// Returns a Vec of offsets into a bed file, and the chromosome starting at each offset.
@@ -49,7 +50,7 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
     }
 
     let chrom = parse_line(&line)?.unwrap();
-    let first = chroms.push_front((0, chrom));
+    let first = chroms.insert_first((0, chrom));
     let file_size = file.seek(SeekFrom::End(0))?;
 
     fn do_index(
@@ -57,16 +58,18 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
         file: &mut BufReader<File>,
         chroms: &mut IndexList<(u64, String)>,
         line: &mut String,
-        prev: Index<(u64, String)>,
-        next: Option<Index<(u64, String)>>,
+        prev: ListIndex,
+        next: Option<ListIndex>,
         limit: usize,
     ) -> Result<(), io::Error> {
         if limit == 0 {
             panic!("Recursive depth limit reached");
         }
 
-        let next_tell = next.map(|next| chroms[next].0).unwrap_or(file_size);
-        let mid = (next_tell + chroms[prev].0) / 2;
+        let next_tell = next
+            .map(|next| chroms.get(next).unwrap().0)
+            .unwrap_or(file_size);
+        let mid = (next_tell + chroms.get(prev).unwrap().0) / 2;
         file.seek(SeekFrom::Start(mid))?;
         file.read_line(line)?;
         line.clear();
@@ -97,11 +100,14 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
         //    to continue to index between the previous and current as well as
         //    between the current and next.
 
-        let curr = chroms.insert_after(prev, (tell, chrom)).unwrap();
+        let curr = chroms.insert_after(prev, (tell, chrom));
 
-        let left = chroms[curr].1 != chroms[prev].1 && tell < next_tell;
+        let left = chroms.get(curr).unwrap().1 != chroms.get(prev).unwrap().1 && tell < next_tell;
         let right = next
-            .map(|next| chroms[curr].1 != chroms[next].1 && tell < chroms[next].0)
+            .map(|next| {
+                chroms.get(curr).unwrap().1 != chroms.get(next).unwrap().1
+                    && tell < chroms.get(next).unwrap().0
+            })
             .unwrap_or(true);
 
         if left {
@@ -112,8 +118,8 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
             do_index(file_size, file, chroms, line, curr, next, limit - 1)?;
         }
 
-        if chroms[curr].1 != chroms[prev].1 && tell == next_tell {
-            file.seek(SeekFrom::Start(chroms[prev].0))?;
+        if chroms.get(curr).unwrap().1 != chroms.get(prev).unwrap().1 && tell == next_tell {
+            file.seek(SeekFrom::Start(chroms.get(prev).unwrap().0))?;
             line.clear();
             file.read_line(line)?;
             line.clear();
@@ -121,7 +127,7 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
             file.read_line(line)?;
             let chrom = parse_line(&*line)?
                 .expect("Bad logic. Must at least find last entry for chromosome.");
-            chroms.insert_after(prev, (tell, chrom)).unwrap();
+            chroms.insert_after(prev, (tell, chrom));
         }
         Ok(())
     }
@@ -136,7 +142,7 @@ pub fn index_chroms(file: File) -> io::Result<Option<Vec<(u64, String)>>> {
         100,
     )?;
 
-    let mut chroms: Vec<_> = chroms.into_iter().collect();
+    let mut chroms: Vec<_> = chroms.drain_iter().collect();
     chroms.dedup_by_key(|index| index.1.clone());
     let mut deduped_chroms = chroms.clone();
     deduped_chroms.sort();

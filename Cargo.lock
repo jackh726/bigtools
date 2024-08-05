@@ -127,6 +127,7 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
  "futures",
+ "index_list",
  "itertools",
  "libdeflater",
  "rand",
@@ -468,6 +469,12 @@ dependencies = [
  "unicode-bidi",
  "unicode-normalization",
 ]
+
+[[package]]
+name = "index_list"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e6ba961c14e98151cd6416dd3685efe786a94c38bc1a535c06ceff0a1600813"
 
 [[package]]
 name = "indoc"
