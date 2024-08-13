@@ -17,7 +17,7 @@ use bigtools::utils::misc::{
 use bigtools::{
     BBIFileRead, BBIReadError as _BBIReadError, BedEntry, BigBedRead as BigBedReadRaw,
     BigBedWrite as BigBedWriteRaw, BigWigRead as BigWigReadRaw, BigWigWrite as BigWigWriteRaw,
-    CachedBBIFileRead, Value, ZoomRecord,
+    CachedBBIFileRead, GenericBBIRead, Value, ZoomRecord,
 };
 
 use bigtools::utils::reopen::Reopen;
@@ -2385,22 +2385,20 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
             "Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.",
         ))),
     };
-    let read = match BigWigReadRaw::open(file_like.clone()) {
-        Ok(bwr) => BBIRead {
-            bbi: BBIReadRaw::BigWigFileLike(bwr.cached()),
+    let read = match GenericBBIRead::open(file_like.clone()) {
+        Ok(GenericBBIRead::BigWig(bigwig)) => BBIRead {
+            bbi: BBIReadRaw::BigWigFileLike(bigwig.cached()),
         }
         .into_py(py),
-        Err(_) => match BigBedReadRaw::open(file_like) {
-            Ok(bbr) => BBIRead {
-                bbi: BBIReadRaw::BigBedFileLike(bbr.cached()),
-            }
-            .into_py(py),
-            Err(e) => {
-                return Err(PyErr::new::<BBIReadError, _>(format!(
-                    "File-like object is not a bigWig or bigBed. Or there was just a problem reading: {e}",
-                )))
-            }
-        },
+        Ok(GenericBBIRead::BigBed(bigbed)) => BBIRead {
+            bbi: BBIReadRaw::BigBedFileLike(bigbed.cached()),
+        }
+        .into_py(py),
+        Err(e) => {
+            return Err(PyErr::new::<BBIReadError, _>(format!(
+            "File-like object is not a bigWig or bigBed. Or there was just a problem reading: {e}",
+        )))
+        }
     };
     Ok(read)
 }

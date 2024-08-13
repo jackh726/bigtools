@@ -46,6 +46,10 @@ def test_open_filelike():
         with pybigtools.open(f, "r") as b:
             assert b.chroms() == {"chr17": 83_257_441}
 
+    with open(TEST_DIR / "data/bigBedExample.bb", "rb") as f:
+        with pybigtools.open(f, "r") as b:
+            assert b.chroms("chr21") == 48_129_895
+
     # BytesIO
     with open(REPO_ROOT / "bigtools/resources/test/valid.bigWig", "rb") as f:
         bw_bytes = f.read()
