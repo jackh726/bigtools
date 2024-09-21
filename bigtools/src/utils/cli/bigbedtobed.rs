@@ -128,9 +128,24 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
         for chrom in chroms {
             let start = start.unwrap_or(0);
             let end = end.unwrap_or(chrom.length);
-            for raw_val in bigbed.get_zoom_interval(&chrom.name, start, end, zoom).unwrap() {
+            for raw_val in bigbed
+                .get_zoom_interval(&chrom.name, start, end, zoom)
+                .unwrap()
+            {
                 let val = raw_val?;
-                uwrite!(&mut buf, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.summary.total_items, val.summary.bases_covered, val.summary.min_val.to_string(), val.summary.max_val.to_string(), val.summary.sum.to_string(), val.summary.sum_squares.to_string())?;
+                uwrite!(
+                    &mut buf,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    chrom.name,
+                    val.start,
+                    val.end,
+                    val.summary.total_items,
+                    val.summary.bases_covered,
+                    val.summary.min_val.to_string(),
+                    val.summary.max_val.to_string(),
+                    val.summary.sum.to_string(),
+                    val.summary.sum_squares.to_string()
+                )?;
                 writer.write(buf.as_bytes())?;
                 buf.clear();
             }

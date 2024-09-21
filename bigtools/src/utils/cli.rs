@@ -29,6 +29,11 @@ pub struct BBIWriteArgs {
     #[arg(default_value_t = 10)]
     pub nzooms: u32,
 
+    /// Set the zoom resolutions to use (overrides the --nzooms argument).
+    #[arg(long)]
+    #[arg(value_delimiter = ',', num_args = 1..)]
+    pub zooms: Option<Vec<u32>>,
+
     /// Don't use compression.
     #[arg(short = 'u', long)]
     #[arg(default_value_t = false)]
