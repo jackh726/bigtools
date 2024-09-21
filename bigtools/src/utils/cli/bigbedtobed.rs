@@ -51,6 +51,11 @@ pub struct BigBedToBedArgs {
     #[arg(long)]
     #[arg(default_value_t = false)]
     pub inmemory: bool,
+
+    /// If set, outputs the values for a given zoom level. The format will be
+    /// <chrom> <zoom_start>    <zoom_end>  <total_items> <bases_covered>   <min_val>   <max_val>   <sum>   <sum_squares>
+    #[arg(long)]
+    pub zoom: Option<u32>,
 }
 
 pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
@@ -84,8 +89,8 @@ pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
         None => {
             // Right now, we don't offload decompression to separate threads,
             // so specifying `chrom` effectively means single-threaded
-            if nthreads == 1 || args.chrom.is_some() {
-                write_bed_singlethreaded(bigbed, bed, args.chrom, args.start, args.end)?;
+            if nthreads == 1 || args.chrom.is_some() || args.zoom.is_some() {
+                write_bed_singlethreaded(bigbed, bed, args.chrom, args.start, args.end, args.zoom)?;
             } else {
                 write_bed(bigbed, bed, args.inmemory, nthreads)?;
             }
@@ -101,7 +106,8 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     chrom: Option<String>,
     start: Option<u32>,
     end: Option<u32>,
-) -> Result<(), BBIReadError> {
+    zoom: Option<u32>,
+) -> Result<(), Box<dyn Error>> {
     let start = chrom.as_ref().and_then(|_| start);
     let end = chrom.as_ref().and_then(|_| end);
 
@@ -117,26 +123,40 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     };
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     let mut buf: String = String::with_capacity(50); // Estimate
-    for chrom in chroms {
-        let start = start.unwrap_or(0);
-        let end = end.unwrap_or(chrom.length);
-        for raw_val in bigbed.get_interval(&chrom.name, start, end)? {
-            let val = raw_val?;
-            if !val.rest.is_empty() {
-                uwrite!(
-                    &mut buf,
-                    "{}\t{}\t{}\t{}\n",
-                    chrom.name,
-                    val.start,
-                    val.end,
-                    val.rest
-                )
-                .unwrap();
-            } else {
-                uwrite!(&mut buf, "{}\t{}\t{}\n", chrom.name, val.start, val.end).unwrap();
-            };
-            writer.write(buf.as_bytes())?;
-            buf.clear();
+    dbg!(&bigbed.info().zoom_headers);
+    if let Some(zoom) = zoom {
+        for chrom in chroms {
+            let start = start.unwrap_or(0);
+            let end = end.unwrap_or(chrom.length);
+            for raw_val in bigbed.get_zoom_interval(&chrom.name, start, end, zoom).unwrap() {
+                let val = raw_val?;
+                uwrite!(&mut buf, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", chrom.name, val.start, val.end, val.summary.total_items, val.summary.bases_covered, val.summary.min_val.to_string(), val.summary.max_val.to_string(), val.summary.sum.to_string(), val.summary.sum_squares.to_string())?;
+                writer.write(buf.as_bytes())?;
+                buf.clear();
+            }
+        }
+    } else {
+        for chrom in chroms {
+            let start = start.unwrap_or(0);
+            let end = end.unwrap_or(chrom.length);
+            for raw_val in bigbed.get_interval(&chrom.name, start, end)? {
+                let val = raw_val?;
+                if !val.rest.is_empty() {
+                    uwrite!(
+                        &mut buf,
+                        "{}\t{}\t{}\t{}\n",
+                        chrom.name,
+                        val.start,
+                        val.end,
+                        val.rest
+                    )
+                    .unwrap();
+                } else {
+                    uwrite!(&mut buf, "{}\t{}\t{}\n", chrom.name, val.start, val.end).unwrap();
+                };
+                writer.write(buf.as_bytes())?;
+                buf.clear();
+            }
         }
     }
     Ok(())
