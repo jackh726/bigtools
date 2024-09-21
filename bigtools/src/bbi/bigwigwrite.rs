@@ -126,7 +126,6 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         vals: V,
         runtime: Runtime,
     ) -> Result<(), BBIProcessError<V::Error>> {
-        let options = self.options;
         let mut file = BufWriter::new(self.out);
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
@@ -134,7 +133,7 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         let output = bbiwrite::write_vals::<_, _, BigWigFullProcess>(
             vals,
             file,
-            options,
+            &self.options,
             runtime,
             &self.chrom_sizes,
         )?;
@@ -155,10 +154,10 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
         write_info(
@@ -198,7 +197,7 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         let output = bbiwrite::write_vals_no_zoom::<_, _, BigWigNoZoomsProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             &runtime,
             &self.chrom_sizes,
         );
@@ -212,14 +211,14 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
         let vals = make_vals()?;
 
         let output = bbiwrite::write_zoom_vals::<_, _, BigWigZoomsProcess<W>>(
             vals,
-            self.options,
+            &self.options,
             &runtime,
             &chrom_ids,
             (summary.bases_covered as f64 / summary.total_items as f64) as u32,
@@ -259,7 +258,8 @@ async fn process_val(
     chrom: &String,
     summary: &mut Summary,
     items: &mut Vec<Value>,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: &Handle,
     ftx: &mut BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
@@ -307,10 +307,10 @@ async fn process_val(
 
     // Then, add the current item to the actual values, and encode if full, or last item
     items.push(current_val);
-    if next_val.is_none() || items.len() >= options.items_per_slot as usize {
-        let items = std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
+    if next_val.is_none() || items.len() >= items_per_slot as usize {
+        let items = std::mem::replace(items, Vec::with_capacity(items_per_slot as usize));
         let handle: tokio::task::JoinHandle<io::Result<(SectionData, usize)>> =
-            runtime.spawn(encode_section(options.compress, items, chrom_id));
+            runtime.spawn(encode_section(compress, items, chrom_id));
         ftx.send(handle).await.expect("Couldn't send");
     }
 
@@ -319,7 +319,8 @@ async fn process_val(
 
 async fn process_val_zoom(
     zoom_items: &mut Vec<ZoomItem>,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     current_val: Value,
     next_val: Option<&Value>,
     runtime: &Handle,
@@ -327,7 +328,7 @@ async fn process_val_zoom(
 ) {
     // Then, add the item to the zoom item queues. This is a bit complicated.
     for zoom_item in zoom_items.iter_mut() {
-        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+        debug_assert_ne!(zoom_item.records.len(), items_per_slot as usize);
 
         // Zooms are comprised of a tiled set of summaries. Each summary spans a fixed length.
         // Zoom summaries are compressed similarly to main data, with a given items per slot.
@@ -341,10 +342,10 @@ async fn process_val_zoom(
                 && zoom_item.live_info.is_none()
                 && next_val.is_none()
                 && !zoom_item.records.is_empty())
-                || zoom_item.records.len() == options.items_per_slot as usize
+                || zoom_item.records.len() == items_per_slot as usize
             {
                 let items = std::mem::take(&mut zoom_item.records);
-                let handle = runtime.spawn(encode_zoom_section(options.compress, items));
+                let handle = runtime.spawn(encode_zoom_section(compress, items));
                 zoom_item.channel.send(handle).await.expect("Couln't send");
             }
             if add_start >= current_val.end {
@@ -393,7 +394,7 @@ async fn process_val_zoom(
             // Set where we would start for next time
             add_start = add_end;
         }
-        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+        debug_assert_ne!(zoom_item.records.len(), items_per_slot as usize);
     }
 }
 
@@ -412,7 +413,8 @@ pub(crate) struct BigWigFullProcess {
 
     ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
     chrom: String,
     length: u32,
@@ -422,8 +424,16 @@ impl BBIDataProcessorCreate for BigWigFullProcess {
     type I = InternalProcessData;
     type Out = BBIDataProcessoredData;
     fn create(internal_data: InternalProcessData) -> Self {
-        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
-            internal_data;
+        let InternalProcessData(
+            zooms_channels,
+            ftx,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+            chrom,
+            length,
+        ) = internal_data;
 
         let summary = Summary {
             total_items: 0,
@@ -434,13 +444,13 @@ impl BBIDataProcessorCreate for BigWigFullProcess {
             sum_squares: 0.0,
         };
 
-        let items = Vec::with_capacity(options.items_per_slot as usize);
+        let items = Vec::with_capacity(items_per_slot as usize);
         let zoom_items: Vec<ZoomItem> = zooms_channels
             .into_iter()
             .map(|(size, channel)| ZoomItem {
                 size,
                 live_info: None,
-                records: Vec::with_capacity(options.items_per_slot as usize),
+                records: Vec::with_capacity(items_per_slot as usize),
                 channel,
             })
             .collect();
@@ -451,7 +461,8 @@ impl BBIDataProcessorCreate for BigWigFullProcess {
             zoom_items,
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -492,13 +503,13 @@ impl BBIDataProcessor for BigWigFullProcess {
             zoom_items,
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
         } = self;
         let chrom_id = *chrom_id;
-        let options = *options;
         let length = *length;
 
         process_val(
@@ -508,7 +519,8 @@ impl BBIDataProcessor for BigWigFullProcess {
             &chrom,
             summary,
             items,
-            options,
+            *compress,
+            *items_per_slot,
             &runtime,
             ftx,
             chrom_id,
@@ -517,7 +529,8 @@ impl BBIDataProcessor for BigWigFullProcess {
 
         process_val_zoom(
             zoom_items,
-            options,
+            *compress,
+            *items_per_slot,
             current_val,
             next_val,
             &runtime,
@@ -538,7 +551,8 @@ struct ZoomCounts {
 struct BigWigNoZoomsProcess {
     ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
     chrom: String,
     length: u32,
@@ -552,8 +566,15 @@ impl BBIDataProcessorCreate for BigWigNoZoomsProcess {
     type I = NoZoomsInternalProcessData;
     type Out = NoZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
-        let NoZoomsInternalProcessData(ftx, chrom_id, options, runtime, chrom, length) =
-            internal_data;
+        let NoZoomsInternalProcessData(
+            ftx,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+            chrom,
+            length,
+        ) = internal_data;
 
         let summary = Summary {
             total_items: 0,
@@ -564,7 +585,7 @@ impl BBIDataProcessorCreate for BigWigNoZoomsProcess {
             sum_squares: 0.0,
         };
 
-        let items: Vec<Value> = Vec::with_capacity(options.items_per_slot as usize);
+        let items: Vec<Value> = Vec::with_capacity(items_per_slot as usize);
         let zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
             .take_while(|z| *z <= u64::MAX / 4 && *z <= length as u64 * 4)
             .map(|z| ZoomCounts {
@@ -577,7 +598,8 @@ impl BBIDataProcessorCreate for BigWigNoZoomsProcess {
         BigWigNoZoomsProcess {
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -620,7 +642,8 @@ impl BBIDataProcessor for BigWigNoZoomsProcess {
         let BigWigNoZoomsProcess {
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -636,7 +659,8 @@ impl BBIDataProcessor for BigWigNoZoomsProcess {
             &chrom,
             summary,
             items,
-            *options,
+            *compress,
+            *items_per_slot,
             &runtime,
             ftx,
             *chrom_id,
@@ -661,7 +685,8 @@ impl BBIDataProcessor for BigWigNoZoomsProcess {
 struct BigWigZoomsProcess<W: Write + Seek + Send + 'static> {
     temp_zoom_items: Vec<InternalTempZoomInfo<W>>,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
 
     zoom_items: Vec<ZoomItem>,
@@ -671,15 +696,21 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigWigZoomsPro
     type I = ZoomsInternalProcessData<W>;
     type Out = ZoomsInternalProcessedData<W>;
     fn create(internal_data: Self::I) -> Self {
-        let ZoomsInternalProcessData(temp_zoom_items, zooms_channels, chrom_id, options, runtime) =
-            internal_data;
+        let ZoomsInternalProcessData(
+            temp_zoom_items,
+            zooms_channels,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+        ) = internal_data;
 
         let zoom_items: Vec<ZoomItem> = zooms_channels
             .into_iter()
             .map(|(size, channel)| ZoomItem {
                 size,
                 live_info: None,
-                records: Vec::with_capacity(options.items_per_slot as usize),
+                records: Vec::with_capacity(items_per_slot as usize),
                 channel,
             })
             .collect();
@@ -687,7 +718,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigWigZoomsPro
         BigWigZoomsProcess {
             temp_zoom_items,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             zoom_items,
         }
@@ -712,7 +744,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigWigZoomsProcess<W
     ) -> Result<(), ProcessDataError> {
         let BigWigZoomsProcess {
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             zoom_items,
             ..
@@ -720,7 +753,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigWigZoomsProcess<W
 
         process_val_zoom(
             zoom_items,
-            *options,
+            *compress,
+            *items_per_slot,
             current_val,
             next_val,
             &runtime,

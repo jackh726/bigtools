@@ -106,7 +106,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
         let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             runtime,
             &self.chrom_sizes,
         );
@@ -120,10 +120,10 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
         write_info(
@@ -166,7 +166,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
         let output = bbiwrite::write_vals_no_zoom::<_, _, BigBedNoZoomsProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             &runtime,
             &self.chrom_sizes,
         );
@@ -180,14 +180,14 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
         let vals = make_vals()?;
 
         let output = bbiwrite::write_zoom_vals::<_, _, BigBedZoomsProcess<W>>(
             vals,
-            self.options,
+            &self.options,
             &runtime,
             &chrom_ids,
             (summary.bases_covered as f64 / summary.total_items as f64) as u32,
@@ -229,7 +229,8 @@ async fn process_val(
     summary: &mut Option<Summary>,
     items: &mut Vec<BedEntry>,
     overlap: &mut IndexList<Value>,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: &Handle,
     ftx: &mut BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
@@ -370,9 +371,9 @@ async fn process_val(
 
     // Then, add the current item to the actual values, and encode if full, or last item
     items.push(current_val);
-    if next_val.is_none() || items.len() >= options.items_per_slot as usize {
-        let items = std::mem::replace(items, Vec::with_capacity(options.items_per_slot as usize));
-        let handle = runtime.spawn(encode_section(options.compress, items, chrom_id));
+    if next_val.is_none() || items.len() >= items_per_slot as usize {
+        let items = std::mem::replace(items, Vec::with_capacity(items_per_slot as usize));
+        let handle = runtime.spawn(encode_section(compress, items, chrom_id));
         ftx.send(handle).await.expect("Couldn't send");
     }
 
@@ -381,7 +382,8 @@ async fn process_val(
 
 async fn process_val_zoom(
     zoom_items: &mut Vec<ZoomItem>,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     item_start: u32,
     item_end: u32,
     next_val: Option<&BedEntry>,
@@ -390,7 +392,7 @@ async fn process_val_zoom(
 ) -> Result<(), ProcessDataError> {
     // Then, add the item to the zoom item queues. This is a bit complicated.
     for zoom_item in zoom_items.iter_mut() {
-        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+        debug_assert_ne!(zoom_item.records.len(), items_per_slot as usize);
 
         let overlap = &mut zoom_item.overlap;
 
@@ -459,8 +461,7 @@ async fn process_val_zoom(
                         }
                         if !zoom_item.records.is_empty() {
                             let items = std::mem::take(&mut zoom_item.records);
-                            let handle =
-                                runtime.spawn(encode_zoom_section(options.compress, items));
+                            let handle = runtime.spawn(encode_zoom_section(compress, items));
                             zoom_item.channel.send(handle).await.expect("Couln't send");
                         }
                     }
@@ -514,15 +515,15 @@ async fn process_val_zoom(
                 // Set where we would start for next time
                 add_start = std::cmp::max(add_end, removed_start);
                 // Write section if full
-                if zoom_item.records.len() == options.items_per_slot as usize {
+                if zoom_item.records.len() == items_per_slot as usize {
                     let items = std::mem::take(&mut zoom_item.records);
-                    let handle = runtime.spawn(encode_zoom_section(options.compress, items));
+                    let handle = runtime.spawn(encode_zoom_section(compress, items));
                     zoom_item.channel.send(handle).await.expect("Couln't send");
                 }
             }
         }
 
-        debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
+        debug_assert_ne!(zoom_item.records.len(), items_per_slot as usize);
     }
 
     Ok(())
@@ -549,7 +550,8 @@ pub(crate) struct BigBedFullProcess {
 
     ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
     chrom: String,
     length: u32,
@@ -587,8 +589,16 @@ impl BBIDataProcessorCreate for BigBedFullProcess {
         BBIDataProcessoredData(summary_complete)
     }
     fn create(internal_data: InternalProcessData) -> Self {
-        let InternalProcessData(zooms_channels, ftx, chrom_id, options, runtime, chrom, length) =
-            internal_data;
+        let InternalProcessData(
+            zooms_channels,
+            ftx,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+            chrom,
+            length,
+        ) = internal_data;
 
         let summary: Option<Summary> = None;
 
@@ -598,13 +608,13 @@ impl BBIDataProcessorCreate for BigBedFullProcess {
                 size,
                 live_info: None,
                 overlap: IndexList::new(),
-                records: Vec::with_capacity(options.items_per_slot as usize),
+                records: Vec::with_capacity(items_per_slot as usize),
                 channel,
             })
             .collect();
         let state_val = EntriesSection {
             zoom_items,
-            items: Vec::with_capacity(options.items_per_slot as usize),
+            items: Vec::with_capacity(items_per_slot as usize),
             overlap: IndexList::new(),
         };
         let total_items = 0;
@@ -614,7 +624,8 @@ impl BBIDataProcessorCreate for BigBedFullProcess {
             total_items,
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -634,7 +645,8 @@ impl BBIDataProcessor for BigBedFullProcess {
             state_val,
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -655,7 +667,8 @@ impl BBIDataProcessor for BigBedFullProcess {
             summary,
             &mut state_val.items,
             &mut state_val.overlap,
-            *options,
+            *compress,
+            *items_per_slot,
             &runtime,
             ftx,
             chrom_id,
@@ -664,7 +677,8 @@ impl BBIDataProcessor for BigBedFullProcess {
 
         process_val_zoom(
             &mut state_val.zoom_items,
-            *options,
+            *compress,
+            *items_per_slot,
             item_start,
             item_end,
             next_val,
@@ -686,7 +700,8 @@ struct ZoomCounts {
 struct BigBedNoZoomsProcess {
     ftx: BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
     chrom: String,
     length: u32,
@@ -702,12 +717,19 @@ impl BBIDataProcessorCreate for BigBedNoZoomsProcess {
     type I = NoZoomsInternalProcessData;
     type Out = NoZoomsInternalProcessedData;
     fn create(internal_data: Self::I) -> Self {
-        let NoZoomsInternalProcessData(ftx, chrom_id, options, runtime, chrom, length) =
-            internal_data;
+        let NoZoomsInternalProcessData(
+            ftx,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+            chrom,
+            length,
+        ) = internal_data;
 
         let summary = None;
 
-        let items: Vec<BedEntry> = Vec::with_capacity(options.items_per_slot as usize);
+        let items: Vec<BedEntry> = Vec::with_capacity(items_per_slot as usize);
         let zoom_counts: Vec<ZoomCounts> = std::iter::successors(Some(10), |z| Some(z * 4))
             .take_while(|z| *z <= u64::MAX / 4 && *z <= length as u64 * 4)
             .map(|z| ZoomCounts {
@@ -720,7 +742,8 @@ impl BBIDataProcessorCreate for BigBedNoZoomsProcess {
         BigBedNoZoomsProcess {
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -771,7 +794,8 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
         let BigBedNoZoomsProcess {
             ftx,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             chrom,
             length,
@@ -795,7 +819,8 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
             summary,
             items,
             overlap,
-            *options,
+            *compress,
+            *items_per_slot,
             &runtime,
             ftx,
             *chrom_id,
@@ -820,7 +845,8 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
 struct BigBedZoomsProcess<W: Write + Seek + Send + 'static> {
     temp_zoom_items: Vec<InternalTempZoomInfo<W>>,
     chrom_id: u32,
-    options: BBIWriteOptions,
+    compress: bool,
+    items_per_slot: u32,
     runtime: Handle,
 
     zoom_items: Vec<ZoomItem>,
@@ -830,8 +856,14 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigBedZoomsPro
     type I = ZoomsInternalProcessData<W>;
     type Out = ZoomsInternalProcessedData<W>;
     fn create(internal_data: Self::I) -> Self {
-        let ZoomsInternalProcessData(temp_zoom_items, zooms_channels, chrom_id, options, runtime) =
-            internal_data;
+        let ZoomsInternalProcessData(
+            temp_zoom_items,
+            zooms_channels,
+            chrom_id,
+            compress,
+            items_per_slot,
+            runtime,
+        ) = internal_data;
 
         let zoom_items: Vec<ZoomItem> = zooms_channels
             .into_iter()
@@ -839,7 +871,7 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigBedZoomsPro
                 size,
                 live_info: None,
                 overlap: IndexList::new(),
-                records: Vec::with_capacity(options.items_per_slot as usize),
+                records: Vec::with_capacity(items_per_slot as usize),
                 channel,
             })
             .collect();
@@ -847,7 +879,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessorCreate for BigBedZoomsPro
         BigBedZoomsProcess {
             temp_zoom_items,
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             zoom_items,
         }
@@ -872,7 +905,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigBedZoomsProcess<W
     ) -> Result<(), ProcessDataError> {
         let BigBedZoomsProcess {
             chrom_id,
-            options,
+            compress,
+            items_per_slot,
             runtime,
             zoom_items,
             ..
@@ -880,7 +914,8 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigBedZoomsProcess<W
 
         process_val_zoom(
             zoom_items,
-            *options,
+            *compress,
+            *items_per_slot,
             current_val.start,
             current_val.end,
             next_val,

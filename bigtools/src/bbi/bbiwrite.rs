@@ -78,7 +78,7 @@ pub const DEFAULT_BLOCK_SIZE: u32 = 256;
 pub const DEFAULT_ITEMS_PER_SLOT: u32 = 1024;
 
 /// Options for writing to a bbi file
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
     pub items_per_slot: u32,
@@ -299,16 +299,13 @@ pub(crate) async fn encode_zoom_section(
 }
 
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
-pub(crate) fn get_rtreeindex<S>(
-    sections_stream: S,
-    options: BBIWriteOptions,
-) -> (RTreeChildren, usize, u64)
+pub(crate) fn get_rtreeindex<S>(sections_stream: S, block_size: u32) -> (RTreeChildren, usize, u64)
 where
     S: Iterator<Item = Section>,
 {
     use itertools::Itertools;
 
-    let block_size = options.block_size as usize;
+    let block_size: usize = block_size as usize;
     let mut total_sections = 0;
 
     let chunks = sections_stream
@@ -384,12 +381,10 @@ fn write_tree<W: Write>(
     curr_level: usize,
     dest_level: usize,
     childnode_offset: u64,
-    options: BBIWriteOptions,
+    block_size: u64,
 ) -> io::Result<u64> {
-    let non_leafnode_full_block_size: u64 =
-        NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
-    let leafnode_full_block_size: u64 =
-        NODEHEADER_SIZE + LEAFNODE_SIZE * u64::from(options.block_size);
+    let non_leafnode_full_block_size: u64 = NODEHEADER_SIZE + NON_LEAFNODE_SIZE * block_size;
+    let leafnode_full_block_size: u64 = NODEHEADER_SIZE + LEAFNODE_SIZE * block_size;
     debug_assert!(curr_level >= dest_level);
     if curr_level != dest_level {
         let mut next_offset_offset = 0;
@@ -405,7 +400,7 @@ fn write_tree<W: Write>(
                         curr_level - 1,
                         dest_level,
                         childnode_offset + next_offset_offset,
-                        options,
+                        block_size,
                     )?;
                     next_offset_offset += size;
                 }
@@ -456,7 +451,8 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
     nodes: RTreeChildren,
     levels: usize,
     section_count: u64,
-    options: BBIWriteOptions,
+    items_per_slot: u32,
+    block_size: u32,
 ) -> io::Result<()> {
     let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
@@ -464,7 +460,7 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
 
     let end_of_data = file.tell()?;
     file.write_u32::<NativeEndian>(CIR_TREE_MAGIC)?;
-    file.write_u32::<NativeEndian>(options.block_size)?;
+    file.write_u32::<NativeEndian>(block_size)?;
     file.write_u64::<NativeEndian>(section_count)?;
     match &nodes {
         RTreeChildren::DataSections(sections) => {
@@ -481,7 +477,7 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
         }
     }
     file.write_u64::<NativeEndian>(end_of_data)?;
-    file.write_u32::<NativeEndian>(options.items_per_slot)?;
+    file.write_u32::<NativeEndian>(items_per_slot)?;
     file.write_u32::<NativeEndian>(0)?;
 
     let mut next_offset = file.tell()?;
@@ -489,7 +485,7 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
         if level > 0 {
             next_offset += index_offsets[level - 1];
         }
-        write_tree(file, &nodes, levels, level, next_offset, options)?;
+        write_tree(file, &nodes, levels, level, next_offset, block_size.into())?;
     }
 
     Ok(())
@@ -499,7 +495,7 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
     mut file: &mut BufWriter<W>,
     zooms: Vec<ZoomInfo>,
     data_size: u64,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> io::Result<Vec<ZoomHeader>> {
     let mut zoom_entries: Vec<ZoomHeader> = vec![];
     let mut zoom_count = 0;
@@ -520,7 +516,7 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
             section
         });
 
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options.block_size);
         if last_zoom_section_count <= total_sections {
             continue;
         }
@@ -530,7 +526,14 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
         let zoom_index_offset = file.tell()?;
         //println!("Zoom {:?}, data: {:?}, offset {:?}", zoom.resolution, zoom_data_offset, zoom_index_offset);
         assert_eq!(zoom_index_offset - zoom_data_offset, zoom_size);
-        write_rtreeindex(file, nodes, levels, total_sections, options)?;
+        write_rtreeindex(
+            file,
+            nodes,
+            levels,
+            total_sections,
+            options.items_per_slot,
+            options.block_size,
+        )?;
 
         zoom_entries.push(ZoomHeader {
             reduction_level: zoom.resolution,
@@ -690,7 +693,8 @@ pub(crate) struct InternalProcessData(
     pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) BBIDataProcessoringInputSectionChannel,
     pub(crate) u32,
-    pub(crate) BBIWriteOptions,
+    pub(crate) bool,
+    pub(crate) u32,
     pub(crate) Handle,
     pub(crate) String,
     pub(crate) u32,
@@ -737,7 +741,7 @@ pub(crate) fn write_vals<
 >(
     mut vals_iter: V,
     file: BufWriter<W>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: Runtime,
     chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
@@ -777,7 +781,7 @@ pub(crate) fn write_vals<
             tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
             Vec<TempZoomInfo>,
         )>,
-        options: BBIWriteOptions,
+        options: &BBIWriteOptions,
         runtime: &Runtime,
     ) -> (
         Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
@@ -832,7 +836,8 @@ pub(crate) fn write_vals<
             zooms_channels,
             ftx,
             chrom_id,
-            options,
+            options.compress,
+            options.items_per_slot,
             runtime.handle().clone(),
             chrom,
             length,
@@ -898,7 +903,8 @@ pub(crate) fn write_vals<
 pub(crate) struct NoZoomsInternalProcessData(
     pub(crate) BBIDataProcessoringInputSectionChannel,
     pub(crate) u32,
-    pub(crate) BBIWriteOptions,
+    pub(crate) bool,
+    pub(crate) u32,
     pub(crate) Handle,
     pub(crate) String,
     pub(crate) u32,
@@ -917,7 +923,7 @@ pub(crate) fn write_vals_no_zoom<
 >(
     mut vals_iter: V,
     file: BufWriter<W>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: &Runtime,
     chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
@@ -970,7 +976,8 @@ pub(crate) fn write_vals_no_zoom<
         let internal_data = NoZoomsInternalProcessData(
             ftx,
             chrom_id,
-            options,
+            options.compress,
+            options.items_per_slot,
             runtime.handle().clone(),
             chrom,
             length,
@@ -1047,7 +1054,8 @@ pub(crate) struct ZoomsInternalProcessData<W: Write + Seek + Send + 'static>(
     pub(crate) Vec<InternalTempZoomInfo<W>>,
     pub(crate) Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
     pub(crate) u32,
-    pub(crate) BBIWriteOptions,
+    pub(crate) bool,
+    pub(crate) u32,
     pub(crate) Handle,
 );
 pub(crate) struct ZoomsInternalProcessedData<W: Write + Seek + Send + 'static>(
@@ -1065,7 +1073,7 @@ pub(crate) fn write_zoom_vals<
         + 'static,
 >(
     mut vals_iter: V,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: &Runtime,
     chrom_ids: &HashMap<String, u32>,
     average_size: u32,
@@ -1135,7 +1143,8 @@ pub(crate) fn write_zoom_vals<
             zoom_infos,
             zooms_channels,
             chrom_id,
-            options,
+            options.compress,
+            options.items_per_slot,
             runtime.handle().clone(),
         );
         Ok(P::create(internal_data))
@@ -1213,9 +1222,16 @@ pub(crate) fn write_zoom_vals<
     });
     file = first_data.1.await_real_file();
     // Generate the rtree index
-    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options.block_size);
     let first_zoom_index_offset = file.tell()?;
-    write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+    write_rtreeindex(
+        &mut file,
+        nodes,
+        levels,
+        total_sections,
+        options.items_per_slot,
+        options.block_size,
+    )?;
     zoom_entries.push(ZoomHeader {
         reduction_level: first_data.0,
         data_offset: first_zoom_data_offset,
@@ -1240,9 +1256,16 @@ pub(crate) fn write_zoom_vals<
         // Subsequence zooms have not switched to real file
         data.1.expect_closed_write(&mut file)?;
         // Generate the rtree index
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options.block_size);
         let zoom_index_offset = file.tell()?;
-        write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+        write_rtreeindex(
+            &mut file,
+            nodes,
+            levels,
+            total_sections,
+            options.items_per_slot,
+            options.block_size,
+        )?;
         zoom_entries.push(ZoomHeader {
             reduction_level: data.0,
             data_offset: zoom_data_offset,
@@ -1260,7 +1283,7 @@ pub(crate) fn write_mid<W: Write + Seek + Send + 'static>(
     raw_sections_iter: impl Iterator<Item = Section>,
     chrom_sizes: HashMap<String, u32>,
     chrom_ids: &HashMap<String, u32>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> Result<(u64, u64, u64, u64), ProcessDataError> {
     let data_size = file.tell()? - pre_data;
     let mut current_offset = pre_data;
@@ -1288,8 +1311,15 @@ pub(crate) fn write_mid<W: Write + Seek + Send + 'static>(
     write_chrom_tree(file, chrom_sizes, &chrom_ids)?;
 
     let index_start = file.tell()?;
-    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
-    write_rtreeindex(file, nodes, levels, total_sections, options)?;
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options.block_size);
+    write_rtreeindex(
+        file,
+        nodes,
+        levels,
+        total_sections,
+        options.items_per_slot,
+        options.block_size,
+    )?;
 
     Ok((data_size, chrom_index_start, index_start, total_sections))
 }
@@ -1372,14 +1402,21 @@ mod tests {
                 size: 1,
             })
         });
-        let mut options = BBIWriteOptions::default();
+        let options = &mut BBIWriteOptions::default();
         options.block_size = 5;
-        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), options);
+        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), options.block_size);
 
         let mut data = Vec::<u8>::new();
         let mut cursor = Cursor::new(&mut data);
         let mut bufwriter = BufWriter::new(&mut cursor);
-        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, options)?;
+        write_rtreeindex(
+            &mut bufwriter,
+            tree,
+            levels,
+            total_sections,
+            options.items_per_slot,
+            options.block_size,
+        )?;
 
         drop(bufwriter);
         drop(cursor);
