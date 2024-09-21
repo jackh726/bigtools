@@ -119,7 +119,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
         let output = bbiwrite::write_vals::<_, _, BigBedFullProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             runtime,
             &self.chrom_sizes,
         );
@@ -133,10 +133,10 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
         write_info(
@@ -180,7 +180,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
         let output = bbiwrite::write_vals_no_zoom::<_, _, BigBedNoZoomsProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             &runtime,
             &self.chrom_sizes,
         );
@@ -194,7 +194,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
         let vals = make_vals()?;
@@ -244,7 +244,7 @@ async fn process_val(
     summary: &mut Option<Summary>,
     items: &mut Vec<BedEntry>,
     overlap: &mut IndexList<Value>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: &Handle,
     ftx: &mut BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
@@ -399,7 +399,7 @@ async fn process_val(
 
 async fn process_val_zoom(
     zoom_items: &mut Vec<ZoomItem>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     item_start: u32,
     item_end: u32,
     next_val: Option<&BedEntry>,
@@ -676,7 +676,7 @@ impl BBIDataProcessor for BigBedFullProcess {
             summary,
             &mut state_val.items,
             &mut state_val.overlap,
-            *options,
+            options,
             &runtime,
             ftx,
             chrom_id,
@@ -685,7 +685,7 @@ impl BBIDataProcessor for BigBedFullProcess {
 
         process_val_zoom(
             &mut state_val.zoom_items,
-            *options,
+            options,
             item_start,
             item_end,
             next_val,
@@ -816,7 +816,7 @@ impl BBIDataProcessor for BigBedNoZoomsProcess {
             summary,
             items,
             overlap,
-            *options,
+            options,
             &runtime,
             ftx,
             *chrom_id,
@@ -901,7 +901,7 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigBedZoomsProcess<W
 
         process_val_zoom(
             zoom_items,
-            *options,
+            options,
             current_val.start,
             current_val.end,
             next_val,

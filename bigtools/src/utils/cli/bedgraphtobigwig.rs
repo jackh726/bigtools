@@ -82,6 +82,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
 
     let mut outb = BigWigWrite::create_file(bigwigpath, chrom_map)?;
     outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.manual_zoom_sizes = args.write_args.zooms;
     outb.options.compress = !args.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
     outb.options.block_size = args.write_args.block_size;

@@ -78,13 +78,16 @@ pub const DEFAULT_BLOCK_SIZE: u32 = 256;
 pub const DEFAULT_ITEMS_PER_SLOT: u32 = 1024;
 
 /// Options for writing to a bbi file
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct BBIWriteOptions {
     pub compress: bool,
     pub items_per_slot: u32,
     pub block_size: u32,
+    /// The initial zoom size to use when writing in a single pass.
     pub initial_zoom_size: u32,
     pub max_zooms: u32,
+    /// The zooms sizes to use. Overrides both initial_zoom_size and max_zooms.
+    pub manual_zoom_sizes: Option<Vec<u32>>,
     pub input_sort_type: InputSortType,
     pub channel_size: usize,
     pub inmemory: bool,
@@ -98,6 +101,7 @@ impl Default for BBIWriteOptions {
             block_size: DEFAULT_BLOCK_SIZE,
             initial_zoom_size: 160,
             max_zooms: 10,
+            manual_zoom_sizes: None,
             input_sort_type: InputSortType::ALL,
             channel_size: 100,
             inmemory: false,
@@ -301,7 +305,7 @@ pub(crate) async fn encode_zoom_section(
 // TODO: it would be cool to output as an iterator so we don't have to store the index in memory
 pub(crate) fn get_rtreeindex<S>(
     sections_stream: S,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> (RTreeChildren, usize, u64)
 where
     S: Iterator<Item = Section>,
@@ -384,7 +388,7 @@ fn write_tree<W: Write>(
     curr_level: usize,
     dest_level: usize,
     childnode_offset: u64,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> io::Result<u64> {
     let non_leafnode_full_block_size: u64 =
         NODEHEADER_SIZE + NON_LEAFNODE_SIZE * u64::from(options.block_size);
@@ -456,7 +460,7 @@ pub(crate) fn write_rtreeindex<W: Write + Seek>(
     nodes: RTreeChildren,
     levels: usize,
     section_count: u64,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> io::Result<()> {
     let mut index_offsets: Vec<u64> = vec![0u64; levels as usize];
 
@@ -499,15 +503,16 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
     mut file: &mut BufWriter<W>,
     zooms: Vec<ZoomInfo>,
     data_size: u64,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> io::Result<Vec<ZoomHeader>> {
-    let mut zoom_entries: Vec<ZoomHeader> = vec![];
+    let mut zoom_entries: Vec<ZoomHeader> = Vec::with_capacity(zooms.len());
     let mut zoom_count = 0;
     let mut last_zoom_section_count = u64::max_value();
+    let check_zoom = options.manual_zoom_sizes.is_none();
     for zoom in zooms {
         let zoom_file = zoom.data;
         let zoom_size = zoom_file.len()?;
-        if zoom_size > (data_size / 2) {
+        if check_zoom && zoom_size > (data_size / 2) {
             continue;
         }
         let zoom_data_offset = file.tell()?;
@@ -521,7 +526,7 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
         });
 
         let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
-        if last_zoom_section_count <= total_sections {
+        if check_zoom && last_zoom_section_count <= total_sections {
             continue;
         }
         last_zoom_section_count = total_sections;
@@ -540,7 +545,7 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
         });
 
         zoom_count += 1;
-        if zoom_count >= options.max_zooms {
+        if check_zoom && zoom_count >= options.max_zooms {
             break;
         }
     }
@@ -737,7 +742,7 @@ pub(crate) fn write_vals<
 >(
     mut vals_iter: V,
     file: BufWriter<W>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: Runtime,
     chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
@@ -751,17 +756,20 @@ pub(crate) fn write_vals<
     ),
     BBIProcessError<V::Error>,
 > {
-    let zooms_map: BTreeMap<u32, ZoomValue> =
-        std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
+    let make_zoom = |size| {
+        let section_iter = vec![];
+        let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
+            TempFileBuffer::new(options.inmemory);
+        let value = (section_iter, buf, Some(write));
+        (size, value)
+    };
+    let zoom_sizes: Vec<u32> = match &options.manual_zoom_sizes {
+        Some(zooms) => zooms.clone(),
+        None => std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
-            .map(|size| {
-                let section_iter = vec![];
-                let (buf, write): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
-                    TempFileBuffer::new(options.inmemory);
-                let value = (section_iter, buf, Some(write));
-                (size, value)
-            })
-            .collect();
+            .collect(),
+    };
+    let zooms_map: BTreeMap<u32, ZoomValue> = zoom_sizes.iter().copied().map(make_zoom).collect();
 
     let mut chrom_ids = IdMap::default();
 
@@ -777,8 +785,9 @@ pub(crate) fn write_vals<
             tokio::task::JoinHandle<Result<(usize, usize), ProcessDataError>>,
             Vec<TempZoomInfo>,
         )>,
-        options: BBIWriteOptions,
+        options: &BBIWriteOptions,
         runtime: &Runtime,
+        zoom_sizes: &Vec<u32>,
     ) -> (
         Vec<(u32, BBIDataProcessoringInputSectionChannel)>,
         BBIDataProcessoringInputSectionChannel,
@@ -787,23 +796,20 @@ pub(crate) fn write_vals<
             future_channel(options.channel_size, runtime.handle(), options.inmemory);
 
         let (zoom_infos, zooms_channels) = {
-            let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
-            let mut zooms_channels = Vec::with_capacity(options.max_zooms as usize);
+            let mut zoom_infos = Vec::with_capacity(zoom_sizes.len());
+            let mut zooms_channels = Vec::with_capacity(zoom_sizes.len());
 
-            let zoom_sizes =
-                std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
-                    .take(options.max_zooms as usize);
             for size in zoom_sizes {
                 let (ftx, data_write_future, buf, section_receiver) =
                     future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = TempZoomInfo {
-                    resolution: size,
+                    resolution: *size,
                     data_write_future,
                     data: buf,
                     sections: section_receiver,
                 };
                 zoom_infos.push(zoom_info);
-                zooms_channels.push((size, ftx));
+                zooms_channels.push((*size, ftx));
             }
             (zoom_infos, zooms_channels)
         };
@@ -826,13 +832,13 @@ pub(crate) fn write_vals<
         // Make a new id for the chromosome
         let chrom_id = chrom_ids.get_id(&chrom);
 
-        let (zooms_channels, ftx) = setup_chrom(&mut send, options, &runtime);
+        let (zooms_channels, ftx) = setup_chrom(&mut send, &options, &runtime, &zoom_sizes);
 
         let internal_data = crate::InternalProcessData(
             zooms_channels,
             ftx,
             chrom_id,
-            options,
+            options.clone(),
             runtime.handle().clone(),
             chrom,
             length,
@@ -917,7 +923,7 @@ pub(crate) fn write_vals_no_zoom<
 >(
     mut vals_iter: V,
     file: BufWriter<W>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: &Runtime,
     chrom_sizes: &HashMap<String, u32>,
 ) -> Result<
@@ -970,7 +976,7 @@ pub(crate) fn write_vals_no_zoom<
         let internal_data = NoZoomsInternalProcessData(
             ftx,
             chrom_id,
-            options,
+            options.clone(),
             runtime.handle().clone(),
             chrom,
             length,
@@ -1074,28 +1080,32 @@ pub(crate) fn write_zoom_vals<
     data_size: u64,
 ) -> Result<(BufWriter<W>, Vec<ZoomHeader>, usize), BBIProcessError<V::Error>> {
     let min_first_zoom_size = average_size.max(10) * 4;
-    let mut zoom_receivers = vec![];
-    let mut zoom_files = vec![];
-    let mut zooms_map: BTreeMap<u32, ZoomSender<W, ProcessDataError>> = zoom_counts
-        .into_iter()
-        .skip_while(|z| z.0 > min_first_zoom_size as u64)
-        .skip_while(|z| {
-            let mut reduced_size = z.1 * 32;
-            if options.compress {
-                reduced_size /= 2; // Estimate as kent does
-            }
-            reduced_size as u64 > data_size / 2
-        })
-        .take(options.max_zooms as usize)
-        .map(|size| {
-            let (buf, write) = TempFileBuffer::new(options.inmemory);
-            let (sender, receiver) = futures_mpsc::channel(chrom_ids.len());
-            zoom_receivers.push((size.0, receiver, write));
-            zoom_files.push((size.0 as u32, buf));
-            (size.0 as u32, sender)
-        })
-        .collect();
-    let resolutions: Vec<_> = zooms_map.keys().copied().collect();
+    let zooms: Vec<u32> = match &options.manual_zoom_sizes {
+        Some(zooms) => zooms.clone(),
+        None => zoom_counts
+            .into_iter()
+            .skip_while(|z| z.0 > min_first_zoom_size as u64)
+            .skip_while(|z| {
+                let mut reduced_size = z.1 * 32;
+                if options.compress {
+                    reduced_size /= 2; // Estimate as kent does
+                }
+                reduced_size as u64 > data_size / 2
+            })
+            .take(options.max_zooms as usize)
+            .map(|s| s.0 as u32)
+            .collect(),
+    };
+    let mut zoom_receivers = Vec::with_capacity(zooms.len());
+    let mut zoom_files = Vec::with_capacity(zooms.len());
+    let mut zooms_map: BTreeMap<u32, ZoomSender<_, _>> = BTreeMap::new();
+    for size in zooms.iter().copied() {
+        let (buf, write) = TempFileBuffer::new(options.inmemory);
+        let (sender, receiver) = futures_mpsc::channel(chrom_ids.len());
+        zoom_receivers.push((size, receiver, write));
+        zoom_files.push((size, buf));
+        zooms_map.insert(size, sender);
+    }
 
     let first_zoom_data_offset = file.tell()?;
     // We can immediately start to write to the file the first zoom
@@ -1113,10 +1123,10 @@ pub(crate) fn write_zoom_vals<
             .expect("Should not have seen a new chrom.");
 
         let (zoom_infos, zooms_channels) = {
-            let mut zoom_infos = Vec::with_capacity(options.max_zooms as usize);
-            let mut zooms_channels = Vec::with_capacity(options.max_zooms as usize);
+            let mut zoom_infos = Vec::with_capacity(zooms.len());
+            let mut zooms_channels = Vec::with_capacity(zooms.len());
 
-            for size in resolutions.iter().copied() {
+            for size in zooms.iter().copied() {
                 let (ftx, data_write_future, buf, section_receiver) =
                     future_channel(options.channel_size, runtime.handle(), options.inmemory);
                 let zoom_info = InternalTempZoomInfo {
@@ -1135,7 +1145,7 @@ pub(crate) fn write_zoom_vals<
             zoom_infos,
             zooms_channels,
             chrom_id,
-            options,
+            options.clone(),
             runtime.handle().clone(),
         );
         Ok(P::create(internal_data))
@@ -1213,9 +1223,9 @@ pub(crate) fn write_zoom_vals<
     });
     file = first_data.1.await_real_file();
     // Generate the rtree index
-    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, &options);
     let first_zoom_index_offset = file.tell()?;
-    write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+    write_rtreeindex(&mut file, nodes, levels, total_sections, &options)?;
     zoom_entries.push(ZoomHeader {
         reduction_level: first_data.0,
         data_offset: first_zoom_data_offset,
@@ -1240,9 +1250,9 @@ pub(crate) fn write_zoom_vals<
         // Subsequence zooms have not switched to real file
         data.1.expect_closed_write(&mut file)?;
         // Generate the rtree index
-        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
+        let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, &options);
         let zoom_index_offset = file.tell()?;
-        write_rtreeindex(&mut file, nodes, levels, total_sections, options)?;
+        write_rtreeindex(&mut file, nodes, levels, total_sections, &options)?;
         zoom_entries.push(ZoomHeader {
             reduction_level: data.0,
             data_offset: zoom_data_offset,
@@ -1260,7 +1270,7 @@ pub(crate) fn write_mid<W: Write + Seek + Send + 'static>(
     raw_sections_iter: impl Iterator<Item = Section>,
     chrom_sizes: HashMap<String, u32>,
     chrom_ids: &HashMap<String, u32>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
 ) -> Result<(u64, u64, u64, u64), ProcessDataError> {
     let data_size = file.tell()? - pre_data;
     let mut current_offset = pre_data;
@@ -1288,8 +1298,8 @@ pub(crate) fn write_mid<W: Write + Seek + Send + 'static>(
     write_chrom_tree(file, chrom_sizes, &chrom_ids)?;
 
     let index_start = file.tell()?;
-    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, options);
-    write_rtreeindex(file, nodes, levels, total_sections, options)?;
+    let (nodes, levels, total_sections) = get_rtreeindex(sections_iter, &options);
+    write_rtreeindex(file, nodes, levels, total_sections, &options)?;
 
     Ok((data_size, chrom_index_start, index_start, total_sections))
 }
@@ -1374,12 +1384,12 @@ mod tests {
         });
         let mut options = BBIWriteOptions::default();
         options.block_size = 5;
-        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), options);
+        let (tree, levels, total_sections) = get_rtreeindex(iter.take(126), &options);
 
         let mut data = Vec::<u8>::new();
         let mut cursor = Cursor::new(&mut data);
         let mut bufwriter = BufWriter::new(&mut cursor);
-        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, options)?;
+        write_rtreeindex(&mut bufwriter, tree, levels, total_sections, &options)?;
 
         drop(bufwriter);
         drop(cursor);
