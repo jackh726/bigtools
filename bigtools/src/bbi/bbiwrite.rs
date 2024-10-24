@@ -290,6 +290,7 @@ pub(crate) async fn encode_zoom_section(
     } else {
         (bytes, 0)
     };
+    dbg!(uncompressed_buf_size);
 
     Ok((
         SectionData {

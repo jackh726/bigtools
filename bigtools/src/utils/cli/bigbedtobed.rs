@@ -123,7 +123,6 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     };
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     let mut buf: String = String::with_capacity(50); // Estimate
-    dbg!(&bigbed.info().zoom_headers);
     if let Some(zoom) = zoom {
         for chrom in chroms {
             let start = start.unwrap_or(0);
