@@ -637,7 +637,6 @@ async fn write_chroms_with_zooms<W: Write + Seek + Send + 'static>(
         // All the futures are actually just handles, so these are purely for the result
         let (_num_sections, uncompressed_buf_size) = data_write_future.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-        dbg!(uncompressed_buf_size, max_uncompressed_buf_size);
         section_iter.push(sections.into_iter());
         file = data.await_real_file();
 
@@ -652,7 +651,6 @@ async fn write_chroms_with_zooms<W: Write + Seek + Send + 'static>(
             let data_write_data = data_write_future.await;
             let (_num_sections, uncompressed_buf_size) = data_write_data.unwrap()?;
             max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-            dbg!(uncompressed_buf_size, max_uncompressed_buf_size);
             zoom.0.push(sections.into_iter());
             zoom.2.replace(data.await_real_file());
         }
@@ -686,7 +684,6 @@ async fn write_chroms_without_zooms<W: Write + Seek + Send + 'static>(
         // All the futures are actually just handles, so these are purely for the result
         let (_num_sections, uncompressed_buf_size) = data_write_future.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-        dbg!(uncompressed_buf_size, max_uncompressed_buf_size);
         section_iter.push(sections.into_iter());
         file = data.await_real_file();
     }
@@ -1114,7 +1111,7 @@ pub(crate) fn write_zoom_vals<
     // We can immediately start to write to the file the first zoom
     match zoom_files.first_mut() {
         Some(first) => first.1.switch(file),
-        None => return Ok((file, vec![], dbg!(0))),
+        None => return Ok((file, vec![], 0)),
     }
 
     let mut max_uncompressed_buf_size = 0;
@@ -1187,11 +1184,9 @@ pub(crate) fn write_zoom_vals<
                 let (_num_sections, uncompressed_buf_size) = match data_write_data.unwrap() {
                     Ok(d) => d,
                     Err(e) => {
-                        dbg!(&e);
                         return Err(e);
                     }
                 };
-                dbg!(uncompressed_buf_size, max_uncompressed_buf_size);
                 max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
 
                 // Replace the zoom file again
@@ -1269,7 +1264,6 @@ pub(crate) fn write_zoom_vals<
         });
     }
 
-    dbg!(max_uncompressed_buf_size);
     Ok((file, zoom_entries, max_uncompressed_buf_size))
 }
 
@@ -1324,7 +1318,6 @@ async fn write_data<W: Write>(
     while let Some(section_raw) = frx.next().await {
         let (section, uncompressed_buf_size): (SectionData, usize) = section_raw.await.unwrap()?;
         max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompressed_buf_size);
-        dbg!(uncompressed_buf_size, max_uncompressed_buf_size);
         total += 1;
         let size = section.data.len() as u64;
         data_file.write_all(&section.data)?;

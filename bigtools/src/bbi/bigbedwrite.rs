@@ -210,7 +210,6 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             data_size,
         );
         let (mut file, zoom_entries, zoom_uncompress_buf_size) = output?;
-        dbg!(uncompress_buf_size, zoom_uncompress_buf_size);
         uncompress_buf_size = uncompress_buf_size.max(zoom_uncompress_buf_size);
         let num_zooms = zoom_entries.len() as u16;
 
