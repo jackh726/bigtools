@@ -119,11 +119,11 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
                 let infile = File::open(&bedpath)
                     .with_context(|| format!("Failed to open bed file `{}`", &bedpath))?;
                 let mut vals_iter = BedFileStream::from_bed_file(infile);
-                crate::bed::autosql::bed_autosql(&vals_iter.next().unwrap().unwrap().1.rest)
+                vals_iter.next().map(|v| crate::bed::autosql::bed_autosql(&v.unwrap().1.rest))
             }
-            Some(file) => std::fs::read_to_string(file)?,
+            Some(file) => Some(std::fs::read_to_string(file)?),
         };
-        outb.autosql = Some(autosql);
+        outb.autosql = autosql;
 
         let infile = File::open(&bedpath)
             .with_context(|| format!("Failed to open bed file `{}`.", &bedpath))?;
