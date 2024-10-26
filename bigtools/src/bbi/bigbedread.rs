@@ -211,7 +211,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         let header = self.info.header;
         let reader = self.reader().raw_reader();
         let mut reader = BufReader::new(reader);
-        reader.seek(SeekFrom::Start(header.full_index_offset))?;
+        reader.seek(SeekFrom::Start(header.full_data_offset))?;
         Ok(match header.endianness {
             byteordered::Endianness::Big => reader.read_u64::<BigEndian>()?,
             byteordered::Endianness::Little => reader.read_u64::<LittleEndian>()?,
