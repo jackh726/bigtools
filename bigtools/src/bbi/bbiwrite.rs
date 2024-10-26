@@ -769,6 +769,7 @@ pub(crate) fn write_vals<
             .take(options.max_zooms as usize)
             .collect(),
     };
+    let zoom_sizes: Vec<u32> = zoom_sizes.into_iter().filter(|z| *z != 0).collect();
     let zooms_map: BTreeMap<u32, ZoomValue> = zoom_sizes.iter().copied().map(make_zoom).collect();
 
     let mut chrom_ids = IdMap::default();
