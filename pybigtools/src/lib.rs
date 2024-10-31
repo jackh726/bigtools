@@ -2172,7 +2172,7 @@ impl BigBedWrite {
                                         .extract(py)
                                         .unwrap();
                                     let rest: String = tuple
-                                        .get_item(0)
+                                        .get_item(3)
                                         .unwrap()
                                         .downcast::<PyString>()?
                                         .to_str()
