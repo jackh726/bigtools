@@ -1173,6 +1173,7 @@ pub(crate) fn write_zoom_vals<
         let mut sections = vec![];
         let handle = runtime.spawn(async move {
             let (_, mut rcv, mut real_file) = rcv;
+            let mut max_uncompressed_buf_size = 0;
             while let Some(r) = rcv.next().await {
                 let (data_write_future, mut data, sections_rcv) = r;
 
@@ -1193,7 +1194,7 @@ pub(crate) fn write_zoom_vals<
 
                 sections.push(sections_rcv.into_iter());
             }
-            Ok((real_file, sections))
+            Ok((real_file, sections, max_uncompressed_buf_size))
         });
         zooms.push(handle);
     }
@@ -1213,6 +1214,7 @@ pub(crate) fn write_zoom_vals<
 
     // First, we can drop the writer - no more data
     drop(first_zoom.0);
+    max_uncompressed_buf_size = max_uncompressed_buf_size.max(first_zoom.2);
     let first_zoom_sections = first_zoom.1.into_iter().flatten();
     let mut current_offset = first_zoom_data_offset;
     let sections_iter = first_zoom_sections.map(|mut section| {
@@ -1235,7 +1237,8 @@ pub(crate) fn write_zoom_vals<
 
     while let Some(zoom) = zip.next() {
         let (zoom_fut, data) = zoom;
-        let (real_file, sections) = runtime.block_on(zoom_fut).unwrap()?;
+        let (real_file, sections, uncompress_buf_size) = runtime.block_on(zoom_fut).unwrap()?;
+        max_uncompressed_buf_size = max_uncompressed_buf_size.max(uncompress_buf_size);
         let zoom_data_offset = file.tell()?;
         // First, we can drop the writer - no more data
         drop(real_file);
