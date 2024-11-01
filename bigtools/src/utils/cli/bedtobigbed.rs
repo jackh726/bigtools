@@ -109,6 +109,9 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
     if bedpath == "-" || bedpath == "stdin" {
+        if let Some(file) = args.autosql.as_ref() {
+            outb.autosql = Some(std::fs::read_to_string(file)?);
+        }
         let stdin = std::io::stdin().lock();
         let data = BedParserStreamingIterator::from_bed_file(stdin, allow_out_of_order_chroms);
         outb.write(data, runtime)
