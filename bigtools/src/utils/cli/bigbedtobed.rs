@@ -114,7 +114,7 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     let chroms: Vec<ChromInfo> = if let Some(arg_chrom) = chrom {
         let chrom = bigbed.chroms().iter().find(|c| c.name == arg_chrom);
         let Some(chrom) = chrom else {
-            eprintln!("{arg_chrom} not found in file.");
+            eprintln!("Error: {arg_chrom} not found in file.");
             return Ok(());
         };
         vec![chrom.clone()]
@@ -124,13 +124,19 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
     let mut buf: String = String::with_capacity(50); // Estimate
     if let Some(zoom) = zoom {
+        if bigbed
+            .info()
+            .zoom_headers
+            .iter()
+            .all(|z| z.reduction_level != zoom)
+        {
+            eprintln!("Error: Zoom level not found: {zoom}");
+            return Ok(());
+        }
         for chrom in chroms {
             let start = start.unwrap_or(0);
             let end = end.unwrap_or(chrom.length);
-            for raw_val in bigbed
-                .get_zoom_interval(&chrom.name, start, end, zoom)
-                .unwrap()
-            {
+            for raw_val in bigbed.get_zoom_interval(&chrom.name, start, end, zoom)? {
                 let val = raw_val?;
                 uwrite!(
                     &mut buf,

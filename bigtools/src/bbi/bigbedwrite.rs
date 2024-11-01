@@ -439,17 +439,32 @@ async fn process_val_zoom(
             }
         }
 
+        // At this point, if there is are any items in the list, the end of the
+        // last item must overlap or come up to the current item start
         debug_assert!(overlap
             .get_last()
             .map(|o| o.end >= item_start)
             .unwrap_or(true));
 
-        if overlap.get_last().map(|o| o.end).unwrap_or(item_start) == item_start {
-            overlap.insert_last(Value {
-                start: item_start,
-                end: item_end,
-                value: 1.0,
-            });
+        // If the current item extends past the last item (or if there are no
+        // previous items), we must add one
+        match overlap.get_last() {
+            Some(o) => {
+                if o.end < item_end {
+                    overlap.insert_last(Value {
+                        start: o.end,
+                        end: item_end,
+                        value: 1.0,
+                    });
+                }
+            }
+            None => {
+                overlap.insert_last(Value {
+                    start: item_start,
+                    end: item_end,
+                    value: 1.0,
+                });
+            }
         }
 
         let next_start = next_val.map(|v| v.start).unwrap_or(u32::max_value());
