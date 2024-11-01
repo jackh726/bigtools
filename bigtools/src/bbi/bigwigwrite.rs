@@ -126,7 +126,6 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         vals: V,
         runtime: Runtime,
     ) -> Result<(), BBIProcessError<V::Error>> {
-        let options = self.options;
         let mut file = BufWriter::new(self.out);
 
         let (total_summary_offset, full_data_offset, pre_data) = BigWigWrite::write_pre(&mut file)?;
@@ -134,7 +133,7 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         let output = bbiwrite::write_vals::<_, _, BigWigFullProcess>(
             vals,
             file,
-            options,
+            &self.options,
             runtime,
             &self.chrom_sizes,
         )?;
@@ -155,10 +154,10 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
-        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, self.options)?;
+        let zoom_entries = write_zooms(&mut file, zoom_infos, data_size, &self.options)?;
         let num_zooms = zoom_entries.len() as u16;
 
         write_info(
@@ -198,7 +197,7 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
         let output = bbiwrite::write_vals_no_zoom::<_, _, BigWigNoZoomsProcess>(
             vals,
             file,
-            self.options,
+            &self.options,
             &runtime,
             &self.chrom_sizes,
         );
@@ -212,7 +211,7 @@ impl<W: Write + Seek + Send + 'static> BigWigWrite<W> {
             raw_sections_iter,
             self.chrom_sizes,
             &chrom_ids,
-            self.options,
+            &self.options,
         )?;
 
         let vals = make_vals()?;
@@ -259,7 +258,7 @@ async fn process_val(
     chrom: &String,
     summary: &mut Summary,
     items: &mut Vec<Value>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     runtime: &Handle,
     ftx: &mut BBIDataProcessoringInputSectionChannel,
     chrom_id: u32,
@@ -319,7 +318,7 @@ async fn process_val(
 
 async fn process_val_zoom(
     zoom_items: &mut Vec<ZoomItem>,
-    options: BBIWriteOptions,
+    options: &BBIWriteOptions,
     current_val: Value,
     next_val: Option<&Value>,
     runtime: &Handle,
@@ -498,7 +497,6 @@ impl BBIDataProcessor for BigWigFullProcess {
             length,
         } = self;
         let chrom_id = *chrom_id;
-        let options = *options;
         let length = *length;
 
         process_val(
@@ -636,7 +634,7 @@ impl BBIDataProcessor for BigWigNoZoomsProcess {
             &chrom,
             summary,
             items,
-            *options,
+            options,
             &runtime,
             ftx,
             *chrom_id,
@@ -720,7 +718,7 @@ impl<W: Write + Seek + Send + 'static> BBIDataProcessor for BigWigZoomsProcess<W
 
         process_val_zoom(
             zoom_items,
-            *options,
+            options,
             current_val,
             next_val,
             &runtime,

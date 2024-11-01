@@ -93,6 +93,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
     let mut outb = BigBedWrite::create_file(bigwigpath, chrom_map)
         .with_context(|| format!("Failed to create bigBed file."))?;
     outb.options.max_zooms = args.write_args.nzooms;
+    outb.options.manual_zoom_sizes = args.write_args.zooms;
     outb.options.compress = !args.write_args.uncompressed;
     outb.options.input_sort_type = input_sort_type;
     outb.options.inmemory = args.write_args.inmemory;
