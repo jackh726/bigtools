@@ -29,6 +29,11 @@ pub struct BigBedInfoArgs {
     #[arg(long)]
     #[arg(default_value_t = false)]
     pub autosql: bool,
+
+    /// Show all info for debugging.
+    #[arg(long, hide(true))]
+    #[arg(default_value_t = false)]
+    pub debug: bool,
 }
 
 pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
@@ -109,6 +114,9 @@ pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
             / (summary.bases_covered as f64 - 1.0);
         let std = var.sqrt();
         println!("std of depth: {:.6}", std);
+        if args.debug {
+            println!("{:?}", header,);
+        }
 
         Ok(())
     }
