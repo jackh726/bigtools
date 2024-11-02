@@ -8,11 +8,11 @@ use crossbeam_channel::TryRecvError;
 
 use crate::bed::bedparser::{parse_bed, BedFileStream, StreamingBedValues};
 use crate::utils::file_view::FileView;
-use crate::utils::misc::{stats_for_bed_item, Name};
+use crate::utils::misc::{name_for_bed_item, stats_for_bed_item, BigWigAverageOverBedEntry, Name};
 use crate::utils::reopen::{Reopen, ReopenableFile};
 use crate::utils::split_file_into_chunks_by_size;
 use crate::utils::streaming_linereader::StreamingLineReader;
-use crate::{BBIFileRead, BigWigRead};
+use crate::{BBIFileRead, BBIReadError, BigWigRead};
 
 #[derive(Clone, Debug, PartialEq, Parser)]
 #[command(
@@ -129,8 +129,24 @@ pub fn bigwigaverageoverbed(
                     Some(Ok(entry)) => entry,
                 };
 
-                let entry = match stats_for_bed_item(name, chrom, entry, inbigwig) {
+                let name = match name_for_bed_item(name, chrom, &entry) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                };
+
+                let entry = match stats_for_bed_item(chrom, entry, inbigwig) {
                     Ok(stats) => stats,
+                    Err(BBIReadError::InvalidChromosome(..)) => BigWigAverageOverBedEntry {
+                        bases: 0,
+                        max: 0.0,
+                        min: 0.0,
+                        mean: 0.0,
+                        mean0: 0.0,
+                        size: 0,
+                        sum: 0.0,
+                    },
                     Err(e) => {
                         return Err(e.into());
                     }
@@ -152,7 +168,7 @@ pub fn bigwigaverageoverbed(
                         entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
                     ),
                 };
-                writeln!(&mut tmp, "{}\t{}", entry.name, stats)?
+                writeln!(&mut tmp, "{}\t{}", name, stats)?
             }
 
             Ok(tmp)
@@ -259,7 +275,14 @@ pub fn bigwigaverageoverbed(
                 )
             })??;
 
-            let entry = match stats_for_bed_item(name, chrom, entry, &mut inbigwig) {
+            let name = match name_for_bed_item(name, chrom, &entry) {
+                Ok(name) => name,
+                Err(e) => {
+                    return Err(e.into());
+                }
+            };
+
+            let entry = match stats_for_bed_item(chrom, entry, &mut inbigwig) {
                 Ok(stats) => stats,
                 Err(e) => return Err(e.into()),
             };
@@ -280,7 +303,7 @@ pub fn bigwigaverageoverbed(
                     entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
                 ),
             };
-            writeln!(&mut bedoutwriter, "{}\t{}", entry.name, stats)?
+            writeln!(&mut bedoutwriter, "{}\t{}", name, stats)?
         }
     }
 

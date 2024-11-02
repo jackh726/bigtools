@@ -2256,7 +2256,8 @@ impl BigWigAverageOverBedStatistics {
 #[pyclass(module = "pybigtools")]
 struct BigWigAverageOverBedEntriesIterator {
     iter: Box<
-        dyn Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> + Send,
+        dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
+            + Send,
     >,
     usename: bool,
     stats: Option<Vec<BigWigAverageOverBedStatistics>>,
@@ -2276,7 +2277,7 @@ impl BigWigAverageOverBedEntriesIterator {
             .transpose()
             .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
 
-        let Some(v) = v else {
+        let Some((name, v)) = v else {
             return Ok(None);
         };
         let stats = match &slf.stats {
@@ -2319,7 +2320,7 @@ impl BigWigAverageOverBedEntriesIterator {
         };
 
         match slf.usename {
-            true => Ok(Some((v.name, stats).to_object(slf.py()))),
+            true => Ok(Some((name, stats).to_object(slf.py()))),
             false => Ok(Some(stats)),
         }
     }

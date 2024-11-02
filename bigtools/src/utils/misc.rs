@@ -16,7 +16,6 @@ pub enum Name {
 }
 
 pub struct BigWigAverageOverBedEntry {
-    pub name: String,
     pub size: u32,
     pub bases: u32,
     pub sum: f64,
@@ -27,22 +26,44 @@ pub struct BigWigAverageOverBedEntry {
 }
 
 #[derive(Error, Debug)]
-pub enum StatsError {
-    #[error("{}", .0)]
-    BBIReadError(#[from] BBIReadError),
-    #[error("{}", .0)]
-    InvalidNameCol(String),
+#[error("{}", self.0)]
+pub struct InvalidNameColError(String);
+
+pub fn name_for_bed_item(
+    name: Name,
+    chrom: &str,
+    entry: &BedEntry,
+) -> Result<String, InvalidNameColError> {
+    let start = entry.start;
+    let end = entry.end;
+
+    Ok(match name {
+        Name::Column(col) => match col {
+            0 => chrom.to_string(),
+            1 => start.to_string(),
+            2 => end.to_string(),
+            _ => {
+                let mut cols = entry.rest.split('\t');
+                let v = cols.nth(col - 3);
+                match v {
+                        Some(v) => v.to_string(),
+                        None => return Err(InvalidNameColError(format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", entry.rest.split('\t').collect::<Vec<_>>().len() + 3, col+1))),
+                    }
+            }
+        },
+        Name::Interval => format!("{}:{}-{}", chrom, start, end),
+        Name::None => format!("{}\t{}\t{}\t{}", chrom, start, end, entry.rest),
+    })
 }
 
 /// Returns a `BigWigAverageOverBedEntry` for a bigWig over a given interval.
 /// If there are no values for the given region, then `f64::NAN` is given for
 /// `mean`, `min`, and `max`, and `0` is given for `mean0`.
 pub fn stats_for_bed_item<R: BBIFileRead>(
-    name: Name,
     chrom: &str,
     entry: BedEntry,
     bigwig: &mut BigWigRead<R>,
-) -> Result<BigWigAverageOverBedEntry, StatsError> {
+) -> Result<BigWigAverageOverBedEntry, BBIReadError> {
     let start = entry.start;
     let end = entry.end;
 
@@ -73,26 +94,7 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
         (sum / f64::from(bases), min, max)
     };
 
-    let name = match name {
-        Name::Column(col) => match col {
-            0 => chrom.to_string(),
-            1 => start.to_string(),
-            2 => end.to_string(),
-            _ => {
-                let mut cols = entry.rest.split('\t');
-                let v = cols.nth(col - 3);
-                match v {
-                        Some(v) => v.to_string(),
-                        None => return Err(StatsError::InvalidNameCol(format!("Invalid name column option. Number of columns ({}) is less than the value specified ({}).", entry.rest.split('\t').collect::<Vec<_>>().len() + 3, col+1))),
-                    }
-            }
-        },
-        Name::Interval => format!("{}:{}-{}", chrom, start, end),
-        Name::None => format!("{}\t{}\t{}\t{}", chrom, start, end, entry.rest),
-    };
-
     Ok(BigWigAverageOverBedEntry {
-        name,
         size,
         bases,
         sum,
@@ -106,21 +108,23 @@ pub fn stats_for_bed_item<R: BBIFileRead>(
 #[derive(Error, Debug)]
 pub enum BigWigAverageOverBedError {
     #[error("{}", .0)]
-    StatsError(#[from] StatsError),
+    BBIReadError(#[from] BBIReadError),
     #[error("{}", .0)]
     BedValueError(#[from] BedValueError),
+    #[error("{}", .0)]
+    InvalidNameColError(#[from] InvalidNameColError),
 }
 
 pub fn bigwig_average_over_bed<R: BBIFileRead>(
     bed: impl BufRead,
     mut bigwig: BigWigRead<R>,
     name: Name,
-) -> impl Iterator<Item = Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> {
+) -> impl Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>> {
     let mut bedstream = StreamingLineReader::new(bed);
 
     let mut error: bool = false;
     let iter = std::iter::from_fn(
-        move || -> Option<Result<BigWigAverageOverBedEntry, BigWigAverageOverBedError>> {
+        move || -> Option<Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>> {
             if error {
                 return None;
             }
@@ -140,12 +144,19 @@ pub fn bigwig_average_over_bed<R: BBIFileRead>(
                 Some(Ok(v)) => v,
             };
 
-            match stats_for_bed_item(name, chrom, entry, &mut bigwig) {
+            let name = match name_for_bed_item(name, chrom, &entry) {
+                Ok(name) => name,
+                Err(e) => {
+                    return Some(Err(e.into()));
+                }
+            };
+
+            match stats_for_bed_item(chrom, entry, &mut bigwig) {
                 Err(e) => {
                     error = true;
                     Some(Err(e.into()))
                 }
-                Ok(v) => Some(Ok(v)),
+                Ok(v) => Some(Ok((name, v))),
             }
         },
     );
