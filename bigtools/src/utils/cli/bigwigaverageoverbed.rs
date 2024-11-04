@@ -136,6 +136,8 @@ pub fn bigwigaverageoverbed(
                     }
                 };
 
+                let size = entry.end - entry.start;
+
                 let entry = match stats_for_bed_item(chrom, entry, inbigwig) {
                     Ok(stats) => stats,
                     Err(BBIReadError::InvalidChromosome(..)) => BigWigAverageOverBedEntry {
@@ -144,7 +146,7 @@ pub fn bigwigaverageoverbed(
                         min: 0.0,
                         mean: 0.0,
                         mean0: 0.0,
-                        size: 0,
+                        size,
                         sum: 0.0,
                     },
                     Err(e) => {
