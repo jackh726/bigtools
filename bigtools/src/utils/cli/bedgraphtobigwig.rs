@@ -35,9 +35,15 @@ pub struct BedGraphToBigWigArgs {
 
     /// If set, indicates that only a single pass should be done on the input file. This is most useful
     /// on large files in order to reduce total time. This automatically happens when the input is `stdin`.
-    #[arg(long)]
+    #[arg(short = 'c', long)]
     #[arg(default_value_t = false)]
     pub single_pass: bool,
+
+    /// If set, just issue warning messages rather than dying if bedgraph
+    /// file contains chromosomes that are not in the chrom.sizes file.
+    #[arg(long)]
+    #[arg(default_value_t = false)]
+    pub clip: bool,
 
     #[command(flatten)]
     pub write_args: BBIWriteArgs,
@@ -46,6 +52,7 @@ pub struct BedGraphToBigWigArgs {
 pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>> {
     let bedgraphpath = args.bedgraph;
     let chrom_map = args.chromsizes;
+    let clip = args.clip;
     let bigwigpath = args.output;
     let nthreads = args.write_args.nthreads;
     let input_sort_type = match args.write_args.sorted.as_ref() {
