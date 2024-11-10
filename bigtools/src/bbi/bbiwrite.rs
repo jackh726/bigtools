@@ -91,6 +91,7 @@ pub struct BBIWriteOptions {
     pub input_sort_type: InputSortType,
     pub channel_size: usize,
     pub inmemory: bool,
+    pub clip: bool
 }
 
 impl Default for BBIWriteOptions {
@@ -105,6 +106,7 @@ impl Default for BBIWriteOptions {
             input_sort_type: InputSortType::ALL,
             channel_size: 100,
             inmemory: false,
+            clip: false
         }
     }
 }

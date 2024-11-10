@@ -39,12 +39,6 @@ pub struct BedGraphToBigWigArgs {
     #[arg(default_value_t = false)]
     pub single_pass: bool,
 
-    /// If set, just issue warning messages rather than dying if bedgraph
-    /// file contains chromosomes that are not in the chrom.sizes file.
-    #[arg(long)]
-    #[arg(default_value_t = false)]
-    pub clip: bool,
-
     #[command(flatten)]
     pub write_args: BBIWriteArgs,
 }
@@ -52,7 +46,6 @@ pub struct BedGraphToBigWigArgs {
 pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>> {
     let bedgraphpath = args.bedgraph;
     let chrom_map = args.chromsizes;
-    let clip = args.clip;
     let bigwigpath = args.output;
     let nthreads = args.write_args.nthreads;
     let input_sort_type = match args.write_args.sorted.as_ref() {
@@ -94,6 +87,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
     outb.options.input_sort_type = input_sort_type;
     outb.options.block_size = args.write_args.block_size;
     outb.options.inmemory = args.write_args.inmemory;
+    outb.options.clip = args.write_args.clip;
 
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
