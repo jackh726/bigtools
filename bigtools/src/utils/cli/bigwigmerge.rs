@@ -364,7 +364,14 @@ impl BBIDataSource for ChromGroupReadImpl {
                 self.iter.next();
             match next {
                 Some(Ok((chrom, _, mut group))) => {
-                    let mut p = start_processing(chrom)?;
+                    let mut p = match start_processing(chrom) {
+                        Ok(processor) => processor,
+                        Err(ProcessDataError::InvalidChromosome(_, true)) => {
+                            // clip is true, so continue
+                            continue;
+                        },
+                        Err(e) => return Err(e.into()),
+                    };
 
                     loop {
                         let current_val = match group.iter.next() {

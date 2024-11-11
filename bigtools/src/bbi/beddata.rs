@@ -109,7 +109,15 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                 // The next value is the first
                 Some(Ok((chrom, val))) => {
                     let chrom = chrom.to_string();
-                    let mut p = start_processing(chrom.clone())?;
+                    
+                    let mut p =  match start_processing(chrom.clone()) {
+                        Ok(processor) => processor,
+                        Err(ProcessDataError::InvalidChromosome(_, true)) => {
+                            return Ok(())
+                        },
+                        Err(e) => return Err(e.into()),
+                    };
+
                     let next_val = self.bed_data.next();
                     let next_val = match next_val {
                         Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
@@ -251,7 +259,15 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                     parse: self.parse_fn,
                 };
 
-                let mut p = start_processing(curr.1.clone())?;
+                let mut p = match start_processing(curr.1.clone()) {
+                    Ok(processor) => processor,
+                    Err(ProcessDataError::InvalidChromosome(_, true)) => {
+                        // clip is true, so continue
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                
                 let curr_chrom = curr.1.clone();
                 let data: tokio::task::JoinHandle<Result<P, BBIProcessError<BedValueError>>> =
                     runtime.spawn(async move {
