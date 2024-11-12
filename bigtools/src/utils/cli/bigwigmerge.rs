@@ -341,7 +341,7 @@ pub fn get_merged_vals(
     Ok((iter, chrom_map))
 }
 
-struct ChromGroupReadImpl {
+pub struct ChromGroupReadImpl {
     iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
