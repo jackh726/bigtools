@@ -49,15 +49,15 @@ pub struct BigWigMergeArgs {
     /// Merged value is maximum from input files rather than sum
     #[arg(long)]
     #[arg(default_value_t = false)]
-    max: bool,
+    pub max: bool,
 
     /// Can be `bigwig` or `bedgraph` (case-insensitive). If not specified,
     /// will be inferred from the output file ending.
     #[arg(long)]
-    output_type: Option<String>,
+    pub output_type: Option<String>,
 
     #[command(flatten)]
-    write_args: BBIWriteArgs,
+    pub write_args: BBIWriteArgs,
 }
 
 pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
@@ -341,8 +341,9 @@ pub fn get_merged_vals(
     Ok((iter, chrom_map))
 }
 
-struct ChromGroupReadImpl {
-    iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
+pub struct ChromGroupReadImpl {
+    pub iter:
+        Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
 impl BBIDataSource for ChromGroupReadImpl {
