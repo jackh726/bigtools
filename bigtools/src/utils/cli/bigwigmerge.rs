@@ -342,7 +342,7 @@ pub fn get_merged_vals(
 }
 
 pub struct ChromGroupReadImpl {
-    iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
+    pub iter: Box<dyn Iterator<Item = Result<(String, u32, MergingValues), MergingValuesError>> + Send>,
 }
 
 impl BBIDataSource for ChromGroupReadImpl {
