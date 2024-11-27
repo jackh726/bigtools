@@ -41,3 +41,6 @@ dev = [
 homepage = "https://github.com/jackh726/bigtools"
 documentation = "https://bigtools.readthedocs.io"
 repository = "https://github.com/jackh726/bigtools"
+
+[tool.maturin]
+python-source = "pybigtools"
