@@ -1,3 +1,5 @@
+# ruff: noqa: F403
+# ruff: noqa: F405
 # This is here to make sure that source installs with pip work correctly
 
 from .pybigtools import *
