@@ -80,13 +80,24 @@ def test_bigbed_write(tmpdir):
             ("chr1", 0, 100, "foo\tbar\t3"), 
             ("chr2", 100, 200, "xxx\tyyy\t1.0"),
             ("chr2", 200, 300, "zzz\twww\t1.0")
-        ]
+        ],
+        autosql="""\
+table bed3
+"Simple bed"
+(
+    string chrom;        "Reference sequence chromosome or scaffold"
+    uint   chromStart;   "Start position in chromosome"
+    uint   chromEnd;     "End position in chromosome"
+)
+        """
     )
     f.close()
 
     f = pybigtools.open(os.path.join(tmpdir, "test.bigBed"))
     records = list(f.records("chr2"))
     assert records[0][2] == 'xxx'
+    sql = f.sql()
+    assert sql.startswith("table")
 
 # TODO: bigWigAverageOverBed
 # TODO: bigWigMerge
