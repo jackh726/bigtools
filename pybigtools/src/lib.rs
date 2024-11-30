@@ -307,7 +307,7 @@ fn intervals_to_array<R: BBIFileRead>(
             let interval_end = end - start;
             let bin_start = ((interval_start as f64) / bin_size) as usize;
             let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-            assert_eq!(bin_end, array.len() - 1);
+            assert_eq!(bin_end, array.len());
             for i in bin_start..bin_end {
                 array[i] = oob;
             }
@@ -445,7 +445,7 @@ fn entries_to_array<R: BBIFileRead>(
             let interval_end = end - start;
             let bin_start = ((interval_start as f64) / bin_size) as usize;
             let bin_end = ((interval_end as f64) / bin_size).ceil() as usize;
-            assert_eq!(bin_end, array.len() - 1);
+            assert_eq!(bin_end, array.len());
             for i in bin_start..bin_end {
                 array[i] = oob;
             }

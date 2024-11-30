@@ -378,6 +378,21 @@ def test_values_assign_to_array(bw, bb):
     assert ret_arr[19] == 0.0
     assert np.array_equal(arr, ret_arr, equal_nan=True)
 
+def test_values_oob(bw):
+    chroms = bw.chroms()
+    # Region: arbitrary chromosome, 1 bin outside overlap
+    chrom = list(chroms.keys())[0]
+    bin_size = 8
+    end = chroms[chrom]+bin_size
+    start = end - 2*bin_size
+    # Try to get values
+    v=bw.values(chrom, start, end, bins = 3)
+    assert len(v) == 3
+    assert np.isnan(v[2])
+    # Note: also happens if explicitly setting oob:
+    v=bw.values(chrom, start, end, bins = 3, oob=0)
+    assert len(v) == 3
+    assert v[2] == 0
 
 def test_big_gene_pred():
     bb = pybigtools.open(REPO_ROOT / "bigtools/resources/test/bigGenePred.bb")
