@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufReader};
-use std::ops::IndexMut;
+use std::ops::{Deref, IndexMut};
 use std::path::Path;
 
 use bigtools::bed::autosql::parse::parse_autosql;
@@ -23,7 +23,7 @@ use bigtools::{
 use bigtools::utils::reopen::Reopen;
 use file_like::PyFileLikeObject;
 use numpy::ndarray::ArrayViewMut;
-use numpy::PyArray1;
+use numpy::{PyArray1, PyArrayMethods};
 use pyo3::exceptions::{self, PyKeyError, PyTypeError};
 use pyo3::types::{
     IntoPyDict, PyAny, PyDict, PyFloat, PyInt, PyIterator, PyList, PyString, PyTuple,
@@ -207,10 +207,12 @@ fn intervals_to_array<R: BBIFileRead>(
     };
     let arr = match (bins, arr) {
         (_, Some(arr)) => arr,
-        (Some(bins), None) => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
-        (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
+        (Some(bins), None) => PyArray1::from_vec_bound(py, vec![missing; bins]).to_object(py),
+        (None, None) => {
+            PyArray1::from_vec_bound(py, vec![missing; (end - start) as usize]).to_object(py)
+        }
     };
-    let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
+    let v: &Bound<'_, PyArray1<f64>> = arr.downcast_bound::<PyArray1<f64>>(py).map_err(|_| {
         PyErr::new::<exceptions::PyValueError, _>(
             "`arr` option must be a one-dimensional numpy array, if passed.",
         )
@@ -218,11 +220,11 @@ fn intervals_to_array<R: BBIFileRead>(
     let (intervals_start, intervals_end) = (start.max(0) as u32, end.min(length) as u32);
     let bin_size = match bins {
         Some(bins) => {
-            if v.len() != bins {
+            if v.len()? != bins {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     bins,
-                    v.len(),
+                    v.len()?,
                 )));
             }
 
@@ -269,11 +271,11 @@ fn intervals_to_array<R: BBIFileRead>(
             (end - start) as f64 / bins as f64
         }
         _ => {
-            if v.len() != (end - start) as usize {
+            if v.len()? != (end - start) as usize {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     (end - start) as usize,
-                    v.len(),
+                    v.len()?,
                 )));
             }
 
@@ -343,10 +345,12 @@ fn entries_to_array<R: BBIFileRead>(
     };
     let arr = match (bins, arr) {
         (_, Some(arr)) => arr,
-        (Some(bins), None) => PyArray1::from_vec(py, vec![missing; bins]).to_object(py),
-        (None, None) => PyArray1::from_vec(py, vec![missing; (end - start) as usize]).to_object(py),
+        (Some(bins), None) => PyArray1::from_vec_bound(py, vec![missing; bins]).to_object(py),
+        (None, None) => {
+            PyArray1::from_vec_bound(py, vec![missing; (end - start) as usize]).to_object(py)
+        }
     };
-    let v: &PyArray1<f64> = arr.downcast::<PyArray1<f64>>(py).map_err(|_| {
+    let v: &Bound<'_, PyArray1<f64>> = arr.downcast_bound::<PyArray1<f64>>(py).map_err(|_| {
         PyErr::new::<exceptions::PyValueError, _>(
             "`arr` option must be a one-dimensional numpy array, if passed.",
         )
@@ -354,11 +358,11 @@ fn entries_to_array<R: BBIFileRead>(
     let (intervals_start, intervals_end) = (start.max(0) as u32, end.min(length) as u32);
     let bin_size = match bins {
         Some(bins) => {
-            if v.len() != bins {
+            if v.len()? != bins {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     bins,
-                    v.len(),
+                    v.len()?,
                 )));
             }
 
@@ -405,11 +409,11 @@ fn entries_to_array<R: BBIFileRead>(
             (end - start) as f64 / bins as f64
         }
         _ => {
-            if v.len() != (end - start) as usize {
+            if v.len()? != (end - start) as usize {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "`arr` does not have the expected size (expected `{}`, found `{}`), if passed.",
                     (end - start) as usize,
-                    v.len(),
+                    v.len()?,
                 )));
             }
 
@@ -1095,7 +1099,7 @@ impl BBIRead {
             ("max", summary.max_val.to_object(py)),
             ("std", f64::sqrt(var).to_object(py)),
         ]
-        .into_py_dict(py)
+        .into_py_dict_bound(py)
         .to_object(py);
         let info = [
             ("version", info.header.version.to_object(py)),
@@ -1108,7 +1112,7 @@ impl BBIRead {
             ("chromCount", info.chrom_info.len().to_object(py)),
             ("summary", summary),
         ]
-        .into_py_dict(py)
+        .into_py_dict_bound(py)
         .to_object(py);
         Ok(info)
     }
@@ -1192,7 +1196,7 @@ impl BBIRead {
             }
             let declaration = declarations.pop();
             match declaration {
-                None => PyDict::new(py).to_object(py),
+                None => PyDict::new_bound(py).to_object(py),
                 Some(d) => {
                     let fields = d
                         .fields
@@ -1205,7 +1209,7 @@ impl BBIRead {
                         ("comment", d.comment.to_object(py)),
                         ("fields", fields),
                     ]
-                    .into_py_dict(py)
+                    .into_py_dict_bound(py)
                     .to_object(py)
                 }
             }
@@ -1245,6 +1249,7 @@ impl BBIRead {
     /// --------
     /// zoom_records : Get the zoom records of a given range on a chromosome.
     /// values : Get the values of a given range on a chromosome.
+    #[pyo3(signature = (chrom, start=None, end=None))]
     fn records(
         &mut self,
         py: Python<'_>,
@@ -1348,6 +1353,7 @@ impl BBIRead {
     /// zooms : Get a list of available zoom levels.
     /// records : Get the records of a given range on a chromosome.
     /// values : Get the values of a given range on a chromosome.
+    #[pyo3(signature = (reduction_level, chrom, start=None, end=None))]
     fn zoom_records(
         &mut self,
         reduction_level: u32,
@@ -1542,6 +1548,7 @@ impl BBIRead {
     /// -------
     /// int or Dict[str, int] or None:
     ///     Chromosome length or a dictionary of chromosome lengths.
+    #[pyo3(signature = (chrom=None))]
     fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<PyObject> {
         fn get_chrom_obj<B: bigtools::BBIRead>(
             b: &B,
@@ -1567,7 +1574,7 @@ impl BBIRead {
                         .chroms()
                         .into_iter()
                         .map(|c| (c.name.clone(), c.length))
-                        .into_py_dict(py)
+                        .into_py_dict_bound(py)
                         .into();
                     Ok(chrom_dict)
                 }
@@ -1641,10 +1648,11 @@ impl BBIRead {
     /// tuples of the form ``({name}, {average})``.
     /// Importantly, if the statistics value is itself a tuple, then that
     /// tuple will be **nested** as the second value of the outer tuple.
+    #[pyo3(signature = (bed, names=None, stats=None))]
     fn average_over_bed(
         &mut self,
         py: Python,
-        bed: PyObject,
+        bed: Bound<'_, PyAny>,
         names: Option<PyObject>,
         stats: Option<PyObject>,
     ) -> PyResult<PyObject> {
@@ -1677,7 +1685,7 @@ impl BBIRead {
         };
         let stats = {
             match stats {
-                Some(stats) => match stats.downcast::<PyString>(py) {
+                Some(stats) => match stats.downcast_bound::<PyString>(py) {
                     Ok(stat) => {
                         let stat = stat.to_str()?;
                         if stat.eq_ignore_ascii_case("all") {
@@ -1692,7 +1700,7 @@ impl BBIRead {
                             Some(vec![stat])
                         }
                     }
-                    Err(_) => match stats.downcast::<PyList>(py) {
+                    Err(_) => match stats.downcast_bound::<PyList>(py) {
                         Ok(stats) => {
                             let mut ret_stats = Vec::with_capacity(stats.len());
                             for stat in stats.into_iter() {
@@ -1720,13 +1728,13 @@ impl BBIRead {
                 None => Some(vec![BigWigAverageOverBedStatistics::Mean]),
             }
         };
-        let bed = if let Ok(bed) = bed.downcast::<PyString>(py) {
-            bed
+        let bed = if let Ok(bed) = bed.downcast::<PyString>() {
+            bed.clone()
         } else {
-            let path_class = py.import("pathlib")?.getattr("Path")?;
+            let path_class = py.import_bound("pathlib")?.getattr("Path")?;
             // If pathlib.Path, convert to string and try to open
-            if bed.as_ref(py).is_instance(path_class)? {
-                bed.as_ref(py).str()?
+            if bed.is_instance(&path_class)? {
+                bed.str()?
             } else {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
                     "Unknown argument for `path`. Not a string or Path object.",
@@ -1735,7 +1743,7 @@ impl BBIRead {
         };
         let bedin = BufReader::new(File::open(bed.to_str()?)?);
 
-        let module = PyModule::import(py, "pybigtools")?;
+        let module = PyModule::import_bound(py, "pybigtools")?;
         let summary_statistics = module.getattr("SummaryStatistics")?.to_object(py);
         let res = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
@@ -1808,8 +1816,12 @@ impl BBIRead {
             BBIReadRaw::Closed | BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigBedFile(_) => {}
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(_) | BBIReadRaw::BigBedRemote(_) => {}
-            BBIReadRaw::BigWigFileLike(b) => visit.call(&b.inner_read().inner_read().inner)?,
-            BBIReadRaw::BigBedFileLike(b) => visit.call(&b.inner_read().inner_read().inner)?,
+            BBIReadRaw::BigWigFileLike(b) => {
+                visit.call(b.inner_read().inner_read().inner.deref())?
+            }
+            BBIReadRaw::BigBedFileLike(b) => {
+                visit.call(b.inner_read().inner_read().inner.deref())?
+            }
         }
         Ok(())
     }
@@ -1844,7 +1856,7 @@ impl ZoomIntervalIterator {
                         ("sum", v.summary.sum.to_object(slf.py())),
                         ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
                     ]
-                    .into_py_dict(slf.py())
+                    .into_py_dict_bound(slf.py())
                     .to_object(slf.py());
                     (v.start, v.end, summary)
                 })
@@ -1900,7 +1912,7 @@ impl BigBedEntriesIterator {
             .chain(next.rest.split_whitespace().map(|o| o.to_object(py)))
             .collect();
         Ok(Some(
-            PyTuple::new::<PyObject, _>(py, elements.into_iter()).to_object(py),
+            PyTuple::new_bound::<PyObject, _>(py, elements.into_iter()).to_object(py),
         ))
     }
 }
@@ -1931,7 +1943,7 @@ impl BigWigWrite {
     /// -----
     /// The underlying file will be closed automatically when the function
     /// completes, and no other operations will be able to be performed.  
-    fn write(&mut self, py: Python, chroms: &PyDict, vals: Py<PyAny>) -> PyResult<()> {
+    fn write(&mut self, py: Python, chroms: &Bound<'_, PyDict>, vals: Py<PyAny>) -> PyResult<()> {
         let runtime = runtime::Builder::new_multi_thread()
             .worker_threads(
                 std::thread::available_parallelism()
@@ -1948,7 +1960,7 @@ impl BigWigWrite {
                 let length: u32 = val.downcast::<PyInt>()?.to_object(py).extract(py).unwrap();
                 Ok((chrom, length))
             })
-            .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
+            .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyErr>>()?;
 
         let bigwig = self
             .bigwig
@@ -1970,15 +1982,15 @@ impl BigWigWrite {
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
                 Python::with_gil(|py| {
-                    let mut iter: &PyIterator = match self.inner.downcast(py) {
-                        Ok(o) => o,
+                    let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
+                        Ok(o) => o.clone(),
                         Err(_) => {
                             return Some(Err(IterError(format!(
                                 "Passed value for `val` is not iterable."
                             ))))
                         }
                     };
-                    let next: Result<(String, Value), pyo3::PyDowncastError> = match iter.next()? {
+                    let next: Result<(String, Value), pyo3::PyErr> = match iter.next()? {
                         Err(e) => {
                             e.print(py);
                             return Some(Err(IterError(format!(
@@ -2032,8 +2044,8 @@ impl BigWigWrite {
         }
         py.allow_threads(|| {
             let iter = Python::with_gil(|py| {
-                let inner_obj: PyObject = vals.into_py(py);
-                match PyIterator::from_object(py, &inner_obj) {
+                let inner_obj = vals.bind(py);
+                match PyIterator::from_bound_object(inner_obj) {
                     Ok(iter) => Ok(iter.to_object(py)),
                     Err(_) => Err(PyTypeError::new_err(
                         "Passed value for `val` is not iterable.",
@@ -2090,7 +2102,7 @@ impl BigBedWrite {
     /// -----
     /// The underlying file will be closed automatically when the function
     /// completes, and no other operations will be able to be performed.
-    fn write(&mut self, py: Python, chroms: &PyDict, vals: Py<PyAny>) -> PyResult<()> {
+    fn write(&mut self, py: Python, chroms: &Bound<'_, PyDict>, vals: Py<PyAny>) -> PyResult<()> {
         let runtime = runtime::Builder::new_multi_thread()
             .worker_threads(
                 std::thread::available_parallelism()
@@ -2107,7 +2119,7 @@ impl BigBedWrite {
                 let length: u32 = val.downcast::<PyInt>()?.to_object(py).extract(py).unwrap();
                 Ok((chrom, length))
             })
-            .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyDowncastError>>()?;
+            .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyErr>>()?;
 
         let bigbed = self
             .bigbed
@@ -2129,59 +2141,58 @@ impl BigBedWrite {
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
                 Python::with_gil(|py| {
-                    let mut iter: &PyIterator = match self.inner.downcast(py) {
-                        Ok(o) => o,
+                    let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
+                        Ok(o) => o.clone(),
                         Err(_) => {
                             return Some(Err(IterError(format!(
                                 "Passed value for `val` is not iterable."
                             ))))
                         }
                     };
-                    let next: Result<(String, BedEntry), pyo3::PyDowncastError> =
-                        match iter.next()? {
-                            Err(e) => {
-                                e.print(py);
-                                return Some(Err(IterError(format!(
-                                    "An error occurred while iterating."
-                                ))));
-                            }
-                            Ok(n) => {
-                                // TODO: try block or separate function
-                                (|| {
-                                    let tuple = n.downcast::<PyTuple>()?;
-                                    assert!(tuple.len() == 4);
-                                    let chrom: String = tuple
-                                        .get_item(0)
-                                        .unwrap()
-                                        .downcast::<PyString>()?
-                                        .to_str()
-                                        .unwrap()
-                                        .to_owned();
-                                    let start: u32 = tuple
-                                        .get_item(1)
-                                        .unwrap()
-                                        .downcast::<PyInt>()?
-                                        .to_object(py)
-                                        .extract(py)
-                                        .unwrap();
-                                    let end: u32 = tuple
-                                        .get_item(2)
-                                        .unwrap()
-                                        .downcast::<PyInt>()?
-                                        .to_object(py)
-                                        .extract(py)
-                                        .unwrap();
-                                    let rest: String = tuple
-                                        .get_item(3)
-                                        .unwrap()
-                                        .downcast::<PyString>()?
-                                        .to_str()
-                                        .unwrap()
-                                        .to_owned();
-                                    Ok((chrom, BedEntry { start, end, rest }))
-                                })()
-                            }
-                        };
+                    let next: Result<(String, BedEntry), pyo3::PyErr> = match iter.next()? {
+                        Err(e) => {
+                            e.print(py);
+                            return Some(Err(IterError(format!(
+                                "An error occurred while iterating."
+                            ))));
+                        }
+                        Ok(n) => {
+                            // TODO: try block or separate function
+                            (|| {
+                                let tuple = n.downcast::<PyTuple>()?;
+                                assert!(tuple.len() == 4);
+                                let chrom: String = tuple
+                                    .get_item(0)
+                                    .unwrap()
+                                    .downcast::<PyString>()?
+                                    .to_str()
+                                    .unwrap()
+                                    .to_owned();
+                                let start: u32 = tuple
+                                    .get_item(1)
+                                    .unwrap()
+                                    .downcast::<PyInt>()?
+                                    .to_object(py)
+                                    .extract(py)
+                                    .unwrap();
+                                let end: u32 = tuple
+                                    .get_item(2)
+                                    .unwrap()
+                                    .downcast::<PyInt>()?
+                                    .to_object(py)
+                                    .extract(py)
+                                    .unwrap();
+                                let rest: String = tuple
+                                    .get_item(3)
+                                    .unwrap()
+                                    .downcast::<PyString>()?
+                                    .to_str()
+                                    .unwrap()
+                                    .to_owned();
+                                Ok((chrom, BedEntry { start, end, rest }))
+                            })()
+                        }
+                    };
                     let ret = match next {
                         Err(_) => Err(IterError("Invalid iterator value. Must a tuple of type (String, int, int, String)".to_string())),
                         Ok(n) => Ok(n),
@@ -2192,8 +2203,8 @@ impl BigBedWrite {
         }
         py.allow_threads(|| {
             let iter = Python::with_gil(|py| {
-                let inner_obj: PyObject = vals.into_py(py);
-                match PyIterator::from_object(py, &inner_obj) {
+                let inner_obj = vals.bind(py);
+                match PyIterator::from_bound_object(inner_obj) {
                     Ok(iter) => Ok(iter.to_object(py)),
                     Err(_) => Err(PyTypeError::new_err(
                         "Passed value for `val` is not iterable.",
@@ -2305,13 +2316,12 @@ impl BigWigAverageOverBedEntriesIterator {
                 if ret.len() == 1 {
                     ret[0].to_object(slf.py())
                 } else {
-                    PyTuple::new(slf.py(), ret).to_object(slf.py())
+                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
                 }
             }
             None => {
-                let summary_statistics = slf.summary_statistics.as_ref(slf.py());
-                //let summary_statistics = module.getattr("SummaryStatistics").unwrap();
-                let val = summary_statistics.call(
+                let val = slf.summary_statistics.call_bound(
+                    slf.py(),
                     (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
                     None,
                 )?;
@@ -2350,7 +2360,12 @@ impl BigWigAverageOverBedEntriesIterator {
 /// If passing a file-like object, concurrent reading of different intervals
 /// is not supported and may result in incorrect behavior.
 #[pyfunction]
-fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> PyResult<PyObject> {
+#[pyo3(signature = (path_url_or_file_like, mode=None))]
+fn open(
+    py: Python,
+    path_url_or_file_like: &Bound<'_, PyAny>,
+    mode: Option<String>,
+) -> PyResult<PyObject> {
     let iswrite = match &mode {
         Some(mode) if mode == "w" => true,
         Some(mode) if mode == "r" => false,
@@ -2364,15 +2379,15 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
     };
 
     // If string, might be path or url like
-    if let Ok(string_ref) = path_url_or_file_like.downcast::<PyString>(py) {
+    if let Ok(string_ref) = path_url_or_file_like.downcast::<PyString>() {
         return open_path_or_url(py, string_ref.to_str().unwrap().to_owned(), iswrite);
     }
 
     // If pathlib.Path, convert to string and try to open
-    let path_class = py.import("pathlib")?.getattr("Path")?;
-    if path_url_or_file_like.as_ref(py).is_instance(path_class)? {
-        let path_str = path_url_or_file_like.as_ref(py).str()?.to_str()?;
-        return open_path_or_url(py, path_str.to_owned(), iswrite);
+    let path_class = py.import_bound("pathlib")?.getattr("Path")?;
+    if path_url_or_file_like.is_instance(&path_class)? {
+        let path_string = path_url_or_file_like.str()?.to_string();
+        return open_path_or_url(py, path_string, iswrite);
     }
 
     if iswrite {
@@ -2386,7 +2401,7 @@ fn open(py: Python, path_url_or_file_like: PyObject, mode: Option<String>) -> Py
             "Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.",
         ))),
     };
-    let read = match GenericBBIRead::open(file_like.clone()) {
+    let read = match GenericBBIRead::open(file_like) {
         Ok(GenericBBIRead::BigWig(bigwig)) => BBIRead {
             bbi: BBIReadRaw::BigWigFileLike(bigwig.cached()),
         }
@@ -2533,7 +2548,7 @@ fn open_path_or_url(
 
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
 #[pymodule]
-fn pybigtools(py: Python, m: &PyModule) -> PyResult<()> {
+fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     m.add_wrapped(wrap_pyfunction!(open))?;
@@ -2544,10 +2559,10 @@ fn pybigtools(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<BigWigIntervalIterator>()?;
     m.add_class::<BigBedEntriesIterator>()?;
 
-    m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
-    m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
+    m.add("BBIFileClosed", m.py().get_type_bound::<BBIFileClosed>())?;
+    m.add("BBIReadError", m.py().get_type_bound::<BBIReadError>())?;
 
-    let collections = PyModule::import(py, "collections")?;
+    let collections = PyModule::import_bound(py, "collections")?;
     let namedtuple = collections.getattr("namedtuple")?;
 
     let summary_statistics = namedtuple.call(
