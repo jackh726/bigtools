@@ -2102,7 +2102,14 @@ impl BigBedWrite {
     /// -----
     /// The underlying file will be closed automatically when the function
     /// completes, and no other operations will be able to be performed.
-    fn write(&mut self, py: Python, chroms: &Bound<'_, PyDict>, vals: Py<PyAny>) -> PyResult<()> {
+    #[pyo3(signature = (chroms, vals, autosql=None))]
+    fn write(
+        &mut self,
+        py: Python,
+        chroms: &Bound<'_, PyDict>,
+        vals: Py<PyAny>,
+        autosql: Option<Bound<'_, PyString>>,
+    ) -> PyResult<()> {
         let runtime = runtime::Builder::new_multi_thread()
             .worker_threads(
                 std::thread::available_parallelism()
@@ -2125,12 +2132,15 @@ impl BigBedWrite {
             .bigbed
             .take()
             .ok_or_else(|| PyErr::new::<BBIFileClosed, _>("File already closed."))?;
-        let bigbed = BigBedWriteRaw::create_file(bigbed, chrom_map).map_err(|e| {
+        let mut bigbed = BigBedWriteRaw::create_file(bigbed, chrom_map).map_err(|e| {
             PyErr::new::<exceptions::PyException, _>(format!(
                 "Error occured when creating file: {}",
                 e
             ))
         })?;
+        if let Some(autosql) = autosql {
+            bigbed.autosql = Some(autosql.str()?.to_string());
+        }
 
         struct IterError(String);
         struct Iter {
