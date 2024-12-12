@@ -822,10 +822,14 @@ pub(crate) fn write_vals<
 
         (zooms_channels, ftx)
     }
-    let mut do_read = |chrom: String| -> Result<_, ProcessDataError> {
+
+    let mut do_read = |chrom: String| -> Result<Option<_>, ProcessDataError> {
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
+                if options.clip {
+                    return Ok(None)
+                }
                 return Err(ProcessDataError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
@@ -833,6 +837,7 @@ pub(crate) fn write_vals<
             ));
             }
         };
+
         // Make a new id for the chromosome
         let chrom_id = chrom_ids.get_id(&chrom);
 
@@ -845,9 +850,10 @@ pub(crate) fn write_vals<
             options.clone(),
             runtime.handle().clone(),
             chrom,
-            length,
+            length
         );
-        Ok(P::create(internal_data))
+        
+        Ok(Some(P::create(internal_data)))
     };
 
     let mut advance = |p: P| {
@@ -966,11 +972,13 @@ pub(crate) fn write_vals_no_zoom<
         let length = match chrom_sizes.get(&chrom) {
             Some(length) => *length,
             None => {
+                if options.clip {
+                    return Ok(None)
+                }
                 return Err(ProcessDataError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
-                ),
-                options.clip
+                )
             ));
             }
         };
@@ -987,7 +995,7 @@ pub(crate) fn write_vals_no_zoom<
             chrom,
             length,
         );
-        Ok(P::create(internal_data))
+        Ok(Some(P::create(internal_data)))
     };
 
     let mut advance = |p: P| {
@@ -1122,7 +1130,7 @@ pub(crate) fn write_zoom_vals<
 
     let mut max_uncompressed_buf_size = 0;
 
-    let mut do_read = |chrom: String| -> Result<P, ProcessDataError> {
+    let mut do_read = |chrom: String| -> Result<Option<P>, ProcessDataError> {
         // Make a new id for the chromosome
         let chrom_id = *chrom_ids
             .get(&chrom)
@@ -1154,7 +1162,8 @@ pub(crate) fn write_zoom_vals<
             options.clone(),
             runtime.handle().clone(),
         );
-        Ok(P::create(internal_data))
+
+        Ok(Some(P::create(internal_data)))
     };
 
     let mut advance = |p: P| {

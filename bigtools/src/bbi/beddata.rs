@@ -112,9 +112,6 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                     
                     let mut p =  match start_processing(chrom.clone()) {
                         Ok(processor) => processor,
-                        Err(ProcessDataError::InvalidChromosome(_, true)) => {
-                            return Ok(())
-                        },
                         Err(e) => return Err(e.into()),
                     };
 
@@ -128,11 +125,20 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         Some(v) if v.0 == chrom => Some(&v.1),
                         _ => None,
                     };
+                    
+                    // todo: how to unwrap Option<p>, None being a skipped chromosome?
+                    if p.is_none() { }
                     p.do_process(val, next_value).await?;
                     ((chrom, p), next_val)
                 }
             };
             loop {
+                
+                // TODO: is this correct?
+                if curr_state.1.is_none() {
+                    continue;
+                }
+
                 next_val = match (&mut curr_state, next_val) {
                     // There are no more values
                     ((_, _), None) => {
