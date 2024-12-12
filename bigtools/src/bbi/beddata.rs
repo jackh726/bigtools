@@ -110,8 +110,16 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                 Some(Ok((chrom, val))) => {
                     let chrom = chrom.to_string();
                     
-                    let mut p =  match start_processing(chrom.clone()) {
-                        Ok(processor) => processor,
+                    let p = match start_processing(chrom.clone()) {
+                        Ok(Some(processor)) => processor,
+                        Ok(None) => {
+                            // skip this chromosome
+                            let next_val = self.bed_data.next();
+                            return match next_val {
+                                Some(Err(e)) => Err(BBIProcessError::SourceError(e)),
+                                Some(Ok(_)) | None => Ok(()),
+                            };
+                        }
                         Err(e) => return Err(e.into()),
                     };
 
@@ -126,18 +134,13 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         _ => None,
                     };
                     
-                    // todo: how to unwrap Option<p>, None being a skipped chromosome?
-                    if p.is_none() { }
                     p.do_process(val, next_value).await?;
                     ((chrom, p), next_val)
                 }
             };
             loop {
                 
-                // TODO: is this correct?
-                if curr_state.1.is_none() {
-                    continue;
-                }
+                // todo: how to implement the skip logic here?
 
                 next_val = match (&mut curr_state, next_val) {
                     // There are no more values
@@ -227,7 +230,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,
@@ -267,8 +270,8 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
                 let mut p = match start_processing(curr.1.clone()) {
                     Ok(processor) => processor,
-                    Err(ProcessDataError::InvalidChromosome(_, true)) => {
-                        // clip is true, so continue
+                    Ok(None) => {
+                        // Skip and fetch the next chromosome?
                         continue;
                     }
                     Err(e) => return Err(e.into()),
@@ -278,6 +281,16 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                 let data: tokio::task::JoinHandle<Result<P, BBIProcessError<BedValueError>>> =
                     runtime.spawn(async move {
                         let mut next_val: Option<Result<(&str, V), BedValueError>> = None;
+
+
+                        if p.is_none() {
+                            // Skip processing this chromosome since the processor is `None`
+                            println!("Skipping chromosome: {}", curr_chrom);
+                            return Ok(p)
+                        }
+                
+                        let mut p = p.unwrap(); // Unwrap the processor since we know it exists
+                
 
                         loop {
                             let curr_value = match next_val.take() {
