@@ -128,7 +128,7 @@ impl<E: Error> From<ProcessDataError> for BBIProcessError<E> {
     fn from(value: ProcessDataError) -> Self {
         match value {
             ProcessDataError::InvalidInput(e) => BBIProcessError::InvalidInput(e),
-            ProcessDataError::InvalidChromosome(e, _clip) => BBIProcessError::InvalidChromosome(e),
+            ProcessDataError::InvalidChromosome(e) => BBIProcessError::InvalidChromosome(e),
             ProcessDataError::IoError(e) => BBIProcessError::IoError(e),
         }
     }
@@ -574,7 +574,7 @@ pub trait BBIDataSource: Sized {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,
@@ -718,7 +718,7 @@ pub enum ProcessDataError {
     #[error("{}", .0)]
     InvalidInput(String),
     #[error("{}", .0)]
-    InvalidChromosome(String, bool),
+    InvalidChromosome(String),
     #[error("{}", .0)]
     IoError(#[from] io::Error),
 }
@@ -829,8 +829,7 @@ pub(crate) fn write_vals<
                 return Err(ProcessDataError::InvalidChromosome(format!(
                     "Input bedGraph contains chromosome that isn't in the input chrom sizes: {}",
                     chrom
-                ),
-                options.clip
+                )
             ));
             }
         };
