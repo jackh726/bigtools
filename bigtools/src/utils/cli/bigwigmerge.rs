@@ -351,7 +351,7 @@ impl BBIDataSource for ChromGroupReadImpl {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,

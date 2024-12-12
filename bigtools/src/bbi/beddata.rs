@@ -368,7 +368,7 @@ mod tests {
                 Ok(())
             }
         }
-        let mut start_processing = |_: String| Ok(TestBBIDataProcessor::create(()));
+        let mut start_processing = |_: String| Ok(Some(TestBBIDataProcessor::create(())));
         let mut advance = |p: TestBBIDataProcessor| {
             counts.push(p.count);
             let _ = p.destroy();
