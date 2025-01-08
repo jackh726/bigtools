@@ -67,7 +67,7 @@ pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
     let bigbed = BigBedRead::open_file(&bigbedpath)?;
     let bed = File::create(bedpath)?;
 
-    if args.start.is_some() || args.end.is_some() & args.chrom.is_none() {
+    if (args.start.is_some() || args.end.is_some()) && args.chrom.is_none() {
         eprintln!("Cannot specify --start or --end without specifying --chrom.");
         return Ok(());
     }

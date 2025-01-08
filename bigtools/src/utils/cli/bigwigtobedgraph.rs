@@ -63,7 +63,7 @@ pub fn bigwigtobedgraph(args: BigWigToBedGraphArgs) -> Result<(), Box<dyn Error>
     let bigwig = BigWigRead::open_file(&bigwigpath)?;
     let bedgraph = File::create(bedgraphpath)?;
 
-    if args.start.is_some() || args.end.is_some() & args.chrom.is_none() {
+    if (args.start.is_some() || args.end.is_some()) && args.chrom.is_none() {
         eprintln!("Cannot specify --start or --end without specifying --chrom.");
         return Ok(());
     }
