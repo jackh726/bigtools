@@ -105,7 +105,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                 // The first value is an error
                 Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
                 // There are no values at all
-                None => return Ok(()),
+                None => return Err(BBIProcessError::SourceError(BedValueError::InvalidInput("Input bedGraph is empty.".to_string()))),
                 // The next value is the first
                 Some(Ok((chrom, val))) => {
                     let chrom = chrom.to_string();
