@@ -21,7 +21,7 @@ use super::BBIWriteArgs;
     long_about = None,
 )]
 pub struct BedToBigBedArgs {
-    /// The bedGraph to convert to a bigbed.
+    /// The bed to convert to a bigbed. Can use `-`, `stdin` or `/dev/stdin` to read from stdin.
     pub bed: String,
 
     /// A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.
@@ -108,7 +108,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
     };
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    if bedpath == "-" || bedpath == "stdin" {
+    if bedpath == "-" || bedpath == "stdin" || bedpath == "/dev/stdin" {
         if let Some(file) = args.autosql.as_ref() {
             outb.autosql = Some(std::fs::read_to_string(file)?);
         }
