@@ -18,7 +18,7 @@ use super::BBIWriteArgs;
     long_about = "Converts an input bedGraph to a bigWig. Can be multi-threaded for substantial speedups. Note that ~11 temporary files are created/maintained."
 )]
 pub struct BedGraphToBigWigArgs {
-    /// The bedgraph to convert to a bigwig. Can use `-` or `stdin` to read from stdin.
+    /// The bedgraph to convert to a bigwig. Can use `-`, `stdin` or `/dev/stdin` to read from stdin.
     pub bedgraph: String,
 
     /// A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.
@@ -99,7 +99,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
     };
 
     let allow_out_of_order_chroms = !matches!(outb.options.input_sort_type, InputSortType::ALL);
-    if bedgraphpath == "-" || bedgraphpath == "stdin" {
+    if bedgraphpath == "-" || bedgraphpath == "stdin" || bedgraphpath == "/dev/stdin" {
         let stdin = std::io::stdin().lock();
         let vals = BedParserStreamingIterator::from_bedgraph_file(stdin, allow_out_of_order_chroms);
         outb.write(vals, runtime)?;
