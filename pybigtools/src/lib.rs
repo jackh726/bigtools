@@ -463,14 +463,22 @@ fn to_array<I: Iterator<Item = Result<Value, _BBIReadError>>>(
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
-    v.fill(missing);
+    v.fill(f64::NAN);
     for interval in iter {
         let interval = interval?;
         let interval_start = ((interval.start as i32) - start) as usize;
         let interval_end = ((interval.end as i32) - start) as usize;
         for i in interval_start..interval_end {
-            *v.index_mut(i) += interval.value as f64;
+            let val = *v.index_mut(i);
+            *v.index_mut(i) = if val.is_nan() {
+                interval.value as f64
+            } else {
+                val + interval.value as f64
+            };
         }
+    }
+    for val in v.iter_mut() {
+        *val = if val.is_nan() { missing } else { *val };
     }
     Ok(())
 }
@@ -716,14 +724,18 @@ fn to_entry_array<I: Iterator<Item = Result<BedEntry, _BBIReadError>>>(
     mut v: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), _BBIReadError> {
     assert_eq!(v.len(), (end - start) as usize);
-    v.fill(missing);
+    v.fill(f64::NAN);
     for interval in iter {
         let interval = interval?;
         let interval_start = ((interval.start as i32) - start) as usize;
         let interval_end = ((interval.end as i32) - start) as usize;
         for i in interval_start..interval_end {
-            *v.index_mut(i) += 1.0;
+            let val = *v.index_mut(i);
+            *v.index_mut(i) = if val.is_nan() { 1.0 } else { val + 1.0 };
         }
+    }
+    for val in v.iter_mut() {
+        *val = if val.is_nan() { missing } else { *val };
     }
     Ok(())
 }

@@ -335,6 +335,8 @@ def test_values_binned_missing_oob(bw, bb):
     x = bb.values("chr21", -10, 10, 20, "mean", exact=True, missing=0.0, oob=0.0)
     assert x[0] == 0.0
 
+    assert pytest.approx(bw.values("chr17", 59890, 59900)[9], 0.0001) == 0.06792
+    assert pytest.approx(bw.values("chr17", 59890, 59900, missing=np.nan)[9], 0.0001) == 0.06792
 
 def test_values_binned_estimate_differences(bw, bb):
     # Some differences in estimates between pybigtools to other libs
