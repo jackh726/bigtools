@@ -1094,6 +1094,7 @@ pub(crate) fn write_zoom_vals<
                 reduced_size as u64 > data_size / 2
             })
             .take(options.max_zooms as usize)
+            .take_while(|s| s.0 <= u32::MAX as u64)
             .map(|s| s.0 as u32)
             .collect(),
     };
