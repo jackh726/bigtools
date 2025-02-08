@@ -335,12 +335,13 @@ where
             }
         }
 
+        let mut max_data_len = 0;
         const DATA_SIZE: usize = 50000;
         loop {
             let current_start = self.next_start;
             self.next_start = current_start + DATA_SIZE as u32;
 
-            let mut data = vec![0f32; DATA_SIZE];
+            let mut data = vec![0f64; DATA_SIZE];
             let mut max_sections: usize = 0;
             let mut all_none = true;
             'sections: for (section, last) in &mut self.sections {
@@ -366,8 +367,9 @@ where
                     let data_end = DATA_SIZE.min((next_val.end - current_start) as usize);
                     let value = next_val.value;
                     for i in &mut data[data_start..data_end] {
-                        *i += value
+                        *i += value as f64
                     }
+                    max_data_len = max_data_len.max(data_end);
                     max_sections += 1;
                     if (next_val.end - current_start) as usize >= DATA_SIZE {
                         *last = Some(next_val);
@@ -378,32 +380,23 @@ where
 
             // TODO: coverage so can take average, or 'real' zeros
             let mut next_sections: Vec<Value> = Vec::with_capacity(max_sections * 2);
-            let mut current: Option<(u32, u32, f32)> = None;
-            for (idx, i) in data[..].iter().enumerate() {
+            let mut current: Option<(u32, u32, f64)> = None;
+            for (idx, i) in data[..max_data_len].iter().enumerate() {
+                let idx = idx as u32;
                 match &mut current {
-                    None => {
-                        current = Some((
-                            idx as u32 + current_start,
-                            idx as u32 + current_start + 1,
-                            *i,
-                        ))
-                    }
+                    None => current = Some((idx + current_start, idx + current_start + 1, *i)),
                     Some(c) => {
-                        if (c.2 - *i).abs() < std::f32::EPSILON {
+                        if c.2 == *i {
                             c.1 += 1;
                         } else {
                             if c.2 != 0.0 {
                                 next_sections.push(Value {
                                     start: c.0,
                                     end: c.1,
-                                    value: c.2,
+                                    value: c.2 as f32,
                                 });
                             }
-                            current = Some((
-                                idx as u32 + current_start,
-                                idx as u32 + current_start + 1,
-                                *i,
-                            ));
+                            current = Some((idx + current_start, idx + current_start + 1, *i));
                         }
                     }
                 }
@@ -413,7 +406,7 @@ where
                     next_sections.push(Value {
                         start: c.0,
                         end: c.1,
-                        value: c.2,
+                        value: c.2 as f32,
                     });
                 }
             }
