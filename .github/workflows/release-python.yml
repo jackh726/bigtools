@@ -21,9 +21,9 @@ jobs:
         command: sdist
         args: --out dist --manifest-path pybigtools/Cargo.toml
     - name: Upload sdist
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: wheels
+        name: wheels-sdist
         path: dist
 
   linux:
@@ -50,9 +50,9 @@ jobs:
           #sccache: 'true'
           manylinux: '2_28'
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-linux-${{ matrix.target.target }}
           path: dist
     
   windows:
@@ -75,9 +75,9 @@ jobs:
           args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
           #sccache: 'true'
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-windows-${{ matrix.target }}
           path: dist
     
   macos:
@@ -99,9 +99,9 @@ jobs:
           args: --release --out dist --find-interpreter --manifest-path pybigtools/Cargo.toml
           #sccache: 'true'
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-         name: wheels
+         name: wheels-macos-${{ matrix.target }}
          path: dist
 
   publish:
@@ -114,11 +114,13 @@ jobs:
       needs: [linux, windows, macos, sdist]
   
       steps:
-        - uses: actions/download-artifact@v3
+        - uses: actions/download-artifact@v4
           with:
-            name: wheels
+            path: wheels
+            pattern: wheels-*
+            merge-multiple: true
         - name: Publish to PyPI
           uses: PyO3/maturin-action@v1
           with:
             command: upload
-            args: --skip-existing *
+            args: --skip-existing wheels/*
