@@ -19,26 +19,25 @@ use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, Summary, ZoomIntervalError};
 
-pub struct IntervalIter<I, R, B> {
+pub struct BigBedIntervalIter<R, B> {
     r: std::marker::PhantomData<R>,
     bigbed: B,
     known_offset: u64,
-    blocks: I,
+    blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<BedEntry>>,
     expected_chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<I, R> Into<BigBedRead<R>> for IntervalIter<I, R, BigBedRead<R>> {
+impl<R> Into<BigBedRead<R>> for BigBedIntervalIter<R, BigBedRead<R>> {
     fn into(self) -> BigBedRead<R> {
         self.bigbed
     }
 }
 
-impl<I, R, B> Iterator for IntervalIter<I, R, B>
+impl<R, B> Iterator for BigBedIntervalIter<R, B>
 where
-    I: Iterator<Item = Block> + Send,
     R: BBIFileRead,
     B: BorrowMut<BigBedRead<R>>,
 {
@@ -268,10 +267,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<
-        IntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, &'a mut BigBedRead<R>>,
-        BBIReadError,
-    > {
+    ) -> Result<BigBedIntervalIter<R, &'a mut BigBedRead<R>>, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
@@ -282,7 +278,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
             .find(|&x| x.name == chrom_name)
             .unwrap()
             .id;
-        Ok(IntervalIter {
+        Ok(BigBedIntervalIter {
             r: std::marker::PhantomData,
             bigbed: self,
             known_offset: 0,
@@ -302,8 +298,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<IntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, BigBedRead<R>>, BBIReadError>
-    {
+    ) -> Result<BigBedIntervalIter<R, BigBedRead<R>>, BBIReadError> {
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
@@ -314,7 +309,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
             .find(|&x| x.name == chrom_name)
             .unwrap()
             .id;
-        Ok(IntervalIter {
+        Ok(BigBedIntervalIter {
             r: std::marker::PhantomData,
             bigbed: self,
             known_offset: 0,
@@ -334,10 +329,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<
-        ZoomIntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, &'a mut BigBedRead<R>>,
-        ZoomIntervalError,
-    > {
+    ) -> Result<ZoomIntervalIter<BigBedRead<R>, &'a mut BigBedRead<R>>, ZoomIntervalError> {
         let cir_tree = self
             .zoom_cir_tree(reduction_level)
             .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
@@ -362,10 +354,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<
-        ZoomIntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, BigBedRead<R>>,
-        ZoomIntervalError,
-    > {
+    ) -> Result<ZoomIntervalIter<BigBedRead<R>, BigBedRead<R>>, ZoomIntervalError> {
         let cir_tree = self
             .zoom_cir_tree(reduction_level)
             .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;

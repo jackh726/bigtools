@@ -57,26 +57,25 @@ use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalError};
 
-pub struct IntervalIter<I, R, B> {
+pub struct BigWigIntervalIter<R, B> {
     r: std::marker::PhantomData<R>,
     bigwig: B,
     known_offset: u64,
-    blocks: I,
+    blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<Value>>,
     chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<I, R> Into<BigWigRead<R>> for IntervalIter<I, R, BigWigRead<R>> {
+impl<R> Into<BigWigRead<R>> for BigWigIntervalIter<R, BigWigRead<R>> {
     fn into(self) -> BigWigRead<R> {
         self.bigwig
     }
 }
 
-impl<I, R, B> Iterator for IntervalIter<I, R, B>
+impl<R, B> Iterator for BigWigIntervalIter<R, B>
 where
-    I: Iterator<Item = Block> + Send,
     R: BBIFileRead,
     B: BorrowMut<BigWigRead<R>>,
 {
@@ -293,14 +292,11 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<
-        IntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, &'a mut BigWigRead<R>>,
-        BBIReadError,
-    > {
+    ) -> Result<BigWigIntervalIter<R, &'a mut BigWigRead<R>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
-        Ok(IntervalIter {
+        Ok(BigWigIntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
             known_offset: 0,
@@ -320,12 +316,11 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<IntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, BigWigRead<R>>, BBIReadError>
-    {
+    ) -> Result<BigWigIntervalIter<R, BigWigRead<R>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
-        Ok(IntervalIter {
+        Ok(BigWigIntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
             known_offset: 0,
@@ -345,10 +340,7 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<
-        ZoomIntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, &'a mut BigWigRead<R>>,
-        ZoomIntervalError,
-    > {
+    ) -> Result<ZoomIntervalIter<BigWigRead<R>, &'a mut BigWigRead<R>>, ZoomIntervalError> {
         let cir_tree = self.zoom_cir_tree(reduction_level)?;
 
         let chrom = self.info.chrom_id(chrom_name)?;
@@ -372,10 +364,7 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<
-        ZoomIntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, BigWigRead<R>>,
-        ZoomIntervalError,
-    > {
+    ) -> Result<ZoomIntervalIter<BigWigRead<R>, BigWigRead<R>>, ZoomIntervalError> {
         let cir_tree = self.zoom_cir_tree(reduction_level)?;
 
         let chrom = self.info.chrom_id(chrom_name)?;

@@ -1399,31 +1399,37 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
     Ok(records.into_iter())
 }
 
-pub struct ZoomIntervalIter<I, R, B> {
+pub struct ZoomIntervalIter<R, B> {
     _r: std::marker::PhantomData<R>,
     bbifile: B,
     known_offset: u64,
-    blocks: I,
+    blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<ZoomRecord>>,
     chrom: u32,
     start: u32,
     end: u32,
 }
 
-impl<I, R> Into<BigWigRead<R>> for ZoomIntervalIter<I, BigWigRead<R>, BigWigRead<R>> {
+impl<R> Into<BigWigRead<R>> for ZoomIntervalIter<BigWigRead<R>, BigWigRead<R>> {
     fn into(self) -> BigWigRead<R> {
         self.bbifile
     }
 }
 
-impl<I, R> Into<BigBedRead<R>> for ZoomIntervalIter<I, BigBedRead<R>, BigBedRead<R>> {
+impl<R> Into<BigBedRead<R>> for ZoomIntervalIter<BigBedRead<R>, BigBedRead<R>> {
     fn into(self) -> BigBedRead<R> {
         self.bbifile
     }
 }
 
-impl<I, R, B> ZoomIntervalIter<I, R, B> {
-    pub fn new(bbifile: B, blocks: I, chrom: u32, start: u32, end: u32) -> Self {
+impl<R, B> ZoomIntervalIter<R, B> {
+    pub fn new(
+        bbifile: B,
+        blocks: std::vec::IntoIter<Block>,
+        chrom: u32,
+        start: u32,
+        end: u32,
+    ) -> Self {
         ZoomIntervalIter {
             _r: std::marker::PhantomData,
             bbifile,
@@ -1437,9 +1443,8 @@ impl<I, R, B> ZoomIntervalIter<I, R, B> {
     }
 }
 
-impl<I, R, B> Iterator for ZoomIntervalIter<I, R, B>
+impl<R, B> Iterator for ZoomIntervalIter<R, B>
 where
-    I: Iterator<Item = Block> + Send,
     R: BBIRead,
     B: BorrowMut<R>,
 {
