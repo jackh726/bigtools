@@ -10,7 +10,7 @@ use bytes::{Buf, BytesMut};
 use itertools::Itertools;
 use thiserror::Error;
 
-use crate::bbi::{BBIFile, BedEntry, ZoomRecord};
+use crate::bbi::{BBIFile, BedEntry};
 use crate::bbiread::{
     read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
     ZoomIntervalIter,
@@ -19,7 +19,7 @@ use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, Summary, ZoomIntervalError};
 
-struct IntervalIter<I, R, B> {
+pub struct IntervalIter<I, R, B> {
     r: std::marker::PhantomData<R>,
     bigbed: B,
     known_offset: u64,
@@ -268,7 +268,10 @@ impl<R: BBIFileRead> BigBedRead<R> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + 'a, BBIReadError> {
+    ) -> Result<
+        IntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, &'a mut BigBedRead<R>>,
+        BBIReadError,
+    > {
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
         // TODO: this is only for asserting that the chrom is what we expect
@@ -299,7 +302,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<BedEntry, BBIReadError>> + Into<Self>, BBIReadError>
+    ) -> Result<IntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, BigBedRead<R>>, BBIReadError>
     {
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
@@ -331,8 +334,10 @@ impl<R: BBIFileRead> BigBedRead<R> {
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
-    {
+    ) -> Result<
+        ZoomIntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, &'a mut BigBedRead<R>>,
+        ZoomIntervalError,
+    > {
         let cir_tree = self
             .zoom_cir_tree(reduction_level)
             .map_err(|_| ZoomIntervalError::ReductionLevelNotFound)?;
@@ -340,11 +345,13 @@ impl<R: BBIFileRead> BigBedRead<R> {
         let chrom = self.info.chrom_id(chrom_name)?;
 
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
-        Ok(ZoomIntervalIter::<
-            std::vec::IntoIter<Block>,
-            BigBedRead<R>,
-            &mut BigBedRead<R>,
-        >::new(self, blocks.into_iter(), chrom, start, end))
+        Ok(ZoomIntervalIter::new(
+            self,
+            blocks.into_iter(),
+            chrom,
+            start,
+            end,
+        ))
     }
 
     /// For a given chromosome, start, and end, returns an `Iterator` of the
@@ -356,7 +363,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
         end: u32,
         reduction_level: u32,
     ) -> Result<
-        impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Into<Self>,
+        ZoomIntervalIter<std::vec::IntoIter<Block>, BigBedRead<R>, BigBedRead<R>>,
         ZoomIntervalError,
     > {
         let cir_tree = self

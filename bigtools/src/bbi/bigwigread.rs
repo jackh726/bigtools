@@ -48,7 +48,7 @@ use byteordered::{ByteOrdered, Endianness};
 use bytes::{Buf, BytesMut};
 use thiserror::Error;
 
-use crate::bbi::{BBIFile, Summary, Value, ZoomRecord};
+use crate::bbi::{BBIFile, Summary, Value};
 use crate::bbiread::{
     read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
     ZoomIntervalIter,
@@ -57,7 +57,7 @@ use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
 use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalError};
 
-struct IntervalIter<I, R, B> {
+pub struct IntervalIter<I, R, B> {
     r: std::marker::PhantomData<R>,
     bigwig: B,
     known_offset: u64,
@@ -293,7 +293,10 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + 'a, BBIReadError> {
+    ) -> Result<
+        IntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, &'a mut BigWigRead<R>>,
+        BBIReadError,
+    > {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
@@ -317,7 +320,8 @@ where
         chrom_name: &str,
         start: u32,
         end: u32,
-    ) -> Result<impl Iterator<Item = Result<Value, BBIReadError>> + Into<Self>, BBIReadError> {
+    ) -> Result<IntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, BigWigRead<R>>, BBIReadError>
+    {
         let chrom = self.info.chrom_id(chrom_name)?;
         let cir_tree = self.full_data_cir_tree()?;
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
@@ -341,19 +345,23 @@ where
         start: u32,
         end: u32,
         reduction_level: u32,
-    ) -> Result<impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + 'a, ZoomIntervalError>
-    {
+    ) -> Result<
+        ZoomIntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, &'a mut BigWigRead<R>>,
+        ZoomIntervalError,
+    > {
         let cir_tree = self.zoom_cir_tree(reduction_level)?;
 
         let chrom = self.info.chrom_id(chrom_name)?;
 
         let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
 
-        Ok(ZoomIntervalIter::<
-            std::vec::IntoIter<Block>,
-            BigWigRead<R>,
-            &mut BigWigRead<R>,
-        >::new(self, blocks.into_iter(), chrom, start, end))
+        Ok(ZoomIntervalIter::new(
+            self,
+            blocks.into_iter(),
+            chrom,
+            start,
+            end,
+        ))
     }
 
     /// For a given chromosome, start, and end, returns an `Iterator` of the
@@ -365,7 +373,7 @@ where
         end: u32,
         reduction_level: u32,
     ) -> Result<
-        impl Iterator<Item = Result<ZoomRecord, BBIReadError>> + Into<Self>,
+        ZoomIntervalIter<std::vec::IntoIter<Block>, BigWigRead<R>, BigWigRead<R>>,
         ZoomIntervalError,
     > {
         let cir_tree = self.zoom_cir_tree(reduction_level)?;

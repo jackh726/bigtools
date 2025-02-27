@@ -1399,7 +1399,7 @@ pub(crate) fn get_zoom_block_values<B: BBIRead>(
     Ok(records.into_iter())
 }
 
-pub(crate) struct ZoomIntervalIter<I, R, B> {
+pub struct ZoomIntervalIter<I, R, B> {
     _r: std::marker::PhantomData<R>,
     bbifile: B,
     known_offset: u64,
