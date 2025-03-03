@@ -192,16 +192,6 @@ impl<R> BigWigRead<R> {
         &self.info.chrom_info
     }
 
-    /// Returns a reference to the underlying reader.
-    pub fn get_ref(&self) -> &R {
-        &self.read
-    }
-
-    /// Returns a mutable reference to the underlying reader.
-    pub fn get_mut(&mut self) -> &mut R {
-        &mut self.read
-    }
-
     /// Consumes this `BigWigRead`, returning the underlying reader.
     pub fn into_inner(self) -> R {
         self.read
