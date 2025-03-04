@@ -191,6 +191,11 @@ impl<R> BigWigRead<R> {
     pub fn chroms(&self) -> &[ChromInfo] {
         &self.info.chrom_info
     }
+
+    /// Consumes this `BigWigRead`, returning the underlying reader.
+    pub fn into_inner(self) -> R {
+        self.read
+    }
 }
 
 impl BigWigRead<ReopenableFile> {

@@ -146,6 +146,11 @@ impl<R> BigBedRead<R> {
     pub fn chroms(&self) -> &[ChromInfo] {
         &self.info.chrom_info
     }
+
+    /// Consumes this `BigWigRead`, returning the underlying reader.
+    pub fn into_inner(self) -> R {
+        self.read
+    }
 }
 
 impl BigBedRead<ReopenableFile> {
@@ -188,6 +193,11 @@ impl<R: BBIFileRead> BigBedRead<R> {
         }
 
         Ok(BigBedRead { info, read })
+    }
+
+    /// Does *not* check if the passed `R` matches the provided info (including if the `R` is a bigBed at all!)
+    pub fn with_info(info: BBIFileInfo, read: R) -> Self {
+        BigBedRead { info, read }
     }
 
     /// Reads the autosql from this bigBed
