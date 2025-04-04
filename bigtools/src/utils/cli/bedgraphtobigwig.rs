@@ -35,7 +35,7 @@ pub struct BedGraphToBigWigArgs {
 
     /// If set, indicates that only a single pass should be done on the input file. This is most useful
     /// on large files in order to reduce total time. This automatically happens when the input is `stdin`.
-    #[arg(long)]
+    #[arg(short = 'c', long)]
     #[arg(default_value_t = false)]
     pub single_pass: bool,
 
@@ -87,6 +87,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
     outb.options.input_sort_type = input_sort_type;
     outb.options.block_size = args.write_args.block_size;
     outb.options.inmemory = args.write_args.inmemory;
+    outb.options.clip = args.write_args.clip;
 
     let runtime = if nthreads == 1 {
         outb.options.channel_size = 0;
