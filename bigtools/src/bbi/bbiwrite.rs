@@ -763,10 +763,12 @@ pub(crate) fn write_vals<
         let value = (section_iter, buf, Some(write));
         (size, value)
     };
+    let max_zoom_size = chrom_sizes.values().copied().max().unwrap_or(u32::MAX);
     let zoom_sizes: Vec<u32> = match &options.manual_zoom_sizes {
         Some(zooms) => zooms.clone(),
         None => std::iter::successors(Some(options.initial_zoom_size), |z| Some(z * 4))
             .take(options.max_zooms as usize)
+            .take_while(|s| *s <= max_zoom_size)
             .collect(),
     };
     let zoom_sizes: Vec<u32> = zoom_sizes.into_iter().filter(|z| *z != 0).collect();
@@ -1079,6 +1081,7 @@ pub(crate) fn write_zoom_vals<
     zoom_counts: BTreeMap<u64, u64>,
     mut file: BufWriter<W>,
     data_size: u64,
+    max_chrom_size: u32,
 ) -> Result<(BufWriter<W>, Vec<ZoomHeader>, usize), BBIProcessError<V::Error>> {
     let min_first_zoom_size = average_size.max(10) * 4;
     let zooms: Vec<u32> = match &options.manual_zoom_sizes {
@@ -1094,7 +1097,7 @@ pub(crate) fn write_zoom_vals<
                 reduced_size as u64 > data_size / 2
             })
             .take(options.max_zooms as usize)
-            .take_while(|s| s.0 <= u32::MAX as u64)
+            .take_while(|s| s.0 <= max_chrom_size as u64)
             .map(|s| s.0 as u32)
             .collect(),
     };
@@ -1237,6 +1240,7 @@ pub(crate) fn write_zoom_vals<
         index_tree_offset: None,
     });
 
+    let mut last_zoom_data_size = first_zoom_index_offset - first_zoom_data_offset;
     while let Some(zoom) = zip.next() {
         let (zoom_fut, data) = zoom;
         let (real_file, sections, uncompress_buf_size) = runtime.block_on(zoom_fut).unwrap()?;
@@ -1244,6 +1248,14 @@ pub(crate) fn write_zoom_vals<
         let zoom_data_offset = file.tell()?;
         // First, we can drop the writer - no more data
         drop(real_file);
+
+        if let Ok(zoom_data_size) = data.1.len() {
+            if zoom_data_size >= last_zoom_data_size {
+                break;
+            }
+            last_zoom_data_size = zoom_data_size;
+        }
+
         let zoom_sections = sections.into_iter().flatten();
         let mut current_offset = zoom_data_offset;
         let sections_iter = zoom_sections.map(|mut section| {

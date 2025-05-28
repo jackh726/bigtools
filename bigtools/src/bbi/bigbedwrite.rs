@@ -187,6 +187,8 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
         let (chrom_ids, summary, zoom_counts, mut file, raw_sections_iter, mut uncompress_buf_size) =
             output?;
 
+        let max_chrom_size = self.chrom_sizes.values().copied().max().unwrap_or(u32::MAX);
+
         let chrom_ids = chrom_ids.get_map();
         let (data_size, chrom_index_start, index_start, _total_sections) = bbiwrite::write_mid(
             &mut file,
@@ -208,6 +210,7 @@ impl<W: Write + Seek + Send + 'static> BigBedWrite<W> {
             zoom_counts,
             file,
             data_size,
+            max_chrom_size,
         );
         let (mut file, zoom_entries, zoom_uncompress_buf_size) = output?;
         uncompress_buf_size = uncompress_buf_size.max(zoom_uncompress_buf_size);
