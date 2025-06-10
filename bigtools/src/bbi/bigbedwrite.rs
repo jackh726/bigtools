@@ -263,7 +263,7 @@ async fn process_val(
             current_val.start, current_val.end
         )));
     }
-    if current_val.start >= chrom_length {
+    if current_val.end >= chrom_length {
         return Err(ProcessDataError::InvalidInput(format!(
             "Invalid bed: `{}` is greater than the chromosome ({}) length ({})",
             current_val.start, chrom, chrom_length
