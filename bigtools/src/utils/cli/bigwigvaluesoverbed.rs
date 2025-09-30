@@ -19,10 +19,12 @@ pub struct BigWigValuesOverBedArgs {
     /// The input bigwig file
     pub bigwig: String,
 
-    /// The input bed file
+    /// The input bed file.
+    /// Specifying `-` will write to `stdout`.
     pub bedin: String,
 
-    /// The output bed file
+    /// The output bed file.
+    /// Specifying `-` will write to `stdout`.
     pub output: String,
 
     /// If set, the output file will print the name of each bed entry (or `chrom:start-end` if names are not unique) in the first column of each output line.
@@ -52,7 +54,6 @@ pub fn bigwigvaluesoverbed(args: BigWigValuesOverBedArgs) -> Result<(), Box<dyn 
         return Ok(());
     }
 
-    let out = File::create(outputpath)?;
     let options = Options {
         withnames,
         delimiter,
@@ -64,16 +65,43 @@ pub fn bigwigvaluesoverbed(args: BigWigValuesOverBedArgs) -> Result<(), Box<dyn 
             use crate::utils::remote_file::RemoteFile;
             let f = RemoteFile::new(&bigwigpath);
             let inbigwig = BigWigRead::open(f)?;
-            write(bedin, inbigwig, out, options)?;
+            match outputpath.as_str() {
+                "-" => {
+                    let stdout = io::stdout().lock();
+                    write(bedin, inbigwig, stdout, options)?;
+                }
+                _ => {
+                    let file = File::create(outputpath)?;
+                    write(bedin, inbigwig, file, options)?;
+                }
+            }
         } else {
             let inbigwig = BigWigRead::open_file(&bigwigpath)?.cached();
-            write(bedin, inbigwig, out, options)?;
+            match outputpath.as_str() {
+                "-" => {
+                    let stdout = io::stdout().lock();
+                    write(bedin, inbigwig, stdout, options)?;
+                }
+                _ => {
+                    let file = File::create(outputpath)?;
+                    write(bedin, inbigwig, file, options)?;
+                }
+            }
         }
     }
     #[cfg(not(feature = "remote"))]
     {
         let inbigwig = BigWigRead::open_file(&bigwigpath)?.cached();
-        write(&bedin, inbigwig, out, options)?;
+        match outputpath.as_str() {
+            "-" => {
+                let stdout = io::stdout().lock();
+                write(bedin, inbigwig, stdout, options)?;
+            }
+            _ => {
+                let file = File::create(outputpath)?;
+                write(bedin, inbigwig, file, options)?;
+            }
+        }
     }
 
     Ok(())
@@ -84,10 +112,10 @@ struct Options {
     delimiter: String,
 }
 
-fn write<R: BBIFileRead>(
+fn write<R: BBIFileRead, O: Write>(
     bedinpath: &Path,
     mut bigwigin: BigWigRead<R>,
-    out: File,
+    out: O,
     options: Options,
 ) -> Result<(), BBIReadError> {
     let uniquenames = {
