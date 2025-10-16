@@ -24,10 +24,11 @@ pub struct BigWigAverageOverBedArgs {
     /// The input bigwig file
     pub bigwig: String,
 
-    /// The input bed file
+    /// The input bed file.
     pub bedin: String,
 
-    /// The output bed file
+    /// The output bed file.
+    /// Specifying `-` will write to `stdout`.
     pub output: String,
 
     /// Supports three types of options: `interval`, `none`, or a column number (one indexed).
@@ -60,12 +61,13 @@ pub struct BigWigAverageOverBedArgs {
     pub nthreads: usize,
 }
 
-pub fn bigwigaverageoverbed(
+fn bigwigaverageoverbed_impl<O: Write>(
     args: BigWigAverageOverBedArgs,
+    bedoutwriter: O,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let bigwigpath = args.bigwig;
     let bedinpath = args.bedin;
-    let bedoutpath = args.output;
+
     let add_min_max = args.min_max;
 
     let reopen = ReopenableFile {
@@ -74,8 +76,7 @@ pub fn bigwigaverageoverbed(
     };
     let mut inbigwig = BigWigRead::open(reopen)?.cached();
 
-    let outbed = File::create(bedoutpath)?;
-    let mut bedoutwriter: BufWriter<File> = BufWriter::new(outbed);
+    let mut bedoutwriter = BufWriter::new(bedoutwriter);
 
     let name = match args.namecol.as_deref() {
         Some("interval") => Name::Interval,
@@ -310,4 +311,20 @@ pub fn bigwigaverageoverbed(
     }
 
     Ok(())
+}
+
+pub fn bigwigaverageoverbed(
+    args: BigWigAverageOverBedArgs,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let bedoutpath = args.output.clone();
+    match bedoutpath.as_str() {
+        "-" => {
+            let stdout = io::stdout().lock();
+            bigwigaverageoverbed_impl(args, stdout)
+        }
+        _ => {
+            let outbed = File::create(bedoutpath)?;
+            bigwigaverageoverbed_impl(args, outbed)
+        }
+    }
 }

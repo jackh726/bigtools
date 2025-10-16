@@ -20,10 +20,11 @@ use crate::{BBIReadError, BigBedRead, ChromInfo};
     long_about = "Converts an input bigBed to a bed. Can be multi-threaded for substantial speedups. Note for roughly each core, one temporary file will be opened."
 )]
 pub struct BigBedToBedArgs {
-    /// the bigbed to get convert to bed
+    /// The bigbed to get convert to bed.
     pub big_bed: String,
 
-    /// the path of the bed to output to
+    /// The path of the bed to output to.
+    /// Specifying `-` will write to `stdout`.
     pub bed: String,
 
     /// If set, restrict output to given chromosome
@@ -65,7 +66,6 @@ pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
     let nthreads = args.nthreads;
 
     let bigbed = BigBedRead::open_file(&bigbedpath)?;
-    let bed = File::create(bedpath)?;
 
     if (args.start.is_some() || args.end.is_some()) && args.chrom.is_none() {
         eprintln!("Cannot specify --start or --end without specifying --chrom.");
@@ -79,20 +79,52 @@ pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
 
     match args.overlap_bed {
         Some(overlap_bed) => {
-            if !Path::exists(&Path::new(&overlap_bed)) {
+            if !Path::new(&overlap_bed).exists() {
                 eprintln!("Overlap bed file does not exist.");
                 return Ok(());
             }
             let overlap_bed = File::open(overlap_bed)?;
-            write_bed_from_bed(bigbed, bed, overlap_bed)?;
+            match bedpath.as_str() {
+                "-" => {
+                    let stdout = io::stdout().lock();
+                    write_bed_from_bed(bigbed, stdout, overlap_bed)?;
+                }
+                _ => {
+                    let file = File::create(bedpath)?;
+                    write_bed_from_bed(bigbed, file, overlap_bed)?;
+                }
+            }
         }
         None => {
             // Right now, we don't offload decompression to separate threads,
             // so specifying `chrom` effectively means single-threaded
             if nthreads == 1 || args.chrom.is_some() || args.zoom.is_some() {
-                write_bed_singlethreaded(bigbed, bed, args.chrom, args.start, args.end, args.zoom)?;
+                match bedpath.as_str() {
+                    "-" => {
+                        let stdout = io::stdout().lock();
+                        write_bed_singlethreaded(
+                            bigbed, stdout, args.chrom, args.start, args.end, args.zoom,
+                        )?;
+                    }
+                    _ => {
+                        let file = File::create(bedpath)?;
+                        write_bed_singlethreaded(
+                            bigbed, file, args.chrom, args.start, args.end, args.zoom,
+                        )?;
+                    }
+                }
             } else {
-                write_bed(bigbed, bed, args.inmemory, nthreads)?;
+                match bedpath.as_str() {
+                    "-" => {
+                        // FIXME: would be nice to refactor so that each write doesn't need to lock individually
+                        let stdout = io::stdout();
+                        write_bed(bigbed, stdout, args.inmemory, nthreads)?;
+                    }
+                    _ => {
+                        let out_file = File::create(bedpath)?;
+                        write_bed(bigbed, out_file, args.inmemory, nthreads)?;
+                    }
+                }
             }
         }
     }
@@ -100,9 +132,9 @@ pub fn bigbedtobed(args: BigBedToBedArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
+pub fn write_bed_singlethreaded<R: Reopen + SeekableRead, O: Write>(
     mut bigbed: BigBedRead<R>,
-    out_file: File,
+    writer: O,
     chrom: Option<String>,
     start: Option<u32>,
     end: Option<u32>,
@@ -121,7 +153,7 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     } else {
         bigbed.chroms().to_vec()
     };
-    let mut writer = io::BufWriter::with_capacity(32 * 1000, out_file);
+    let mut writer = io::BufWriter::with_capacity(32 * 1000, writer);
     let mut buf: String = String::with_capacity(50); // Estimate
     if let Some(zoom) = zoom {
         if bigbed
@@ -182,9 +214,9 @@ pub fn write_bed_singlethreaded<R: Reopen + SeekableRead>(
     Ok(())
 }
 
-pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
+pub fn write_bed<R: Reopen + SeekableRead + Send + 'static, O: Write + Send + 'static>(
     bigbed: BigBedRead<R>,
-    mut out_file: File,
+    mut writer: O,
     inmemory: bool,
     nthreads: usize,
 ) -> Result<(), BBIReadError> {
@@ -196,10 +228,10 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
     let mut remaining_chroms = bigbed.chroms().to_vec();
     remaining_chroms.reverse();
 
-    async fn file_future<R: SeekableRead + 'static>(
+    async fn file_future<R: SeekableRead + 'static, O: Write + Send + 'static>(
         mut bigbed: BigBedRead<R>,
         chrom: ChromInfo,
-        mut writer: io::BufWriter<TempFileBufferWriter<File>>,
+        mut writer: io::BufWriter<TempFileBufferWriter<O>>,
     ) -> Result<(), BBIReadError> {
         let mut buf: String = String::with_capacity(50); // Estimate
         for raw_val in bigbed.get_interval(&chrom.name, 0, chrom.length)? {
@@ -232,7 +264,7 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
             };
 
             let bigbed = bigbed.reopen()?;
-            let (buf, file): (TempFileBuffer<File>, TempFileBufferWriter<File>) =
+            let (buf, file): (TempFileBuffer<O>, TempFileBufferWriter<O>) =
                 TempFileBuffer::new(inmemory);
             let writer = io::BufWriter::new(file);
             let handle = tokio::task::spawn(file_future(bigbed, chrom, writer));
@@ -259,24 +291,24 @@ pub fn write_bed<R: Reopen + SeekableRead + Send + 'static>(
                 return Ok::<_, BBIReadError>(());
             };
 
-            buf.switch(out_file);
+            buf.switch(writer);
             while !buf.is_real_file_ready() {
                 tokio::task::yield_now().await;
             }
-            out_file = buf.await_real_file();
+            writer = buf.await_real_file();
         }
     })?;
 
     Ok(())
 }
 
-pub fn write_bed_from_bed<R: Reopen + SeekableRead + Send + 'static>(
+pub fn write_bed_from_bed<R: Reopen + SeekableRead, O: Write>(
     mut bigbed: BigBedRead<R>,
-    out_file: File,
+    writer: O,
     bed: File,
 ) -> Result<(), BBIReadError> {
     let mut bedstream = StreamingLineReader::new(BufReader::new(bed));
-    let mut writer = io::BufWriter::new(out_file);
+    let mut writer = io::BufWriter::new(writer);
 
     let mut buf = String::with_capacity(50); // Estimate
     while let Some(line) = bedstream.read() {
