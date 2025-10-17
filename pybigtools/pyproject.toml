@@ -46,7 +46,7 @@ documentation = "https://bigtools.readthedocs.io"
 repository = "https://github.com/jackh726/bigtools"
 
 [tool.maturin]
-python-source = "pybigtools"
+python-source = "."
 
 [tool.uv]
 default-groups = ["dev"]
