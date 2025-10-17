@@ -63,6 +63,12 @@ pub struct BBIWriteArgs {
     #[arg(long)]
     #[arg(default_value_t = false)]
     pub inmemory: bool,
+
+    /// If set, just issue warning messages rather than dying if bedgraph
+    /// file contains chromosomes that are not in the chrom.sizes file.
+    #[arg(long)]
+    #[arg(default_value_t = false)]
+    pub clip: bool,
 }
 
 macro_rules! compat_replace_mut {

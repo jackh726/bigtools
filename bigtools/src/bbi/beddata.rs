@@ -91,7 +91,7 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,
@@ -109,7 +109,20 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                 // The next value is the first
                 Some(Ok((chrom, val))) => {
                     let chrom = chrom.to_string();
-                    let mut p = start_processing(chrom.clone())?;
+                    
+                    let p = match start_processing(chrom.clone()) {
+                        Ok(Some(processor)) => processor,
+                        Ok(None) => {
+                            // skip this chromosome
+                            let next_val = self.bed_data.next();
+                            return match next_val {
+                                Some(Err(e)) => Err(BBIProcessError::SourceError(e)),
+                                Some(Ok(_)) | None => Ok(()),
+                            };
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
+
                     let next_val = self.bed_data.next();
                     let next_val = match next_val {
                         Some(Err(e)) => return Err(BBIProcessError::SourceError(e)),
@@ -120,11 +133,15 @@ impl<S: StreamingBedValues> BBIDataSource for BedParserStreamingIterator<S> {
                         Some(v) if v.0 == chrom => Some(&v.1),
                         _ => None,
                     };
+                    
                     p.do_process(val, next_value).await?;
                     ((chrom, p), next_val)
                 }
             };
             loop {
+                
+                // todo: how to implement the skip logic here?
+
                 next_val = match (&mut curr_state, next_val) {
                     // There are no more values
                     ((_, _), None) => {
@@ -213,7 +230,7 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value> + Send + 'static,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,
@@ -251,11 +268,29 @@ impl<V: Send + 'static> BBIDataSource for BedParserParallelStreamingIterator<V> 
                     parse: self.parse_fn,
                 };
 
-                let mut p = start_processing(curr.1.clone())?;
+                let mut p = match start_processing(curr.1.clone()) {
+                    Ok(processor) => processor,
+                    Ok(None) => {
+                        // Skip and fetch the next chromosome?
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                
                 let curr_chrom = curr.1.clone();
                 let data: tokio::task::JoinHandle<Result<P, BBIProcessError<BedValueError>>> =
                     runtime.spawn(async move {
                         let mut next_val: Option<Result<(&str, V), BedValueError>> = None;
+
+
+                        if p.is_none() {
+                            // Skip processing this chromosome since the processor is `None`
+                            println!("Skipping chromosome: {}", curr_chrom);
+                            return Ok(p)
+                        }
+                
+                        let mut p = p.unwrap(); // Unwrap the processor since we know it exists
+                
 
                         loop {
                             let curr_value = match next_val.take() {
@@ -346,7 +381,7 @@ mod tests {
                 Ok(())
             }
         }
-        let mut start_processing = |_: String| Ok(TestBBIDataProcessor::create(()));
+        let mut start_processing = |_: String| Ok(Some(TestBBIDataProcessor::create(())));
         let mut advance = |p: TestBBIDataProcessor| {
             counts.push(p.count);
             let _ = p.destroy();

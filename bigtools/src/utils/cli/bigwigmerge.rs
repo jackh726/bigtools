@@ -352,7 +352,7 @@ impl BBIDataSource for ChromGroupReadImpl {
 
     fn process_to_bbi<
         P: BBIDataProcessor<Value = Self::Value>,
-        StartProcessing: FnMut(String) -> Result<P, ProcessDataError>,
+        StartProcessing: FnMut(String) -> Result<Option<P>, ProcessDataError>,
         Advance: FnMut(P),
     >(
         &mut self,
@@ -365,7 +365,10 @@ impl BBIDataSource for ChromGroupReadImpl {
                 self.iter.next();
             match next {
                 Some(Ok((chrom, _, mut group))) => {
-                    let mut p = start_processing(chrom)?;
+                    let mut p = match start_processing(chrom) {
+                        Ok(processor) => processor,
+                        Err(e) => return Err(e.into()),
+                    };
 
                     loop {
                         let current_val = match group.iter.next() {
