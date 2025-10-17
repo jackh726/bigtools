@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use pyo3::prelude::*;
 use pyo3::{create_exception, exceptions};
 

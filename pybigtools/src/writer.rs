@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::io;
 
 use bigtools::beddata::BedParserStreamingIterator;
