@@ -50,3 +50,4 @@ python-source = "pybigtools"
 
 [tool.uv]
 default-groups = ["dev"]
+cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}]
