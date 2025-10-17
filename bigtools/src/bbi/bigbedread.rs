@@ -17,7 +17,9 @@ use crate::bbiread::{
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, Summary, ZoomIntervalError};
+use crate::{
+    search_cir_tree, BBIFileRead, CachedBBIFileRead, Summary, ZoomIntervalCursor, ZoomIntervalError,
+};
 
 pub struct BigBedIntervalIter<R, B> {
     r: std::marker::PhantomData<R>,
@@ -25,9 +27,8 @@ pub struct BigBedIntervalIter<R, B> {
     known_offset: u64,
     blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<BedEntry>>,
-    expected_chrom: u32,
-    start: u32,
-    end: u32,
+    // (expected_chrom, start, end)
+    interval: Option<(u32, u32, u32)>,
 }
 
 impl<R> Into<BigBedRead<R>> for BigBedIntervalIter<R, BigBedRead<R>> {
@@ -44,6 +45,9 @@ where
     type Item = Result<BedEntry, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let Some((expected_chrom, start, end)) = self.interval else {
+            return None;
+        };
         loop {
             match &mut self.vals {
                 Some(vals) => match vals.next() {
@@ -61,9 +65,9 @@ where
                         self.bigbed.borrow_mut(),
                         current_block,
                         &mut self.known_offset,
-                        self.expected_chrom,
-                        self.start,
-                        self.end,
+                        expected_chrom,
+                        start,
+                        end,
                     ) {
                         Ok(vals) => {
                             self.vals = Some(vals);
@@ -75,6 +79,32 @@ where
                 }
             }
         }
+    }
+}
+
+pub struct BigBedIntervalCursor<R>(BigBedIntervalIter<R, BigBedRead<R>>);
+
+impl<R: BBIFileRead> BigBedIntervalCursor<R> {
+    pub fn interval(&mut self, chrom_name: &str, start: u32, end: u32) -> Result<(), BBIReadError> {
+        let chrom = self.0.bigbed.info.chrom_id(chrom_name)?;
+        let cir_tree = self.0.bigbed.full_data_cir_tree()?;
+        let blocks = search_cir_tree(
+            &self.0.bigbed.info,
+            &mut self.0.bigbed.read,
+            cir_tree,
+            chrom_name,
+            start,
+            end,
+        )?;
+        self.0.known_offset = 0;
+        self.0.blocks = blocks.into_iter();
+        self.0.vals = None;
+        self.0.interval = Some((chrom, start, end));
+        Ok(())
+    }
+
+    pub fn into_inner(self) -> BigBedRead<R> {
+        self.0.bigbed
     }
 }
 
@@ -294,9 +324,7 @@ impl<R: BBIFileRead> BigBedRead<R> {
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
-            expected_chrom: chrom_ix,
-            start,
-            end,
+            interval: Some((chrom_ix, start, end)),
         })
     }
 
@@ -325,9 +353,18 @@ impl<R: BBIFileRead> BigBedRead<R> {
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
-            expected_chrom: chrom_ix,
-            start,
-            end,
+            interval: Some((chrom_ix, start, end)),
+        })
+    }
+
+    pub fn interval_cursor(self) -> BigBedIntervalCursor<R> {
+        BigBedIntervalCursor(BigBedIntervalIter {
+            r: std::marker::PhantomData,
+            bigbed: self,
+            known_offset: 0,
+            blocks: vec![].into_iter(),
+            vals: None,
+            interval: None,
         })
     }
 
@@ -379,6 +416,10 @@ impl<R: BBIFileRead> BigBedRead<R> {
             start,
             end,
         ))
+    }
+
+    pub fn zoom_interval_cursor(self) -> ZoomIntervalCursor<Self> {
+        ZoomIntervalCursor(ZoomIntervalIter::empty(self))
     }
 }
 

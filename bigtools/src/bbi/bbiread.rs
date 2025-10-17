@@ -1405,9 +1405,8 @@ pub struct ZoomIntervalIter<R, B> {
     known_offset: u64,
     blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<ZoomRecord>>,
-    chrom: u32,
-    start: u32,
-    end: u32,
+    // (chrom, start, end)
+    interval: Option<(u32, u32, u32)>,
 }
 
 impl<R> Into<BigWigRead<R>> for ZoomIntervalIter<BigWigRead<R>, BigWigRead<R>> {
@@ -1436,9 +1435,18 @@ impl<R, B> ZoomIntervalIter<R, B> {
             known_offset: 0,
             blocks,
             vals: None,
-            chrom,
-            start,
-            end,
+            interval: Some((chrom, start, end)),
+        }
+    }
+
+    pub fn empty(bbifile: B) -> Self {
+        ZoomIntervalIter {
+            _r: std::marker::PhantomData,
+            bbifile,
+            known_offset: 0,
+            blocks: vec![].into_iter(),
+            vals: None,
+            interval: None,
         }
     }
 }
@@ -1451,6 +1459,9 @@ where
     type Item = Result<ZoomRecord, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let Some((chrom, start, end)) = self.interval else {
+            return None;
+        };
         loop {
             match &mut self.vals {
                 Some(vals) => match vals.next() {
@@ -1468,9 +1479,9 @@ where
                         file,
                         current_block,
                         &mut self.known_offset,
-                        self.chrom,
-                        self.start,
-                        self.end,
+                        chrom,
+                        start,
+                        end,
                     ) {
                         Ok(vals) => {
                             self.vals = Some(vals);
@@ -1482,5 +1493,33 @@ where
                 }
             }
         }
+    }
+}
+
+pub struct ZoomIntervalCursor<B: BBIRead>(pub(crate) ZoomIntervalIter<B, B>);
+
+impl<B: BBIRead> ZoomIntervalCursor<B> {
+    pub fn interval(
+        &mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+        reduction_level: u32,
+    ) -> Result<(), ZoomIntervalError> {
+        let cir_tree = self.0.bbifile.zoom_cir_tree(reduction_level)?;
+        let chrom = self.0.bbifile.info().chrom_id(chrom_name)?;
+        let (reader, info) = self.0.bbifile.reader_and_info();
+        let blocks = search_cir_tree(info, reader, cir_tree, chrom_name, start, end)?;
+
+        self.0.known_offset = 0;
+        self.0.blocks = blocks.into_iter();
+        self.0.vals = None;
+        self.0.interval = Some((chrom, start, end));
+
+        Ok(())
+    }
+
+    pub fn into_inner(self) -> B {
+        self.0.bbifile
     }
 }

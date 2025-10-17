@@ -55,7 +55,9 @@ use crate::bbiread::{
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
-use crate::{search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalError};
+use crate::{
+    search_cir_tree, BBIFileRead, CachedBBIFileRead, ZoomIntervalCursor, ZoomIntervalError,
+};
 
 pub struct BigWigIntervalIter<R, B> {
     r: std::marker::PhantomData<R>,
@@ -63,9 +65,8 @@ pub struct BigWigIntervalIter<R, B> {
     known_offset: u64,
     blocks: std::vec::IntoIter<Block>,
     vals: Option<std::vec::IntoIter<Value>>,
-    chrom: u32,
-    start: u32,
-    end: u32,
+    // (chrom, start, end)
+    interval: Option<(u32, u32, u32)>,
 }
 
 impl<R> Into<BigWigRead<R>> for BigWigIntervalIter<R, BigWigRead<R>> {
@@ -82,6 +83,9 @@ where
     type Item = Result<Value, BBIReadError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let Some((chrom, start, end)) = self.interval else {
+            return None;
+        };
         loop {
             match &mut self.vals {
                 Some(vals) => match vals.next() {
@@ -99,9 +103,9 @@ where
                         self.bigwig.borrow_mut(),
                         current_block,
                         &mut self.known_offset,
-                        self.chrom,
-                        self.start,
-                        self.end,
+                        chrom,
+                        start,
+                        end,
                     ) {
                         Ok(Some(vals)) => {
                             self.vals = Some(vals);
@@ -114,6 +118,32 @@ where
                 }
             }
         }
+    }
+}
+
+pub struct BigWigIntervalCursor<R>(BigWigIntervalIter<R, BigWigRead<R>>);
+
+impl<R: BBIFileRead> BigWigIntervalCursor<R> {
+    pub fn interval(&mut self, chrom_name: &str, start: u32, end: u32) -> Result<(), BBIReadError> {
+        let chrom = self.0.bigwig.info.chrom_id(chrom_name)?;
+        let cir_tree = self.0.bigwig.full_data_cir_tree()?;
+        let blocks = search_cir_tree(
+            &self.0.bigwig.info,
+            &mut self.0.bigwig.read,
+            cir_tree,
+            chrom_name,
+            start,
+            end,
+        )?;
+        self.0.known_offset = 0;
+        self.0.blocks = blocks.into_iter();
+        self.0.vals = None;
+        self.0.interval = Some((chrom, start, end));
+        Ok(())
+    }
+
+    pub fn into_inner(self) -> BigWigRead<R> {
+        self.0.bigwig
     }
 }
 
@@ -307,9 +337,7 @@ where
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
-            chrom,
-            start,
-            end,
+            interval: Some((chrom, start, end)),
         })
     }
 
@@ -331,9 +359,18 @@ where
             known_offset: 0,
             blocks: blocks.into_iter(),
             vals: None,
-            chrom,
-            start,
-            end,
+            interval: Some((chrom, start, end)),
+        })
+    }
+
+    pub fn interval_cursor(self) -> BigWigIntervalCursor<R> {
+        BigWigIntervalCursor(BigWigIntervalIter {
+            r: std::marker::PhantomData,
+            bigwig: self,
+            known_offset: 0,
+            blocks: vec![].into_iter(),
+            vals: None,
+            interval: None,
         })
     }
 
@@ -383,6 +420,10 @@ where
             start,
             end,
         ))
+    }
+
+    pub fn zoom_interval_cursor(self) -> ZoomIntervalCursor<Self> {
+        ZoomIntervalCursor(ZoomIntervalIter::empty(self))
     }
 
     /// Returns the values between `start` and `end` as a `Vec<f32>`. Any
