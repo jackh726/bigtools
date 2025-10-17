@@ -9,11 +9,6 @@ To set up your environment, from the top-level pybigtools directory:
 uv sync
 ```
 
-Building:
-```sh
-maturin develop --release --uv
-```
-
 Testing:
 ```sh
 cargo test  # Rust code
