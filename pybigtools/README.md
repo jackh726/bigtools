@@ -2,7 +2,7 @@ The `pybigtools` python package wraps the `bigtools` Rust library and allows eff
 
 ## Development
 
-Pybigtools is a mixed Python-Rust project using the pyo3 `maturin` build system to create a Python package. We recommend using `uv` for manage your Python development environment.
+Pybigtools is a mixed Python-Rust project using the pyo3 `maturin` build system to create a Python package. We recommend using `uv` to manage your Python development environment.
 
 To set up your environment, from the top-level pybigtools directory:
 ```sh
