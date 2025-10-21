@@ -9,3 +9,4 @@ html/
 .vscode
 pybigtools/html/
 pybigtools/tests/data/
+pybigtools/pybigtools/*.so
