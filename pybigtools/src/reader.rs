@@ -13,109 +13,9 @@ use pyo3::types::{IntoPyDict, PyAny, PyDict, PyList, PyString, PyTuple};
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use crate::errors::{BBIFileClosed, BBIReadError, ConvertResult};
-use crate::utils::{entries_to_array, intervals_to_array, start_end, BBIReadRaw, Summary};
+use crate::utils::{entries_to_array, intervals_to_array, BBIReadRaw, Summary};
 
 type ValueTuple = (u32, u32, f32);
-
-enum BigWigAverageOverBedStatistics {
-    Size,
-    Bases,
-    Sum,
-    Mean0,
-    Mean,
-    Min,
-    Max,
-}
-
-impl BigWigAverageOverBedStatistics {
-    fn from_str(val: &str) -> Option<BigWigAverageOverBedStatistics> {
-        Some(match val {
-            "size" => BigWigAverageOverBedStatistics::Size,
-            "bases" => BigWigAverageOverBedStatistics::Bases,
-            "sum" => BigWigAverageOverBedStatistics::Sum,
-            "mean0" => BigWigAverageOverBedStatistics::Mean0,
-            "mean" => BigWigAverageOverBedStatistics::Mean,
-            "min" => BigWigAverageOverBedStatistics::Min,
-            "max" => BigWigAverageOverBedStatistics::Max,
-            _ => {
-                return None;
-            }
-        })
-    }
-}
-
-/// This class is an interator for the entries of bigWigAverageOverBed
-#[pyclass(module = "pybigtools")]
-struct BigWigAverageOverBedEntriesIterator {
-    iter: Box<
-        dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
-            + Send,
-    >,
-    usename: bool,
-    stats: Option<Vec<BigWigAverageOverBedStatistics>>,
-    summary_statistics: PyObject,
-}
-
-#[pymethods]
-impl BigWigAverageOverBedEntriesIterator {
-    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigWigAverageOverBedEntriesIterator>> {
-        Ok(slf.into())
-    }
-
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
-        let v = slf
-            .iter
-            .next()
-            .transpose()
-            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-
-        let Some((name, v)) = v else {
-            return Ok(None);
-        };
-        let stats = match &slf.stats {
-            Some(stats) => {
-                let mut ret = Vec::with_capacity(stats.len());
-                for stat in stats.iter() {
-                    match stat {
-                        BigWigAverageOverBedStatistics::Size => {
-                            ret.push(v.size.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Bases => {
-                            ret.push(v.bases.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Mean0 => {
-                            ret.push(v.mean0.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Mean => {
-                            ret.push(v.mean.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
-                    }
-                }
-                if ret.len() == 1 {
-                    ret[0].to_object(slf.py())
-                } else {
-                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
-                }
-            }
-            None => {
-                let val = slf.summary_statistics.call_bound(
-                    slf.py(),
-                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
-                    None,
-                )?;
-                val.to_object(slf.py())
-            }
-        };
-
-        match slf.usename {
-            true => Ok(Some((name, stats).to_object(slf.py()))),
-            false => Ok(Some(stats)),
-        }
-    }
-}
 
 /// Interface for reading a BigWig or BigBed file.
 #[pyclass(module = "pybigtools")]
@@ -368,7 +268,7 @@ impl BBIRead {
         start: Option<i32>,
         end: Option<i32>,
     ) -> PyResult<PyObject> {
-        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        let (start, end) = start_end_clipped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
@@ -472,7 +372,7 @@ impl BBIRead {
         start: Option<i32>,
         end: Option<i32>,
     ) -> PyResult<ZoomIntervalIterator> {
-        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        let (start, end) = start_end_clipped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
@@ -1026,4 +926,137 @@ impl BigBedEntriesIterator {
             PyTuple::new_bound::<PyObject, _>(py, elements.into_iter()).to_object(py),
         ))
     }
+}
+
+enum BigWigAverageOverBedStatistics {
+    Size,
+    Bases,
+    Sum,
+    Mean0,
+    Mean,
+    Min,
+    Max,
+}
+
+impl BigWigAverageOverBedStatistics {
+    fn from_str(val: &str) -> Option<BigWigAverageOverBedStatistics> {
+        Some(match val {
+            "size" => BigWigAverageOverBedStatistics::Size,
+            "bases" => BigWigAverageOverBedStatistics::Bases,
+            "sum" => BigWigAverageOverBedStatistics::Sum,
+            "mean0" => BigWigAverageOverBedStatistics::Mean0,
+            "mean" => BigWigAverageOverBedStatistics::Mean,
+            "min" => BigWigAverageOverBedStatistics::Min,
+            "max" => BigWigAverageOverBedStatistics::Max,
+            _ => {
+                return None;
+            }
+        })
+    }
+}
+
+/// This class is an interator for the entries of bigWigAverageOverBed
+#[pyclass(module = "pybigtools")]
+struct BigWigAverageOverBedEntriesIterator {
+    iter: Box<
+        dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
+            + Send,
+    >,
+    usename: bool,
+    stats: Option<Vec<BigWigAverageOverBedStatistics>>,
+    summary_statistics: PyObject,
+}
+
+#[pymethods]
+impl BigWigAverageOverBedEntriesIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigWigAverageOverBedEntriesIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+        let v = slf
+            .iter
+            .next()
+            .transpose()
+            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+
+        let Some((name, v)) = v else {
+            return Ok(None);
+        };
+        let stats = match &slf.stats {
+            Some(stats) => {
+                let mut ret = Vec::with_capacity(stats.len());
+                for stat in stats.iter() {
+                    match stat {
+                        BigWigAverageOverBedStatistics::Size => {
+                            ret.push(v.size.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Bases => {
+                            ret.push(v.bases.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Mean0 => {
+                            ret.push(v.mean0.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Mean => {
+                            ret.push(v.mean.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+                    }
+                }
+                if ret.len() == 1 {
+                    ret[0].to_object(slf.py())
+                } else {
+                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
+                }
+            }
+            None => {
+                let val = slf.summary_statistics.call_bound(
+                    slf.py(),
+                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
+                    None,
+                )?;
+                val.to_object(slf.py())
+            }
+        };
+
+        match slf.usename {
+            true => Ok(Some((name, stats).to_object(slf.py()))),
+            false => Ok(Some(stats)),
+        }
+    }
+}
+
+fn start_end_clipped(
+    bbi: &BBIReadRaw,
+    chrom_name: &str,
+    start: Option<i32>,
+    end: Option<i32>,
+) -> PyResult<(u32, u32)> {
+    let chroms = match &bbi {
+        BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+        BBIReadRaw::BigWigFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigWigRemote(b) => b.chroms(),
+        BBIReadRaw::BigWigFileLike(b) => b.chroms(),
+        BBIReadRaw::BigBedFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigBedRemote(b) => b.chroms(),
+        BBIReadRaw::BigBedFileLike(b) => b.chroms(),
+    };
+    let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
+    let length = match chrom {
+        None => {
+            return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
+                "No chromomsome with name `{}` found.",
+                chrom_name
+            )))
+        }
+        Some(c) => c.length,
+    };
+    return Ok((
+        start.map(|v| v.max(0) as u32).unwrap_or(0),
+        end.map(|v| (v.max(0) as u32).min(length)).unwrap_or(length),
+    ));
 }
