@@ -11,12 +11,12 @@ use crate::errors::BBIFileClosed;
 
 /// Interface for writing to a BigWig file.
 #[pyclass(module = "pybigtools")]
-pub struct BigWigWrite {
+pub struct BigWigWriter {
     pub bigwig: Option<String>,
 }
 
 #[pymethods]
-impl BigWigWrite {
+impl BigWigWriter {
     /// Write values to the BigWig file.
     ///
     /// The underlying file will be closed automatically when the function
@@ -169,12 +169,12 @@ impl BigWigWrite {
 
 /// Interface for writing to a BigBed file.
 #[pyclass(module = "pybigtools")]
-pub struct BigBedWrite {
+pub struct BigBedWriter {
     pub bigbed: Option<String>,
 }
 
 #[pymethods]
-impl BigBedWrite {
+impl BigBedWriter {
     /// Write values to the BigBed file.
     ///
     /// The underlying file will be closed automatically when the function

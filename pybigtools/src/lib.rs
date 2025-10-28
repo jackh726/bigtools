@@ -11,6 +11,7 @@ use pyo3::types::{PyAny, PyString};
 use pyo3::wrap_pyfunction;
 use url::Url;
 
+mod coverage;
 mod errors;
 mod file_like;
 mod reader;
@@ -19,9 +20,8 @@ mod writer;
 
 use errors::{BBIFileClosed, BBIReadError};
 use file_like::PyFileLikeObject;
-use reader::{BBIRead, BigBedEntriesIterator, BigWigIntervalIterator};
-use utils::BBIReadRaw;
-use writer::{BigBedWrite, BigWigWrite};
+use reader::{BBIReadRaw, BBIReader, BigBedEntriesIterator, BigWigIntervalIterator};
+use writer::{BigBedWriter, BigWigWriter};
 
 impl Reopen for PyFileLikeObject {
     fn reopen(&self) -> io::Result<Self> {
@@ -95,11 +95,11 @@ fn open(
         ))),
     };
     let read = match GenericBBIRead::open(file_like) {
-        Ok(GenericBBIRead::BigWig(bigwig)) => BBIRead {
+        Ok(GenericBBIRead::BigWig(bigwig)) => BBIReader {
             bbi: BBIReadRaw::BigWigFileLike(bigwig.cached()),
         }
         .into_py(py),
-        Ok(GenericBBIRead::BigBed(bigbed)) => BBIRead {
+        Ok(GenericBBIRead::BigBed(bigbed)) => BBIReader {
             bbi: BBIReadRaw::BigBedFileLike(bigbed.cached()),
         }
         .into_py(py),
@@ -136,11 +136,11 @@ fn open_path_or_url(
             Err(_) => {}
         }
         match extension.as_ref() {
-            "bw" | "bigWig" | "bigwig" => BigWigWrite {
+            "bw" | "bigWig" | "bigwig" => BigWigWriter {
                 bigwig: Some(path_url_or_file_like),
             }
             .into_py(py),
-            "bb" | "bigBed" | "bigbed" => BigBedWrite {
+            "bb" | "bigBed" | "bigbed" => BigBedWriter {
                 bigbed: Some(path_url_or_file_like),
             }
             .into_py(py),
@@ -164,7 +164,7 @@ fn open_path_or_url(
             "bw" | "bigWig" | "bigwig" => {
                 if isfile {
                     match BigWigReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BBIRead {
+                        Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigWigFile(bwr.cached()),
                         }
                         .into_py(py),
@@ -177,7 +177,7 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigWigReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BBIRead {
+                        Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigWigRemote(bwr.cached()),
                         }
                         .into_py(py),
@@ -199,7 +199,7 @@ fn open_path_or_url(
             "bb" | "bigBed" | "bigbed" => {
                 if isfile {
                     match BigBedReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BBIRead {
+                        Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigBedFile(bwr.cached()),
                         }
                         .into_py(py),
@@ -212,7 +212,7 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigBedReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BBIRead {
+                        Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigBedRemote(bwr.cached()),
                         }
                         .into_py(py),
@@ -246,9 +246,9 @@ fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_wrapped(wrap_pyfunction!(open))?;
 
-    m.add_class::<BBIRead>()?;
-    m.add_class::<BigWigWrite>()?;
-    m.add_class::<BigBedWrite>()?;
+    m.add_class::<BBIReader>()?;
+    m.add_class::<BigWigWriter>()?;
+    m.add_class::<BigBedWriter>()?;
     m.add_class::<BigWigIntervalIterator>()?;
     m.add_class::<BigBedEntriesIterator>()?;
 
@@ -257,7 +257,6 @@ fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let collections = PyModule::import_bound(py, "collections")?;
     let namedtuple = collections.getattr("namedtuple")?;
-
     let summary_statistics = namedtuple.call(
         (
             "SummaryStatistics".to_object(py),
