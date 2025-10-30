@@ -15,7 +15,7 @@ mod coverage;
 mod errors;
 mod file_like;
 mod reader;
-mod utils;
+mod raster;
 mod writer;
 
 use errors::{BBIFileClosed, BBIReadError};

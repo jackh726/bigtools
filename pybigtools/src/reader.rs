@@ -20,7 +20,7 @@ use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use crate::errors::{BBIFileClosed, BBIReadError, ConvertResult};
 use crate::file_like::PyFileLikeObject;
-use crate::utils::{entries_to_array, intervals_to_array, Summary};
+use crate::raster::{entries_to_array, intervals_to_array, Summary};
 
 type ValueTuple = (u32, u32, f32);
 
