@@ -229,11 +229,11 @@ def test_binned_minmax0(bw_path, bb_path, missing):
         x1 = pbt.open(path).values(
             "chr1", 0, 12, bins=5, exact=True, missing=missing, summary="min0"
         )
-        assert np.allclose(x1, [1, 1, 2, 2, 3], equal_nan=True)
+        assert np.allclose(x1, [0, 0, 2, 2, 0], equal_nan=True)
         x1 = pbt.open(path).values(
             "chr1", 0, 12, bins=5, exact=True, missing=missing, summary="max0"
         )
-        assert np.allclose(x1, [0, 0, 2, 2, 0], equal_nan=True)
+        assert np.allclose(x1, [1, 1, 2, 3, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(

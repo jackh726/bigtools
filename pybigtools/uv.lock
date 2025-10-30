@@ -456,7 +456,7 @@ wheels = [
 
 [[package]]
 name = "pybbi"
-version = "0.4.1"
+version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
@@ -464,28 +464,28 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/aa/fa75fd38bb1f2c3e22c2bc0ce28122c9c2b586c5688f0b8b27078a560b0d/pybbi-0.4.1.tar.gz", hash = "sha256:6a193dcd0d4d4575c258d6cd5d2d7c5368a5cf58e939d8faae9f8fe192373a5c", size = 34725107, upload-time = "2024-10-18T15:58:26.803Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/83/33a52ad666d93564e58986a78226dfb9dc7f52a75b36dcf8271f671f8eb1/pybbi-0.4.2.tar.gz", hash = "sha256:b9daa5f04cf5641c3addd729737d649c439f440082fe783c28be3353d2aa444b", size = 34725029, upload-time = "2025-10-30T17:09:51.165Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/ee/d6166c0b7d1c8727526871303c52df38c4d02f8d136faa0151fa02908490/pybbi-0.4.1-cp310-cp310-macosx_13_0_x86_64.whl", hash = "sha256:6add8b3d461aabce5a43f8c2d97e7b69b358ff25f035842ccfbf14098788d973", size = 2740827, upload-time = "2024-10-18T15:57:42.728Z" },
-    { url = "https://files.pythonhosted.org/packages/12/b0/a36607acac77d38261469befe423c37412e4298c0a707a29cb31344654e0/pybbi-0.4.1-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:6b4931a389a9dd686305fb1a9a9fb24ccb4aaf2f97ffbef7ab8c5e6366d4328f", size = 3008186, upload-time = "2024-10-18T15:57:44.438Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/9b/c74cc68eaa9abfdebd5fd6e00c91605a10c56254c2023d23717c45f41b13/pybbi-0.4.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0065c5f52f165df962028299a12016ea4b3af51e3c230d9d02d8df70084976f2", size = 3062137, upload-time = "2024-10-18T15:57:47.92Z" },
-    { url = "https://files.pythonhosted.org/packages/c7/49/4be3740f7d5586dfdc6b66d649a74f043ec61ff292081631cef2646a8a4f/pybbi-0.4.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1f31c966598af3109085c098ea33f9ba5e48108feb94c0c73692fe125f5daadd", size = 3386466, upload-time = "2024-10-18T15:57:50.063Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/b2/f274c9afdd5e8261dce265deea7c1f098d7a2e16589e15dce00887d6661e/pybbi-0.4.1-cp311-cp311-macosx_13_0_x86_64.whl", hash = "sha256:da07fd359d49a7aa3d8facc0adc9cd24e10109c7d2bf35e900b7151b45e6b644", size = 2741185, upload-time = "2024-10-18T15:57:52.298Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/75/76592a8f2b1a8e1320866ac17d9efae79a83e33864b09a5a7e23edd65268/pybbi-0.4.1-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:a8a2351bfdec49954e9b12df37422ce6815b9d22e219fdc03787b82099c9b005", size = 3008323, upload-time = "2024-10-18T15:57:54.849Z" },
-    { url = "https://files.pythonhosted.org/packages/06/1f/530d3fd1420fc9b31ccc5659dbde14744f1c58fff47ed03a6a42abb9b319/pybbi-0.4.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bf2dcf60e712b409c2199568159b23ccd39a1273d02e96ceea27a668527e1f2e", size = 3096868, upload-time = "2024-10-18T15:57:56.397Z" },
-    { url = "https://files.pythonhosted.org/packages/67/96/42d795bcd89926d4e24fbe90c7eb875dac0e64c57fe2d15c74df5ab208e4/pybbi-0.4.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fb94da99b7edbf0eb2111b273f7345ae78fd0ed6ccd098a649a0c4c546a4fc7d", size = 3417886, upload-time = "2024-10-18T15:57:59.877Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/ad/0517feaeef73c493604f85de73adb66b1d9fd8d42da2bcbac0702d029dd4/pybbi-0.4.1-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:3d6c33ded8cf8b5b85f7093cb7ced67059540e80203df31c33c12c2167aa28ad", size = 2741753, upload-time = "2024-10-18T15:58:02.676Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/c7/ce5b7ad871e9f580fd2cb4c8bf02e8c13708b45657dd17d1dbc33ecf828c/pybbi-0.4.1-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:68d351ab964d6189a5d3beec7105e679177bc43141a4ec272e89246a6e8d7f72", size = 3009601, upload-time = "2024-10-18T15:58:04.7Z" },
-    { url = "https://files.pythonhosted.org/packages/37/f3/5ed2a7e188ac9063d3ddf97e0d6fff4f876753222ed7093ea0ff8324cf9c/pybbi-0.4.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:607084a293d1c18915d3a4811c7c81b640601ba18b240f67338b2d97fd793481", size = 3086782, upload-time = "2024-10-18T15:58:06.636Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/be/dc05048eb85965bea938caacd3068b62e3fbc00284a8d5b52205f3212685/pybbi-0.4.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a7d9f22cd18e7b8affc66c42a2c95e542afd8a1652430c0d9bfbabf7d4c11799", size = 3411157, upload-time = "2024-10-18T15:58:08.731Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/df/26a59938de8f092536dcd7287154bd21346f6721b1a6f38c5fa141e35b38/pybbi-0.4.1-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:b276deb438fa990d9db0947ec8dfa3f6d75728ba43e1d71650a0c24ffc6482af", size = 2740591, upload-time = "2024-10-18T15:58:10.632Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/ff/bd13e585560406b1624f68a36b98e74b705cf202ab465f1cd8231efb0522/pybbi-0.4.1-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:fe1c68e0d13489d75b374d4f82bdeeff192241ff3dfffefc59652491ab3d8b42", size = 3008555, upload-time = "2024-10-18T15:58:12.298Z" },
-    { url = "https://files.pythonhosted.org/packages/da/bb/ab151ecbe26f1421a8a3ae12bd357471d130387b22b0820456b8749acc69/pybbi-0.4.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c8dc2ebd0e1d670dbcec02f52978dad910293eb705383318090a7608c142f911", size = 3087731, upload-time = "2024-10-18T15:58:13.839Z" },
-    { url = "https://files.pythonhosted.org/packages/bd/70/1942a663e32085eba7ec255f1ee873047df1901b2798dd4e57a1db0795b9/pybbi-0.4.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2197144d071e17fbbb136508046315b319bbe2fbf88085b356fb02f962b7b704", size = 3411890, upload-time = "2024-10-18T15:58:15.626Z" },
-    { url = "https://files.pythonhosted.org/packages/51/78/fe1a9aafe2c73c0e848e8bc315a9ee443e6eb4ff675d0cf11f38d6d87b4c/pybbi-0.4.1-cp39-cp39-macosx_13_0_x86_64.whl", hash = "sha256:bdcabcd727ea90ec334589a9fb1ad6a3403b551c1fa8dd497beba93c09911d0b", size = 2740939, upload-time = "2024-10-18T15:58:17.399Z" },
-    { url = "https://files.pythonhosted.org/packages/26/5e/a2aa1d3a36fe8209075bf7c029eb88b03d3326665453166fdfcfca2c4871/pybbi-0.4.1-cp39-cp39-macosx_14_0_arm64.whl", hash = "sha256:0e622817ba90fa39efea407deac364201f2ffdfa274311422450fac329078c7b", size = 3008362, upload-time = "2024-10-18T15:58:19.94Z" },
-    { url = "https://files.pythonhosted.org/packages/c6/c6/e74b133766270ca4bc83f611cf080ad8d890d0c9be4eed5d3096cc75754e/pybbi-0.4.1-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:eaf44f1cc8bbbdcbf6ecbdada9a00f85a87416a299a7de72462b03f075287a7a", size = 3062047, upload-time = "2024-10-18T15:58:22.184Z" },
-    { url = "https://files.pythonhosted.org/packages/be/fe/12f528f09015f8d80f8c6307b439cb8f77524509540b765325a4d4f1ae7a/pybbi-0.4.1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6726ea3decad71cb17541e6d0d440588ab6a555d2e280cedf4517f2ea011a07c", size = 3386409, upload-time = "2024-10-18T15:58:24.136Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/a9/c2d4dbcc80c5406ca0a532fe632e16b2eda194b1da1754b82bc7d7ca7248/pybbi-0.4.2-cp310-cp310-macosx_13_0_x86_64.whl", hash = "sha256:4893409bb7b51c81759d43f6b15e2b4dc6d3de20e5e39b9ea4b8ff1bbfcc17a0", size = 2936500, upload-time = "2025-10-30T17:09:13.405Z" },
+    { url = "https://files.pythonhosted.org/packages/33/aa/b6ae0e4fc80d5306a4180efb73d03413a5104953089d6e46b04cf6945b1c/pybbi-0.4.2-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:684c76ef134ee2815f02ef8ba0fb5f270fe45a127a092c24204311cd6e45a2bb", size = 3225149, upload-time = "2025-10-30T17:09:15.736Z" },
+    { url = "https://files.pythonhosted.org/packages/40/c1/f7c95688e21d9c65717dc088945e31848b66bf904870b8fda1316b4e5490/pybbi-0.4.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:20914802a4b3a9d46b2eed811ff77f8fb9d26d1bc4af9168ce3f33ffbd564518", size = 3081199, upload-time = "2025-10-30T17:09:17.272Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/3a/9b3fd6dcf58ead95c267fc819df9647700cc69200e992014b80e43f69b65/pybbi-0.4.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1965c3620f18546d65e85b1b99d5306303ffbc2fdbbeae93ab3a86dc96ac8669", size = 3399481, upload-time = "2025-10-30T17:09:18.944Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/50/bfdfde6d757c3d986f23467131511350a9de71a766c0063930ff70bc46bf/pybbi-0.4.2-cp311-cp311-macosx_13_0_x86_64.whl", hash = "sha256:145869f0c8e3ebca352df3477a43e15407b8dc1bf409081ea89d6498ace634de", size = 2933866, upload-time = "2025-10-30T17:09:21.063Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/1e/9c439b06647a84f769d8cf1ae35a54bfe0ad81c40bc26aea7c5130a1674c/pybbi-0.4.2-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:ad8546cd8871a6b112980b00bbcd31ad409e4a24e979a6cd3114cc645b433b91", size = 3223265, upload-time = "2025-10-30T17:09:23.059Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/c8/589d044a3a1e63c772da4446d1d6f452225e45d9fe360eb5aa3f8efdd140/pybbi-0.4.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7a7aeeb5a3d81a6331d19901e1a2c6cdcee9edb273b3aaa1b3e954e92d165030", size = 3109825, upload-time = "2025-10-30T17:09:24.62Z" },
+    { url = "https://files.pythonhosted.org/packages/86/ce/b296d5e51276d88a2e51070ed97f76eedba639767204987cc6a465ae564f/pybbi-0.4.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0a91937f82e3f6f0ae011711fc175d2b2ec1decce0af62435ae0bd297c5d3633", size = 3428525, upload-time = "2025-10-30T17:09:26.293Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/74/af3bfdecdacb64e35bffea2513541d71f8ea7358f5004880e37a2414b5f2/pybbi-0.4.2-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:5d1fad3d46787ea5905e5f1080b16dfb83d67c8d83225efe3169d4dcf27eb612", size = 2943529, upload-time = "2025-10-30T17:09:28.849Z" },
+    { url = "https://files.pythonhosted.org/packages/02/66/38380935e7d3856fe5daf0694880f8330631d09bf73b2b30d8e576eeb12b/pybbi-0.4.2-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:37ed8946551a9a5efc9e426d7b86248e845c51b803d48016027a7c8a1a9fce33", size = 3232894, upload-time = "2025-10-30T17:09:31.132Z" },
+    { url = "https://files.pythonhosted.org/packages/36/1f/abbe9be6b0f501a7ff182f1c6534b8f83b69c97630776d8e482a2d4d9bf7/pybbi-0.4.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:36dc0add6f54d1763bf247b2cff87eaf2c81a26da18d49ac33de164d6baec2df", size = 3099983, upload-time = "2025-10-30T17:09:32.928Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/e7/35195b5292b6ccdcaaa655a2dad615b9217f52ac18b9dfdf8afec82521a6/pybbi-0.4.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7d587a05d7eed4d1fb92e3f62ad52e8389c7a6b315bc430a6eb678760106740e", size = 3420434, upload-time = "2025-10-30T17:09:34.693Z" },
+    { url = "https://files.pythonhosted.org/packages/53/72/ac475ad1726f132fc272882b43defddfe09a831815a741850d2c510d7f0e/pybbi-0.4.2-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:54b9e541bb455aeb30f88f09c70b7a4b72f6a0ae0e2e7f2bc9798f2e647b3d16", size = 2943356, upload-time = "2025-10-30T17:09:36.18Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/d3/4e27f36ae7f0fc933330239d7b76debf6ef67dbd7fef722f3ba1e7cfb9cc/pybbi-0.4.2-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:2c6472900a6688d604ccfd406138337e5d5b9db442a13715ce7abbf2cb98b841", size = 3232770, upload-time = "2025-10-30T17:09:37.803Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/25/2cbcd423c16ceb6eaedc39d797ff8b31119fcb5d71910b5336dbefb942d5/pybbi-0.4.2-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:20ee599e318238b177b2c31dbe7789034ea0bfa9716e0aa06d387d7cc9f78938", size = 3095788, upload-time = "2025-10-30T17:09:39.523Z" },
+    { url = "https://files.pythonhosted.org/packages/15/b2/dbaaaa0901785caad9317c0eedf97eaa3d841e1c05589a9388ce67c9d53f/pybbi-0.4.2-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce9afaf149c89b01dfa2926febe53b73b174be0cc5febfd4cfee9f1e72083f50", size = 3414507, upload-time = "2025-10-30T17:09:41.605Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/14/183e404d9015b880fde46e452190b6efe6c95dd6bf1cef28265abeba92b8/pybbi-0.4.2-cp39-cp39-macosx_13_0_x86_64.whl", hash = "sha256:b685fc3c72a64672e87cc590146ee91bb97b1b5cb061a85fbe5ade679ef7b5fb", size = 2936711, upload-time = "2025-10-30T17:09:43.377Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/cc/27c610695e6e746021d3ae311f9572aa7cd57796806fd54328ae67a8d5ec/pybbi-0.4.2-cp39-cp39-macosx_14_0_arm64.whl", hash = "sha256:093c3efb6a6454397be6ffbcd37f8719107300ea02f4ec3066583a0bf87f16b3", size = 3225304, upload-time = "2025-10-30T17:09:45.117Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/c2/d73f53bcf6605e8c0740fb486838d1750da2e2091dae4e7b8733aa004110/pybbi-0.4.2-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:31ac2493b598a4568c5a16c0a575e41633afbe5da3084d0ef2cdcbed1b26031b", size = 3077589, upload-time = "2025-10-30T17:09:46.863Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/ca/c3af682d723805a06868f5d3cb00fe5b4d7f7452db4a672b7526f87285f7/pybbi-0.4.2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:be8bf199a520b75c4708b90d3245d183138728895fad0a145eb36bc038d39b3b", size = 3396498, upload-time = "2025-10-30T17:09:48.549Z" },
 ]
 
 [[package]]
@@ -518,13 +518,13 @@ requires-dist = [{ name = "numpy" }]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pybbi" },
+    { name = "pybbi", specifier = ">=0.4.2" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "smart-open", extras = ["http"] },
 ]
 test = [
-    { name = "pybbi" },
+    { name = "pybbi", specifier = ">=0.4.2" },
     { name = "pytest" },
     { name = "smart-open", extras = ["http"] },
 ]
