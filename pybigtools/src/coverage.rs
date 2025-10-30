@@ -6,7 +6,7 @@ use std::collections::BinaryHeap;
 ///
 /// This iterator consumes a stream of sorted, potentially overlapping BED entries and produces a
 /// stream of non-overlapping intervals whose values represent the coverage depth (number of
-/// overlapping entries) over its genomic positions.
+/// overlapping entries) over its range.
 ///
 /// The input BED entries **must** be sorted by start position, then end position.
 ///
@@ -46,7 +46,7 @@ where
     pub fn new(mut iter: I) -> Result<Self, BBIReadError> {
         let mut heap = BinaryHeap::new();
 
-        // Initialize the heap with two entries (four positions)
+        // Initialize the heap
         match iter.next() {
             Some(Ok(entry)) => {
                 heap.push(Reverse((entry.start, 1)));
@@ -95,13 +95,14 @@ where
             }
 
             // If we have more entries with the current position, load them.
-            while let Some(result) = self.iter.next() {
+            for result in self.iter.by_ref() {
                 match result {
                     Ok(entry) => {
                         self.heap.push(Reverse((entry.start, 1)));
                         self.heap.push(Reverse((entry.end, -1)));
 
                         // If this entry contributes to the current position, process those events
+                        // and remove them from the heap
                         let has_current_pos = entry.start == pos || entry.end == pos;
                         if has_current_pos {
                             while let Some(&Reverse((next_pos, inc))) = self.heap.peek() {

@@ -84,15 +84,13 @@ fn open(
     }
 
     if iswrite {
-        return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-            "Writing only supports file names",
-        )));
+        return Err(PyErr::new::<exceptions::PyValueError, _>(
+            "Writing only supports file names".to_string(),
+        ));
     }
     let file_like = match PyFileLikeObject::new(path_url_or_file_like, true, false, true) {
         Ok(file_like) => file_like,
-        Err(_) => return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-            "Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.",
-        ))),
+        Err(_) => return Err(PyErr::new::<exceptions::PyValueError, _>("Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.".to_string())),
     };
     let read = match GenericBBIRead::open(file_like) {
         Ok(GenericBBIRead::BigWig(bigwig)) => BBIReader {
@@ -123,17 +121,14 @@ fn open_path_or_url(
     {
         Some(e) => e.to_string(),
         None => {
-            return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+            return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).".to_string()));
         }
     };
     let res = if iswrite {
-        match Url::parse(&path_url_or_file_like) {
-            Ok(_) => {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "Invalid file path. Writing does not support urls."
-                )))
-            }
-            Err(_) => {}
+        if Url::parse(&path_url_or_file_like).is_ok() {
+            return Err(PyErr::new::<exceptions::PyValueError, _>(
+                "Invalid file path. Writing does not support urls.".to_string(),
+            ));
         }
         match extension.as_ref() {
             "bw" | "bigWig" | "bigwig" => BigWigWriter {
@@ -145,7 +140,7 @@ fn open_path_or_url(
             }
             .into_py(py),
             _ => {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+                return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).".to_string()));
             }
         }
     } else {
@@ -154,9 +149,10 @@ fn open_path_or_url(
             match Url::parse(&path_url_or_file_like) {
                 Ok(_) => {}
                 Err(_) => {
-                    return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
+                    return Err(PyErr::new::<exceptions::PyValueError, _>(
                         "Invalid file path. The file does not exist and it is not a url."
-                    )))
+                            .to_string(),
+                    ))
                 }
             }
         }
@@ -169,9 +165,9 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<BBIReadError, _>(format!(
-                                "Error opening bigWig."
-                            )))
+                            return Err(PyErr::new::<BBIReadError, _>(
+                                "Error opening bigWig.".to_string(),
+                            ))
                         }
                     }
                 } else {
@@ -182,9 +178,9 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<BBIReadError, _>(format!(
-                                "Error opening bigWig."
-                            )))
+                            return Err(PyErr::new::<BBIReadError, _>(
+                                "Error opening bigWig.".to_string(),
+                            ))
                         }
                     }
 
@@ -204,9 +200,9 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<BBIReadError, _>(format!(
-                                "Error opening bigBed."
-                            )))
+                            return Err(PyErr::new::<BBIReadError, _>(
+                                "Error opening bigBed.".to_string(),
+                            ))
                         }
                     }
                 } else {
@@ -217,9 +213,9 @@ fn open_path_or_url(
                         }
                         .into_py(py),
                         Err(_) => {
-                            return Err(PyErr::new::<BBIReadError, _>(format!(
-                                "Error opening bigBed."
-                            )))
+                            return Err(PyErr::new::<BBIReadError, _>(
+                                "Error opening bigBed.".to_string(),
+                            ))
                         }
                     }
 
@@ -232,7 +228,7 @@ fn open_path_or_url(
                 }
             }
             _ => {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).")));
+                return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).".to_string()));
             }
         }
     };

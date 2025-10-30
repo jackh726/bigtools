@@ -123,7 +123,7 @@ impl BBIReader {
             ("sum", summary.sum.to_object(py)),
             (
                 "mean",
-                (summary.sum as f64 / summary.bases_covered as f64).to_object(py),
+                (summary.sum / summary.bases_covered as f64).to_object(py),
             ),
             ("min", summary.min_val.to_object(py)),
             ("max", summary.max_val.to_object(py)),
@@ -171,7 +171,7 @@ impl BBIReader {
                 Some(chrom) => {
                     let chrom_length = b
                         .chroms()
-                        .into_iter()
+                        .iter()
                         .find(|c| c.name == chrom)
                         .ok_or_else(|| {
                             PyErr::new::<PyKeyError, _>(
@@ -184,7 +184,7 @@ impl BBIReader {
                 None => {
                     let chrom_dict: PyObject = b
                         .chroms()
-                        .into_iter()
+                        .iter()
                         .map(|c| (c.name.clone(), c.length))
                         .into_py_dict_bound(py)
                         .into();
@@ -208,6 +208,7 @@ impl BBIReader {
 
     /// Return a list of sizes in bases of the summary intervals used in each
     /// of the zoom levels (i.e. reduction levels) of the BBI file.
+    #[allow(clippy::too_many_arguments)]
     fn zooms(&self) -> PyResult<Vec<u32>> {
         let zooms = match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
@@ -348,7 +349,7 @@ impl BBIReader {
     ) -> PyResult<PyObject> {
         let (start, end) = start_end_clamped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
@@ -452,7 +453,7 @@ impl BBIReader {
     ) -> PyResult<ZoomIntervalIterator> {
         let (start, end) = start_end_clamped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 let iter = b
@@ -576,6 +577,7 @@ impl BBIReader {
         signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
         text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
     )]
+    #[allow(clippy::too_many_arguments)]
     fn values(
         &mut self,
         py: Python<'_>,
@@ -610,7 +612,7 @@ impl BBIReader {
             }
         };
         match &mut self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => intervals_to_array(
                 py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
             ),
@@ -776,9 +778,9 @@ impl BBIReader {
             if bed.is_instance(&path_class)? {
                 bed.str()?
             } else {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "Unknown argument for `path`. Not a string or Path object.",
-                )));
+                return Err(PyErr::new::<exceptions::PyValueError, _>(
+                    "Unknown argument for `path`. Not a string or Path object.".to_string(),
+                ));
             }
         };
         let bedin = BufReader::new(File::open(bed.to_str()?)?);
@@ -918,7 +920,7 @@ impl BigBedEntriesIterator {
             .chain(next.rest.split_whitespace().map(|o| o.to_object(py)))
             .collect();
         Ok(Some(
-            PyTuple::new_bound::<PyObject, _>(py, elements.into_iter()).to_object(py),
+            PyTuple::new_bound::<PyObject, _>(py, elements).to_object(py),
         ))
     }
 }
@@ -1074,7 +1076,7 @@ fn start_end_clamped(
         BBIReadRaw::BigBedRemote(b) => b.chroms(),
         BBIReadRaw::BigBedFileLike(b) => b.chroms(),
     };
-    let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
+    let chrom = chroms.iter().find(|x| x.name == chrom_name);
     let length = match chrom {
         None => {
             return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
@@ -1084,8 +1086,8 @@ fn start_end_clamped(
         }
         Some(c) => c.length,
     };
-    return Ok((
+    Ok((
         start.map(|v| v.max(0) as u32).unwrap_or(0),
         end.map(|v| (v.max(0) as u32).min(length)).unwrap_or(length),
-    ));
+    ))
 }

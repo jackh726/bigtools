@@ -45,7 +45,7 @@ enum BBIRead<'a, R: BBIFileRead> {
     BigBed(&'a mut BigBedRead<R>),
 }
 
-impl<'a, R: BBIFileRead> BBIRead<'a, R> {
+impl<R: BBIFileRead> BBIRead<'_, R> {
     pub fn chroms(&self) -> &[bigtools::ChromInfo] {
         match self {
             BBIRead::BigWig(bw) => bw.chroms(),
@@ -62,7 +62,7 @@ impl<'a, R: BBIFileRead> BBIRead<'a, R> {
         end: Option<i32>,
     ) -> PyResult<(i32, i32, i32)> {
         let chroms = self.chroms();
-        let chrom = chroms.into_iter().find(|x| x.name == chrom_name);
+        let chrom = chroms.iter().find(|x| x.name == chrom_name);
         let length = match chrom {
             None => {
                 return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
@@ -72,7 +72,7 @@ impl<'a, R: BBIFileRead> BBIRead<'a, R> {
             }
             Some(c) => c.length as i32,
         };
-        return Ok((start.unwrap_or(0), end.unwrap_or(length), length));
+        Ok((start.unwrap_or(0), end.unwrap_or(length), length))
     }
 
     pub fn zoom_headers(&self) -> &[bigtools::ZoomHeader] {
@@ -174,14 +174,14 @@ fn records_to_array<R: BBIFileRead>(
             match bbi {
                 BBIRead::BigWig(bw) => {
                     let iter = bw
-                        .get_interval(&chrom, valid_start, valid_end)
+                        .get_interval(chrom, valid_start, valid_end)
                         .convert_err()?
                         .map(|item| item.map(BBIRecord::Value));
                     fill_values(start, end, iter, missing, view).convert_err()?;
                 }
                 BBIRead::BigBed(bb) => {
                     let iter = bb
-                        .get_interval(&chrom, valid_start, valid_end)
+                        .get_interval(chrom, valid_start, valid_end)
                         .convert_err()?
                         .map(|item| item.map(BBIRecord::BedEntry));
                     fill_values(start, end, iter, missing, view).convert_err()?;
@@ -209,7 +209,7 @@ fn records_to_array<R: BBIFileRead>(
                 Some(reduction_level) => match bbi {
                     BBIRead::BigWig(bw) => {
                         let iter = bw
-                            .get_zoom_interval(&chrom, valid_start, valid_end, reduction_level)
+                            .get_zoom_interval(chrom, valid_start, valid_end, reduction_level)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::ZoomRecord));
                         fill_binned(start, end, iter, summary, bins, missing, view)
@@ -217,7 +217,7 @@ fn records_to_array<R: BBIFileRead>(
                     }
                     BBIRead::BigBed(bb) => {
                         let iter = bb
-                            .get_zoom_interval(&chrom, valid_start, valid_end, reduction_level)
+                            .get_zoom_interval(chrom, valid_start, valid_end, reduction_level)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::ZoomRecord));
                         fill_binned(start, end, iter, summary, bins, missing, view)
@@ -228,7 +228,7 @@ fn records_to_array<R: BBIFileRead>(
                 None => match bbi {
                     BBIRead::BigWig(bw) => {
                         let iter = bw
-                            .get_interval(&chrom, valid_start, valid_end)
+                            .get_interval(chrom, valid_start, valid_end)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::Value));
                         fill_binned(start, end, iter, summary, bins, missing, view)
@@ -236,7 +236,7 @@ fn records_to_array<R: BBIFileRead>(
                     }
                     BBIRead::BigBed(bb) => {
                         let iter = bb
-                            .get_interval(&chrom, valid_start, valid_end)
+                            .get_interval(chrom, valid_start, valid_end)
                             .convert_err()?;
                         let coverage_iter = CoverageIterator::new(iter)
                             .convert_err()?
