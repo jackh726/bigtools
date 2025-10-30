@@ -455,6 +455,40 @@ wheels = [
 ]
 
 [[package]]
+name = "pybbi"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/aa/fa75fd38bb1f2c3e22c2bc0ce28122c9c2b586c5688f0b8b27078a560b0d/pybbi-0.4.1.tar.gz", hash = "sha256:6a193dcd0d4d4575c258d6cd5d2d7c5368a5cf58e939d8faae9f8fe192373a5c", size = 34725107, upload-time = "2024-10-18T15:58:26.803Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/ee/d6166c0b7d1c8727526871303c52df38c4d02f8d136faa0151fa02908490/pybbi-0.4.1-cp310-cp310-macosx_13_0_x86_64.whl", hash = "sha256:6add8b3d461aabce5a43f8c2d97e7b69b358ff25f035842ccfbf14098788d973", size = 2740827, upload-time = "2024-10-18T15:57:42.728Z" },
+    { url = "https://files.pythonhosted.org/packages/12/b0/a36607acac77d38261469befe423c37412e4298c0a707a29cb31344654e0/pybbi-0.4.1-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:6b4931a389a9dd686305fb1a9a9fb24ccb4aaf2f97ffbef7ab8c5e6366d4328f", size = 3008186, upload-time = "2024-10-18T15:57:44.438Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/9b/c74cc68eaa9abfdebd5fd6e00c91605a10c56254c2023d23717c45f41b13/pybbi-0.4.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0065c5f52f165df962028299a12016ea4b3af51e3c230d9d02d8df70084976f2", size = 3062137, upload-time = "2024-10-18T15:57:47.92Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/49/4be3740f7d5586dfdc6b66d649a74f043ec61ff292081631cef2646a8a4f/pybbi-0.4.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1f31c966598af3109085c098ea33f9ba5e48108feb94c0c73692fe125f5daadd", size = 3386466, upload-time = "2024-10-18T15:57:50.063Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/b2/f274c9afdd5e8261dce265deea7c1f098d7a2e16589e15dce00887d6661e/pybbi-0.4.1-cp311-cp311-macosx_13_0_x86_64.whl", hash = "sha256:da07fd359d49a7aa3d8facc0adc9cd24e10109c7d2bf35e900b7151b45e6b644", size = 2741185, upload-time = "2024-10-18T15:57:52.298Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/75/76592a8f2b1a8e1320866ac17d9efae79a83e33864b09a5a7e23edd65268/pybbi-0.4.1-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:a8a2351bfdec49954e9b12df37422ce6815b9d22e219fdc03787b82099c9b005", size = 3008323, upload-time = "2024-10-18T15:57:54.849Z" },
+    { url = "https://files.pythonhosted.org/packages/06/1f/530d3fd1420fc9b31ccc5659dbde14744f1c58fff47ed03a6a42abb9b319/pybbi-0.4.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bf2dcf60e712b409c2199568159b23ccd39a1273d02e96ceea27a668527e1f2e", size = 3096868, upload-time = "2024-10-18T15:57:56.397Z" },
+    { url = "https://files.pythonhosted.org/packages/67/96/42d795bcd89926d4e24fbe90c7eb875dac0e64c57fe2d15c74df5ab208e4/pybbi-0.4.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fb94da99b7edbf0eb2111b273f7345ae78fd0ed6ccd098a649a0c4c546a4fc7d", size = 3417886, upload-time = "2024-10-18T15:57:59.877Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/ad/0517feaeef73c493604f85de73adb66b1d9fd8d42da2bcbac0702d029dd4/pybbi-0.4.1-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:3d6c33ded8cf8b5b85f7093cb7ced67059540e80203df31c33c12c2167aa28ad", size = 2741753, upload-time = "2024-10-18T15:58:02.676Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/c7/ce5b7ad871e9f580fd2cb4c8bf02e8c13708b45657dd17d1dbc33ecf828c/pybbi-0.4.1-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:68d351ab964d6189a5d3beec7105e679177bc43141a4ec272e89246a6e8d7f72", size = 3009601, upload-time = "2024-10-18T15:58:04.7Z" },
+    { url = "https://files.pythonhosted.org/packages/37/f3/5ed2a7e188ac9063d3ddf97e0d6fff4f876753222ed7093ea0ff8324cf9c/pybbi-0.4.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:607084a293d1c18915d3a4811c7c81b640601ba18b240f67338b2d97fd793481", size = 3086782, upload-time = "2024-10-18T15:58:06.636Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/be/dc05048eb85965bea938caacd3068b62e3fbc00284a8d5b52205f3212685/pybbi-0.4.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a7d9f22cd18e7b8affc66c42a2c95e542afd8a1652430c0d9bfbabf7d4c11799", size = 3411157, upload-time = "2024-10-18T15:58:08.731Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/df/26a59938de8f092536dcd7287154bd21346f6721b1a6f38c5fa141e35b38/pybbi-0.4.1-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:b276deb438fa990d9db0947ec8dfa3f6d75728ba43e1d71650a0c24ffc6482af", size = 2740591, upload-time = "2024-10-18T15:58:10.632Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/ff/bd13e585560406b1624f68a36b98e74b705cf202ab465f1cd8231efb0522/pybbi-0.4.1-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:fe1c68e0d13489d75b374d4f82bdeeff192241ff3dfffefc59652491ab3d8b42", size = 3008555, upload-time = "2024-10-18T15:58:12.298Z" },
+    { url = "https://files.pythonhosted.org/packages/da/bb/ab151ecbe26f1421a8a3ae12bd357471d130387b22b0820456b8749acc69/pybbi-0.4.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c8dc2ebd0e1d670dbcec02f52978dad910293eb705383318090a7608c142f911", size = 3087731, upload-time = "2024-10-18T15:58:13.839Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/70/1942a663e32085eba7ec255f1ee873047df1901b2798dd4e57a1db0795b9/pybbi-0.4.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2197144d071e17fbbb136508046315b319bbe2fbf88085b356fb02f962b7b704", size = 3411890, upload-time = "2024-10-18T15:58:15.626Z" },
+    { url = "https://files.pythonhosted.org/packages/51/78/fe1a9aafe2c73c0e848e8bc315a9ee443e6eb4ff675d0cf11f38d6d87b4c/pybbi-0.4.1-cp39-cp39-macosx_13_0_x86_64.whl", hash = "sha256:bdcabcd727ea90ec334589a9fb1ad6a3403b551c1fa8dd497beba93c09911d0b", size = 2740939, upload-time = "2024-10-18T15:58:17.399Z" },
+    { url = "https://files.pythonhosted.org/packages/26/5e/a2aa1d3a36fe8209075bf7c029eb88b03d3326665453166fdfcfca2c4871/pybbi-0.4.1-cp39-cp39-macosx_14_0_arm64.whl", hash = "sha256:0e622817ba90fa39efea407deac364201f2ffdfa274311422450fac329078c7b", size = 3008362, upload-time = "2024-10-18T15:58:19.94Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/c6/e74b133766270ca4bc83f611cf080ad8d890d0c9be4eed5d3096cc75754e/pybbi-0.4.1-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:eaf44f1cc8bbbdcbf6ecbdada9a00f85a87416a299a7de72462b03f075287a7a", size = 3062047, upload-time = "2024-10-18T15:58:22.184Z" },
+    { url = "https://files.pythonhosted.org/packages/be/fe/12f528f09015f8d80f8c6307b439cb8f77524509540b765325a4d4f1ae7a/pybbi-0.4.1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6726ea3decad71cb17541e6d0d440588ab6a555d2e280cedf4517f2ea011a07c", size = 3386409, upload-time = "2024-10-18T15:58:24.136Z" },
+]
+
+[[package]]
 name = "pybigtools"
 source = { editable = "." }
 dependencies = [
@@ -466,12 +500,14 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pybbi" },
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "ruff" },
     { name = "smart-open", extra = ["http"] },
 ]
 test = [
+    { name = "pybbi" },
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "smart-open", extra = ["http"] },
@@ -482,11 +518,13 @@ requires-dist = [{ name = "numpy" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pybbi" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "smart-open", extras = ["http"] },
 ]
 test = [
+    { name = "pybbi" },
     { name = "pytest" },
     { name = "smart-open", extras = ["http"] },
 ]

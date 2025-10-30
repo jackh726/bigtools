@@ -72,14 +72,15 @@ def test_bigwig_write(tmpdir):
         assert a[1] == b[2]
         assert math.isclose(a[2], b[3], abs_tol=0.00001)
 
+
 def test_bigbed_write(tmpdir):
     f = pybigtools.open(os.path.join(tmpdir, "test.bigBed"), "w")
     f.write(
-        {"chr1": 1000, "chr2": 1000}, 
+        {"chr1": 1000, "chr2": 1000},
         [
-            ("chr1", 0, 100, "foo\tbar\t3"), 
+            ("chr1", 0, 100, "foo\tbar\t3"),
             ("chr2", 100, 200, "xxx\tyyy\t1.0"),
-            ("chr2", 200, 300, "zzz\twww\t1.0")
+            ("chr2", 200, 300, "zzz\twww\t1.0"),
         ],
         autosql="""\
 table bed3
@@ -88,16 +89,20 @@ table bed3
     string chrom;        "Reference sequence chromosome or scaffold"
     uint   chromStart;   "Start position in chromosome"
     uint   chromEnd;     "End position in chromosome"
+    string name;         "Name of item"
+    string name2;        "Another name"
+    float  value;        "Value"
 )
-        """
+""",
     )
     f.close()
 
     f = pybigtools.open(os.path.join(tmpdir, "test.bigBed"))
     records = list(f.records("chr2"))
-    assert records[0][2] == 'xxx'
+    assert records[0][2] == "xxx"
     sql = f.sql()
     assert sql.startswith("table")
+
 
 # TODO: bigWigAverageOverBed
 # TODO: bigWigMerge

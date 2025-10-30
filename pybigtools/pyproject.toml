@@ -36,6 +36,7 @@ dev = [
   {include-group = "test"}
 ]
 test = [
+  "pybbi",
   "pytest",
   "smart_open[http]",
 ]
