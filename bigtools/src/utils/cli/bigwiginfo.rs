@@ -40,7 +40,7 @@ pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {
     ) -> Result<(), Box<dyn Error>> {
         let summary = bigwig.get_summary()?;
         if args.minmax {
-            println!("{:.6} {:.6}", summary.min_val, summary.max_val);
+            println!("{} {}", summary.min_val, summary.max_val);
             return Ok(());
         }
         let header = bigwig.info().header;
@@ -85,14 +85,14 @@ pub fn bigwiginfo(args: BigWigInfoArgs) -> Result<(), Box<dyn Error>> {
             }
         }
         println!("basesCovered: {}", num_with_commas(summary.bases_covered));
-        println!("mean: {:.6}", summary.sum / summary.bases_covered as f64);
-        println!("min: {:.6}", summary.min_val);
-        println!("max: {:.6}", summary.max_val);
+        println!("mean: {}", summary.sum / summary.bases_covered as f64);
+        println!("min: {}", summary.min_val);
+        println!("max: {}", summary.max_val);
         let var = (summary.sum_squares
             - (summary.sum * summary.sum) / summary.bases_covered as f64)
             / (summary.bases_covered as f64 - 1.0);
         let std = var.sqrt();
-        println!("std: {:.6}", std);
+        println!("std: {}", std);
 
         Ok(())
     }

@@ -157,7 +157,7 @@ fn bigwigaverageoverbed_impl<O: Write>(
 
                 let stats = match add_min_max {
                     true => format!(
-                        "{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                         entry.size,
                         entry.bases,
                         entry.sum,
@@ -167,7 +167,7 @@ fn bigwigaverageoverbed_impl<O: Write>(
                         entry.max
                     ),
                     false => format!(
-                        "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
+                        "{}\t{}\t{}\t{}\t{}",
                         entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
                     ),
                 };

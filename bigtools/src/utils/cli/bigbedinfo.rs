@@ -103,17 +103,14 @@ pub fn bigbedinfo(args: BigBedInfoArgs) -> Result<(), Box<dyn Error>> {
         }
         let summary = bigbed.get_summary()?;
         println!("basesCovered: {}", num_with_commas(summary.bases_covered));
-        println!(
-            "meanDepth: {:.6}",
-            summary.sum / summary.bases_covered as f64
-        );
-        println!("minDepth: {:.6}", summary.min_val);
-        println!("maxDepth: {:.6}", summary.max_val);
+        println!("meanDepth: {}", summary.sum / summary.bases_covered as f64);
+        println!("minDepth: {}", summary.min_val);
+        println!("maxDepth: {}", summary.max_val);
         let var = (summary.sum_squares
             - (summary.sum * summary.sum) / summary.bases_covered as f64)
             / (summary.bases_covered as f64 - 1.0);
         let std = var.sqrt();
-        println!("std of depth: {:.6}", std);
+        println!("std of depth: {}", std);
         if args.debug {
             println!("{:?}", header,);
         }
