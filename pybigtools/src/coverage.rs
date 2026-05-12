@@ -12,8 +12,12 @@ use std::collections::BinaryHeap;
 ///
 /// # Notes
 ///
-/// The iterator uses roughly constant memory by maintaining a small heap that only grows if many
-/// entries share the same start or end position.
+/// Implements a 1-D sweep-line over endpoint events: each entry contributes a `+1` at `start` and
+/// a `-1` at `end`; the running sum at any scan position is the coverage depth at that base.
+///
+/// Memory scales with the number of intervals overlapping the current scan position (not with the
+/// total number of input entries). The internal heap holds one pending `end` event for each such
+/// interval until the scan moves past it.
 ///
 /// # Example
 ///
