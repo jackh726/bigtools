@@ -38,7 +38,7 @@ use std::collections::BinaryHeap;
 pub struct CoverageIterator<I> {
     iter: I,
     heap: BinaryHeap<Reverse<(u32, i32)>>,
-    coverage: i32,
+    coverage: u32,
     prev_pos: Option<u32>,
     finished: bool,
 }
@@ -144,8 +144,12 @@ where
                 None
             };
 
-            // Update coverage and current position with all batched events
-            self.coverage += delta;
+            // Update coverage and current position with all batched events.
+            // `checked_add_signed` surfaces malformed input (e.g. an entry with start > end,
+            // which queues a -1 event before its matching +1) as a panic.
+            self.coverage = self.coverage.checked_add_signed(delta).expect(
+                "CoverageIterator: coverage underflow (likely malformed input: start > end)",
+            );
             self.prev_pos = Some(pos);
 
             // Return the interval if we have one
