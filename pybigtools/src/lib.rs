@@ -14,8 +14,8 @@ use url::Url;
 mod coverage;
 mod errors;
 mod file_like;
-mod reader;
 mod raster;
+mod reader;
 mod writer;
 
 use errors::{BBIFileClosed, BBIReadError};

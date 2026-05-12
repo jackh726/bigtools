@@ -261,7 +261,7 @@ fn records_to_array<R: BBIFileRead>(
 ///
 /// For [`Value`] intervals, the values are assigned over the covered bases.
 /// For [`BedEntry`] intervals, the total coverage is accumulated over each base.
-/// For [`ZoomRecord`] intervals, the mean statistic is assigned over the covered bases.
+/// For [`ZoomRecord`] intervals, the bin mean statistic is assigned over the covered bases.
 ///
 /// # Arguments
 /// * `start` - Start coordinate of the target range
@@ -330,6 +330,11 @@ fn fill_values<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
 /// # Notes
 /// [`BedEntry`] intervals are not supported. They must be converted to coverage [`Value`]
 /// intervals. See [`CoverageIterator`] for details.
+///
+/// Per-bin `bases_covered` is normalized up to the next integer (matching UCSC's convention),
+/// with `sum` and `sum_squares` rescaled proportionally so that `mean = sum / bases_covered`
+/// is invariant. This only has an effect on the [`ZoomRecord`] path, where partial overlap of
+/// a zoom record can produce a fractional share of its `validCount`.
 ///
 /// # Arguments
 /// * `start` - Start coordinate of the target range
@@ -410,7 +415,7 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
                 bin_end
             };
 
-            // Calculate overlap between interval and bin
+            // Calculate integer overlap between interval and adjusted bin
             let overlap_start = interval_start.max(bin_start);
             let overlap_end = interval_end.min(bin_end);
             let overlap = (overlap_end - overlap_start) as f64;
@@ -439,6 +444,28 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
                     }
                 }
             }
+        }
+    }
+
+    // Normalize bases_covered to an integer count, matching UCSC's convention.
+    //
+    // For the Value path, accumulated `bases_covered` is already integer-valued (overlaps are
+    // computed in integer coordinates), so `ceil` is a no-op.
+    //
+    // For the ZoomRecord path, a partial overlap of a zoom record contributes a fractional
+    // share of its `validCount` (e.g. a zoom summarizing 10 bases with validCount=7, half
+    // overlapped, contributes 3.5). UCSC rounds the per-bin total up to the next integer and
+    // rescales `sum` and `sum_squares` by `ceil(bc) / bc` to keep `mean = sum / bases_covered`
+    // invariant. The `ceil` direction preserves the invariant that `bases_covered >= 1`
+    // whenever any data overlaps the bin. Note that `std` is *not* preserved under this
+    // rescaling, but matching UCSC requires it.
+    for stat in stats.iter_mut() {
+        if stat.bases_covered > 0.0 {
+            let vc = stat.bases_covered.ceil();
+            let norm = vc / stat.bases_covered;
+            stat.sum *= norm;
+            stat.sum_squares *= norm;
+            stat.bases_covered = vc;
         }
     }
 
@@ -477,14 +504,32 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
                     *view.index_mut(i) = variance.sqrt();
                 }
                 Summary::Min0 => {
-                    *view.index_mut(i) = if stats[i].bases_covered < bin_size.floor() {
+                    // Use integer-adjusted bin size when checking for partial coverage
+                    let bin_start = start + (i as f64 * bin_size) as i32;
+                    let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
+                    let adj_bin_size = (bin_end - bin_start) as f64;
+                    let adj_bin_size = if adj_bin_size == 0.0 {
+                        1.0
+                    } else {
+                        adj_bin_size
+                    };
+                    *view.index_mut(i) = if stats[i].bases_covered < adj_bin_size {
                         stats[i].min.min(0.0)
                     } else {
                         stats[i].min
                     }
                 }
                 Summary::Max0 => {
-                    *view.index_mut(i) = if stats[i].bases_covered < bin_size.floor() {
+                    // Use integer-adjusted bin size when checking for partial coverage
+                    let bin_start = start + (i as f64 * bin_size) as i32;
+                    let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
+                    let adj_bin_size = (bin_end - bin_start) as f64;
+                    let adj_bin_size = if adj_bin_size == 0.0 {
+                        1.0
+                    } else {
+                        adj_bin_size
+                    };
+                    *view.index_mut(i) = if stats[i].bases_covered < adj_bin_size {
                         stats[i].max.max(0.0)
                     } else {
                         stats[i].max
@@ -511,7 +556,7 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
 
 /// Fill out-of-bounds elements in the array with a specified value.
 ///
-/// If any bin overlaps base coordinates outside the valid range of the chromosome, it is filled
+/// If a bin overlaps any base coordinates outside the valid range of the chromosome, it is filled
 /// with the `oob` value.
 fn fill_out_of_bounds(
     start: i32,
