@@ -533,17 +533,31 @@ impl BBIReader {
     ///     If provided, the query interval will be divided into equally spaced
     ///     bins and the values in each bin will be interpolated or summarized.
     ///     If not provided, the values will be returned for each base.
-    /// summary : Literal["mean", "min", "max"], optional [default: "mean"]
-    ///     The summary statistic to use. Currently supported statistics are
-    ///     ``mean``, ``min``, and ``max``.
+    /// summary : str, optional [default: "mean"]
+    ///     The summary statistic to use. One of ``mean``, ``std``, ``min``,
+    ///     ``max``, ``sum``, ``sum_squares``, ``bases_covered``,
+    ///     ``bin_covered``.
     /// exact : bool, optional [default: False]
     ///     If True and ``bins`` is specified, return exact summary statistic
     ///     values instead of interpolating from the optimal zoom level.
     ///     Default is False.
-    /// missing : float, optional [default: 0.0]
-    ///     Fill-in value for unreported data in valid regions. Default is 0.
+    /// uncovered : float or None, optional [default: None]
+    ///     The value assigned to all uncovered bases. If ``None``, uncovered
+    ///     bases are excluded from summary statistic calculations, and empty
+    ///     positions or bins will be returned as NaN (subject to ``fillna``).
+    ///     To treat uncovered bases as having a value of zero in summary
+    ///     statistics (like UCSC's ``mean0``) set this parameter to ``0.0``.
+    ///     Empty positions or bins will also be returned as ``0.0``. Other
+    ///     finite values are also valid and will be used in the same way.
+    ///     This parameter is ignored in the cases of ``bases_covered`` and
+    ///     ``bin_covered`` summaries since they exclude uncovered bases by
+    ///     definition.
     /// oob : float, optional [default: NaN]
     ///     Fill-in value for out-of-bounds regions. Default is NaN.
+    /// fillna : float or None, optional [default: None]
+    ///     Post-rasterization fill applied to in-bounds positions or bins that
+    ///     are returned as NaN due to being empty. Default ``None`` leaves
+    ///     NaN values untouched.
     /// arr : numpy.ndarray, optional
     ///     If provided, the values will be written to this array or array
     ///     view. The array must be of the correct size and type.
@@ -574,8 +588,8 @@ impl BBIReader {
     /// records : Get the records of a given range on a chromosome.
     /// zoom_records : Get the zoom records of a given range on a chromosome.
     #[pyo3(
-        signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
-        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
+        signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, uncovered=None, oob=f64::NAN, fillna=None, arr=None),
+        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, uncovered=None, oob=..., fillna=None, arr=None)"#,
     )]
     #[allow(clippy::too_many_arguments)]
     fn values(
@@ -587,8 +601,9 @@ impl BBIReader {
         bins: Option<usize>,
         summary: String,
         exact: bool,
-        missing: f64,
+        uncovered: Option<f64>,
         oob: f64,
+        fillna: Option<f64>,
         arr: Option<PyObject>,
     ) -> PyResult<PyObject> {
         let summary = match summary.as_ref() {
@@ -596,10 +611,6 @@ impl BBIReader {
             "std" => Summary::Std,
             "min" => Summary::Min,
             "max" => Summary::Max,
-            "mean0" => Summary::Mean0,
-            "std0" => Summary::Std0,
-            "min0" => Summary::Min0,
-            "max0" => Summary::Max0,
             "sum" => Summary::Sum,
             "sum_squares" => Summary::SumSquares,
             "bases_covered" => Summary::BasesCovered,
@@ -611,27 +622,29 @@ impl BBIReader {
                 )));
             }
         };
+        // Passing `uncovered=NaN` is equivalent to `uncovered=None` (exclude uncovered bases).
+        let uncovered = uncovered.and_then(|v| if v.is_nan() { None } else { Some(v) });
         match &mut self.bbi {
             BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigWigFileLike(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigBedFile(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigBedFileLike(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
         }
     }

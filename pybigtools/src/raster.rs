@@ -14,10 +14,6 @@ pub enum Summary {
     Std,
     Min,
     Max,
-    Mean0,
-    Std0,
-    Min0,
-    Max0,
     Sum,
     SumSquares,
     BasesCovered,
@@ -103,13 +99,14 @@ pub fn intervals_to_array<R: BBIFileRead>(
     bins: Option<usize>,
     summary: Summary,
     exact: bool,
-    missing: f64,
+    uncovered: Option<f64>,
     oob: f64,
+    fillna: Option<f64>,
     arr: Option<PyObject>,
 ) -> PyResult<PyObject> {
     let mut bbi = BBIRead::BigWig(bw);
     records_to_array(
-        py, &mut bbi, chrom, start, end, bins, summary, exact, missing, oob, arr,
+        py, &mut bbi, chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
     )
 }
 
@@ -122,13 +119,14 @@ pub fn entries_to_array<R: BBIFileRead>(
     bins: Option<usize>,
     summary: Summary,
     exact: bool,
-    missing: f64,
+    uncovered: Option<f64>,
     oob: f64,
+    fillna: Option<f64>,
     arr: Option<PyObject>,
 ) -> PyResult<PyObject> {
     let mut bbi = BBIRead::BigBed(bb);
     records_to_array(
-        py, &mut bbi, chrom, start, end, bins, summary, exact, missing, oob, arr,
+        py, &mut bbi, chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
     )
 }
 
@@ -141,15 +139,17 @@ fn records_to_array<R: BBIFileRead>(
     bins: Option<usize>,
     summary: Summary,
     exact: bool,
-    missing: f64,
+    uncovered: Option<f64>,
     oob: f64,
+    fillna: Option<f64>,
     arr: Option<PyObject>,
 ) -> PyResult<PyObject> {
     let (start, end, chrom_length) = bbi.resolve_range(chrom, start, end)?;
     let (valid_start, valid_end) = (start.max(0) as u32, end.min(chrom_length) as u32);
     let arr = arr.unwrap_or_else(|| {
         let size = bins.unwrap_or((end - start) as usize);
-        PyArray1::from_vec_bound(py, vec![missing; size]).to_object(py)
+        let init = uncovered.unwrap_or(f64::NAN);
+        PyArray1::from_vec_bound(py, vec![init; size]).to_object(py)
     });
     let array: &Bound<'_, PyArray1<f64>> =
         arr.downcast_bound::<PyArray1<f64>>(py).map_err(|_| {
@@ -177,14 +177,14 @@ fn records_to_array<R: BBIFileRead>(
                         .get_interval(chrom, valid_start, valid_end)
                         .convert_err()?
                         .map(|item| item.map(BBIRecord::Value));
-                    fill_values(start, end, iter, missing, view).convert_err()?;
+                    fill_values(start, end, iter, uncovered, view).convert_err()?;
                 }
                 BBIRead::BigBed(bb) => {
                     let iter = bb
                         .get_interval(chrom, valid_start, valid_end)
                         .convert_err()?
                         .map(|item| item.map(BBIRecord::BedEntry));
-                    fill_values(start, end, iter, missing, view).convert_err()?;
+                    fill_values(start, end, iter, uncovered, view).convert_err()?;
                 }
             }
         }
@@ -212,7 +212,7 @@ fn records_to_array<R: BBIFileRead>(
                             .get_zoom_interval(chrom, valid_start, valid_end, reduction_level)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::ZoomRecord));
-                        fill_binned(start, end, iter, summary, bins, missing, view)
+                        fill_binned(start, end, iter, summary, bins, uncovered, view)
                             .convert_err()?;
                     }
                     BBIRead::BigBed(bb) => {
@@ -220,7 +220,7 @@ fn records_to_array<R: BBIFileRead>(
                             .get_zoom_interval(chrom, valid_start, valid_end, reduction_level)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::ZoomRecord));
-                        fill_binned(start, end, iter, summary, bins, missing, view)
+                        fill_binned(start, end, iter, summary, bins, uncovered, view)
                             .convert_err()?;
                     }
                 },
@@ -231,7 +231,7 @@ fn records_to_array<R: BBIFileRead>(
                             .get_interval(chrom, valid_start, valid_end)
                             .convert_err()?
                             .map(|item| item.map(BBIRecord::Value));
-                        fill_binned(start, end, iter, summary, bins, missing, view)
+                        fill_binned(start, end, iter, summary, bins, uncovered, view)
                             .convert_err()?;
                     }
                     BBIRead::BigBed(bb) => {
@@ -241,7 +241,7 @@ fn records_to_array<R: BBIFileRead>(
                         let coverage_iter = CoverageIterator::new(iter)
                             .convert_err()?
                             .map(|result| result.map(BBIRecord::Value));
-                        fill_binned(start, end, coverage_iter, summary, bins, missing, view)
+                        fill_binned(start, end, coverage_iter, summary, bins, uncovered, view)
                             .convert_err()?;
                     }
                 },
@@ -249,10 +249,19 @@ fn records_to_array<R: BBIFileRead>(
         }
     };
 
-    // Handle out-of-bounds
+    // Post-process fill for NaN positions. Applied before filling out-of-bounds.
     let mut array = array.readwrite();
-    let view = array.as_array_mut();
-    fill_out_of_bounds(start, end, chrom_length, bins, oob, view);
+    let mut view = array.as_array_mut();
+    if let Some(fill) = fillna {
+        for v in view.iter_mut() {
+            if v.is_nan() {
+                *v = fill;
+            }
+        }
+    }
+
+    // Handle out-of-bounds (bins/positions that overlap out-of-chromosome coordinates).
+    fill_out_of_bounds(start, end, chrom_length, bins, oob, view.view_mut());
 
     Ok(arr)
 }
@@ -267,13 +276,13 @@ fn records_to_array<R: BBIFileRead>(
 /// * `start` - Start coordinate of the target range
 /// * `end` - End coordinate of the target range
 /// * `iter` - Iterator of data intervals
-/// * `missing` - Value to use for bases with no data
+/// * `uncovered` - Value to use for bases with no data; `None` leaves them as NaN
 /// * `view` - Mutable numpy array view to fill (must have length == end - start)
 fn fill_values<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
     start: i32,
     end: i32,
     iter: I,
-    missing: f64,
+    uncovered: Option<f64>,
     mut view: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(view.len(), (end - start) as usize);
@@ -311,9 +320,13 @@ fn fill_values<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
         }
     }
 
-    // Finalize
-    for val in view.iter_mut() {
-        *val = if val.is_nan() { missing } else { *val };
+    // Finalize: replace remaining NaN with `uncovered` if a fill was requested.
+    if let Some(fill) = uncovered {
+        for val in view.iter_mut() {
+            if val.is_nan() {
+                *val = fill;
+            }
+        }
     }
 
     Ok(())
@@ -336,13 +349,19 @@ fn fill_values<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
 /// is invariant. This only has an effect on the [`ZoomRecord`] path, where partial overlap of
 /// a zoom record can produce a fractional share of its `validCount`.
 ///
+/// `uncovered` is the per-base value assigned to uncovered bases within each bin. `None`
+/// means "exclude from the summary" and yields the classical statistics over only the
+/// covered bases. `Some(v)` (commonly `Some(0.0)`) means "treat uncovered bases as having
+/// value `v`"; passing `Some(0.0)` reproduces UCSC's `*0` summary statistics. The choice
+/// applies uniformly: there are no separate `*0` variants of `Mean`, `Std`, `Min`, `Max`.
+///
 /// # Arguments
 /// * `start` - Start coordinate of the target range
-/// * `end` - End coordinate of the target range  
+/// * `end` - End coordinate of the target range
 /// * `iter` - Iterator of data intervals
 /// * `summary` - How to aggregate values
 /// * `bins` - Number of bins to divide the range into
-/// * `missing` - Value to use for bins with no intersecting data
+/// * `uncovered` - Per-base value for uncovered bases; `None` excludes them
 /// * `view` - Mutable numpy array view to fill (must have length == bins)
 fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
     start: i32,
@@ -350,7 +369,7 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
     iter: I,
     summary: Summary,
     bins: usize,
-    missing: f64,
+    uncovered: Option<f64>,
     mut view: ArrayViewMut<'_, f64, numpy::Ix1>,
 ) -> Result<(), BBIReadError> {
     assert_eq!(view.len(), bins);
@@ -404,18 +423,9 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
 
         // Accumulate contribution of interval to each overlapping bin
         for i in first_bin..=last_bin {
-            // Round bin edges down to the nearest integer (base) for overlap calculation
-            let bin_start = start + (i as f64 * bin_size) as i32;
-            let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
+            let (bin_start, bin_end) = integer_bin_bounds(start, i, bin_size);
 
-            // For upsampling (case where bin_size < 1), ensure at least one base of overlap is counted
-            let bin_end = if bin_start == bin_end {
-                bin_start + 1
-            } else {
-                bin_end
-            };
-
-            // Calculate integer overlap between interval and adjusted bin
+            // Calculate integer overlap between interval and bin
             let overlap_start = interval_start.max(bin_start);
             let overlap_end = interval_end.min(bin_end);
             let overlap = (overlap_end - overlap_start) as f64;
@@ -469,89 +479,135 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
         }
     }
 
-    // Fill the output array
+    // Fill the output array.
+    //
+    // `uncovered` is the per-base value assigned to uncovered bases within each bin:
+    //   - `None`: uncovered bases are excluded from the summary computation
+    //     ("regular" statistics over just the covered bases). For a fully-uncovered
+    //     bin the result is NaN for stats over an empty set; for `BasesCovered` and
+    //     `BinCovered` the result is the factual 0.
+    //   - `Some(v)`: uncovered bases are folded into the summary as if they had
+    //     value `v`. `Some(0.0)` reproduces UCSC's `*0` statistics (e.g.
+    //     `mean0 = sum / bin_size`). Other values are well-defined generalizations.
+    //
+    // `BasesCovered` and `BinCovered` always report counts of *actual* data bases,
+    // independent of `uncovered`.
     for i in 0..bins {
-        if stats[i].bases_covered == 0.0 {
-            *view.index_mut(i) = missing;
-        } else {
-            match summary {
-                Summary::Mean => {
-                    *view.index_mut(i) = stats[i].sum / stats[i].bases_covered;
-                }
-                Summary::Std => {
-                    let n = stats[i].bases_covered;
-                    let mut variance = stats[i].sum_squares - (stats[i].sum * stats[i].sum) / n;
-                    if n > 1.0 {
-                        variance /= n - 1.0;
-                    }
-                    *view.index_mut(i) = variance.sqrt();
-                }
-                Summary::Min => {
-                    *view.index_mut(i) = stats[i].min;
-                }
-                Summary::Max => {
-                    *view.index_mut(i) = stats[i].max;
-                }
-                Summary::Mean0 => {
-                    *view.index_mut(i) = stats[i].sum / bin_size;
-                }
-                Summary::Std0 => {
-                    let n = bin_size;
-                    let mut variance = stats[i].sum_squares - (stats[i].sum * stats[i].sum) / n;
-                    if n > 1.0 {
-                        variance /= n - 1.0;
-                    }
-                    *view.index_mut(i) = variance.sqrt();
-                }
-                Summary::Min0 => {
-                    // Use integer-adjusted bin size when checking for partial coverage
-                    let bin_start = start + (i as f64 * bin_size) as i32;
-                    let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
-                    let adj_bin_size = (bin_end - bin_start) as f64;
-                    let adj_bin_size = if adj_bin_size == 0.0 {
-                        1.0
-                    } else {
-                        adj_bin_size
-                    };
-                    *view.index_mut(i) = if stats[i].bases_covered < adj_bin_size {
-                        stats[i].min.min(0.0)
-                    } else {
-                        stats[i].min
-                    }
-                }
-                Summary::Max0 => {
-                    // Use integer-adjusted bin size when checking for partial coverage
-                    let bin_start = start + (i as f64 * bin_size) as i32;
-                    let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
-                    let adj_bin_size = (bin_end - bin_start) as f64;
-                    let adj_bin_size = if adj_bin_size == 0.0 {
-                        1.0
-                    } else {
-                        adj_bin_size
-                    };
-                    *view.index_mut(i) = if stats[i].bases_covered < adj_bin_size {
-                        stats[i].max.max(0.0)
-                    } else {
-                        stats[i].max
-                    }
-                }
-                Summary::Sum => {
-                    *view.index_mut(i) = stats[i].sum;
-                }
-                Summary::SumSquares => {
-                    *view.index_mut(i) = stats[i].sum_squares;
-                }
-                Summary::BasesCovered => {
-                    *view.index_mut(i) = stats[i].bases_covered;
-                }
-                Summary::BinCovered => {
-                    *view.index_mut(i) = stats[i].bases_covered / bin_size;
+        let (bin_start, bin_end) = integer_bin_bounds(start, i, bin_size);
+        let bin_width = (bin_end - bin_start) as f64;
+        let n_covered = stats[i].bases_covered;
+        let n_uncovered = bin_width - n_covered;
+
+        // Effective sum/sum_squares and denominator after optionally folding in
+        // `uncovered`. When `uncovered` is `None`, only covered bases contribute.
+        let (s, ss, n) = match uncovered {
+            None => (stats[i].sum, stats[i].sum_squares, n_covered),
+            Some(u) => (
+                stats[i].sum + u * n_uncovered,
+                stats[i].sum_squares + u * u * n_uncovered,
+                bin_width,
+            ),
+        };
+
+        *view.index_mut(i) = match summary {
+            Summary::Mean => {
+                if n > 0.0 {
+                    s / n
+                } else {
+                    f64::NAN
                 }
             }
-        }
+            Summary::Std => {
+                if n < 1.0 {
+                    f64::NAN
+                } else {
+                    let mut variance = ss - s * s / n;
+                    if n > 1.0 {
+                        variance /= n - 1.0;
+                    }
+                    variance.sqrt()
+                }
+            }
+            Summary::Sum => {
+                if n > 0.0 {
+                    s
+                } else {
+                    f64::NAN
+                }
+            }
+            Summary::SumSquares => {
+                if n > 0.0 {
+                    ss
+                } else {
+                    f64::NAN
+                }
+            }
+            Summary::Min => match uncovered {
+                None => {
+                    if n_covered > 0.0 {
+                        stats[i].min
+                    } else {
+                        f64::NAN
+                    }
+                }
+                Some(u) if n_uncovered > 0.0 => {
+                    if n_covered > 0.0 {
+                        stats[i].min.min(u)
+                    } else {
+                        u
+                    }
+                }
+                Some(_) => stats[i].min,
+            },
+            Summary::Max => match uncovered {
+                None => {
+                    if n_covered > 0.0 {
+                        stats[i].max
+                    } else {
+                        f64::NAN
+                    }
+                }
+                Some(u) if n_uncovered > 0.0 => {
+                    if n_covered > 0.0 {
+                        stats[i].max.max(u)
+                    } else {
+                        u
+                    }
+                }
+                Some(_) => stats[i].max,
+            },
+            Summary::BasesCovered => n_covered,
+            Summary::BinCovered => n_covered / bin_size,
+        };
     }
 
     Ok(())
+}
+
+/// Compute the integer-aligned base coordinates of the bin at index `i`.
+///
+/// Float-valued `bin_size` does not generally fall on integer base boundaries, but the
+/// underlying data is indexed by integer positions. We resolve this by truncating each
+/// bin edge: bin `i` nominally spans
+/// `[start + floor(i * bin_size), start + floor((i + 1) * bin_size))`.
+///
+/// Consequence: for non-integer `bin_size`, adjacent bins can have integer widths that
+/// differ by 1 (e.g. for `bin_size = 2.4`, widths alternate 2, 2, 3, 2, 3) even though
+/// each bin "intends" to span `bin_size` bases. The integer width returned here is the
+/// actual number of base positions assigned to the bin.
+///
+/// For upsampling (`bin_size < 1`), the truncation can collapse a bin to zero integer
+/// width. We expand such bins to span a single base so that overlap and division
+/// operations stay well-defined; consecutive upsampled bins may then share the same
+/// underlying base.
+fn integer_bin_bounds(start: i32, i: usize, bin_size: f64) -> (i32, i32) {
+    let bin_start = start + (i as f64 * bin_size) as i32;
+    let bin_end = start + ((i + 1) as f64 * bin_size) as i32;
+    if bin_start == bin_end {
+        (bin_start, bin_start + 1)
+    } else {
+        (bin_start, bin_end)
+    }
 }
 
 /// Fill out-of-bounds elements in the array with a specified value.
@@ -619,64 +675,68 @@ mod tests {
             intervals.into_iter().map(BBIRecord::Value).map(Ok),
             Summary::Mean,
             n_bins,
-            0.0,
+            None,
             arr.view_mut(),
         )
         .unwrap();
 
         // First bin (0-10): overlaps 5-10 = 5 bp with value 2.0
         // Second bin (10-20): overlaps 10-15 = 5 bp with value 2.0
-        // Both should have value 2.0
+        // uncovered=None excludes uncovered bases → mean of just the covered bp.
         assert_eq!(arr.to_vec(), vec![2.0, 2.0]);
     }
 
     #[test]
     fn test_fill_binned_partial_overlap() {
+        // Bin 0 [0,10): overlaps [5,8) — 3 bp at value 4.0
+        // Bin 1 [10,20): no overlap
         let start = 0;
         let end = 20;
         let n_bins = 2;
-        let mut arr = Array::from(vec![0.0; n_bins]);
 
+        // uncovered = None ("exclude uncovered" / classical statistics).
+        // Bin 0: mean over the 3 covered bases = 4.0.
+        // Bin 1: fully uncovered → NaN.
         let intervals = vec![Value {
             start: 5,
             end: 8,
             value: 4.0,
         }];
+        let mut arr = Array::from(vec![0.0; n_bins]);
         fill_binned(
             start,
             end,
             intervals.into_iter().map(BBIRecord::Value).map(Ok),
             Summary::Mean,
             n_bins,
-            -1.0,
+            None,
             arr.view_mut(),
         )
         .unwrap();
+        assert!((arr[0] - 4.0).abs() < 1e-12);
+        assert!(arr[1].is_nan());
 
-        // First bin (0-10): overlaps 5-8 = 3 bp with value 4.0
-        // Second bin (10-20): no overlap
-        assert_eq!(arr.to_vec(), vec![4.0, -1.0]);
-
+        // uncovered = Some(0.0) (UCSC mean0 semantics: uncovered bases count as 0).
+        // Bin 0: (4.0 * 3 + 0.0 * 7) / 10 = 1.2.
+        // Bin 1: (0.0 * 10) / 10 = 0.0.
         let intervals = vec![Value {
             start: 5,
             end: 8,
             value: 4.0,
         }];
+        let mut arr = Array::from(vec![0.0; n_bins]);
         fill_binned(
             start,
             end,
             intervals.into_iter().map(BBIRecord::Value).map(Ok),
-            Summary::Mean0,
+            Summary::Mean,
             n_bins,
-            -1.0,
+            Some(0.0),
             arr.view_mut(),
         )
         .unwrap();
-
-        // First bin (0-10): overlaps 5-8 = 3 bp with value 4.0
-        // Second bin (10-20): no overlap
-        assert!((arr[0] - (4.0 * 3.0 / 10.0)).abs() < 0.01);
-        assert!((arr[1] - (-1.0)).abs() < 0.01);
+        assert!((arr[0] - 1.2).abs() < 1e-12);
+        assert!((arr[1] - 0.0).abs() < 1e-12);
     }
 
     #[test]
@@ -705,7 +765,7 @@ mod tests {
             intervals.clone().into_iter().map(BBIRecord::Value).map(Ok),
             Summary::Min,
             n_bins,
-            -1.0,
+            Some(-1.0),
             arr.view_mut(),
         )
         .unwrap();
@@ -722,7 +782,7 @@ mod tests {
             intervals.into_iter().map(BBIRecord::Value).map(Ok),
             Summary::Max,
             n_bins,
-            -1.0,
+            Some(-1.0),
             arr.view_mut(),
         )
         .unwrap();
@@ -782,7 +842,7 @@ mod tests {
             intervals.into_iter().map(BBIRecord::Value).map(Ok),
             Summary::Mean,
             n_bins,
-            0.0,
+            None,
             arr.view_mut(),
         )
         .unwrap();
@@ -797,5 +857,85 @@ mod tests {
                 (arr[i] - answer[i]).abs()
             );
         }
+    }
+
+    #[test]
+    fn test_fill_binned_min_max_with_uncovered_zero_noninteger_binsize() {
+        // 5 bins over range 0..12, bin_size = 2.4
+        // Integer-aligned bin spans: [0,2), [2,4), [4,7), [7,9), [9,12)
+        // Widths:                      2      2      3      2      3
+        //
+        // Single Value covering [0, 5) with value=5 covers bins 0 and 1 fully and
+        // overlaps bin 2 partially (1 of 3 bases, at position 4). Bins 3 and 4 have
+        // no coverage.
+        //
+        // With `uncovered = 0.0`, uncovered bases are folded into min/max as zeros.
+        // The integer-adjusted bin width is load-bearing: comparing `bases_covered`
+        // (=2 for bin 0) against the float `bin_size` (=2.4) would falsely report
+        // bin 0 as partially covered, contaminating min/max with 0. Using the actual
+        // integer bin width (=2) correctly identifies bin 0 as fully covered.
+        let start = 0;
+        let end = 12;
+        let n_bins = 5;
+        let uncovered = Some(0.0);
+
+        // Positive value: min should reveal the "contamination" bug if present
+        // (would pull min from 5 down to 0 in the fully-covered bins).
+        let intervals = vec![Value {
+            start: 0,
+            end: 5,
+            value: 5.0,
+        }];
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            intervals.clone().into_iter().map(BBIRecord::Value).map(Ok),
+            Summary::Min,
+            n_bins,
+            uncovered,
+            arr.view_mut(),
+        )
+        .unwrap();
+        // Bin 0, 1 fully covered → min = 5. Bin 2 partial → min(5, 0) = 0.
+        // Bins 3, 4 fully uncovered → uncovered (0).
+        assert_eq!(arr.to_vec(), vec![5.0, 5.0, 0.0, 0.0, 0.0]);
+
+        // Max with a negative value: partial coverage should pull max *up* to 0.
+        let intervals_neg = vec![Value {
+            start: 0,
+            end: 5,
+            value: -5.0,
+        }];
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            intervals_neg.into_iter().map(BBIRecord::Value).map(Ok),
+            Summary::Max,
+            n_bins,
+            uncovered,
+            arr.view_mut(),
+        )
+        .unwrap();
+        // Bins 0, 1 fully covered → max = -5. Bin 2 partial → max(-5, 0) = 0.
+        // Bins 3, 4 fully uncovered → uncovered (0).
+        assert_eq!(arr.to_vec(), vec![-5.0, -5.0, 0.0, 0.0, 0.0]);
+
+        // Max with positive value: partial coverage doesn't change max since
+        // max(5, 0) == 5; the test pins that the integer-aligned check doesn't
+        // accidentally pull max *down* in a fully-covered bin.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            intervals.into_iter().map(BBIRecord::Value).map(Ok),
+            Summary::Max,
+            n_bins,
+            uncovered,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![5.0, 5.0, 5.0, 0.0, 0.0]);
     }
 }

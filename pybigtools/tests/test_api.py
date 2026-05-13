@@ -276,25 +276,47 @@ def test_values_binned(bw, bb):
     assert len(bw.values("chr17", 100000, 110000, 10)) == 10
     assert len(bb.values("chr21", 10_148_000, 10_158_000, 10)) == 10
 
-    assert bw.values("chr17", 100000, 110000, 10)[0] == 0.44886381671868925
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10)[0] == 1.0
+    nan = float("nan")
+    assert (
+        bw.values("chr17", 100000, 110000, 10, uncovered=nan)[0]
+        == 0.44886381671868925
+    )
+    assert bb.values("chr21", 10_148_000, 10_158_000, 10, uncovered=nan)[0] == 1.0
 
-    assert bw.values("chr17", 100000, 110000, 10, "max")[0] == 1.1978399753570557
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "max")[0] == 1.0
+    assert (
+        bw.values("chr17", 100000, 110000, 10, "max", uncovered=nan)[0]
+        == 1.1978399753570557
+    )
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "max", uncovered=nan)[0] == 1.0
+    )
 
-    assert bw.values("chr17", 100000, 110000, 10, "min")[0] == 0.05403999984264374
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "min")[0] == 1.0
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "min0")[0] == 0.0
+    assert (
+        bw.values("chr17", 100000, 110000, 10, "min", uncovered=nan)[0]
+        == 0.05403999984264374
+    )
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=nan)[0] == 1.0
+    )
+    # uncovered=0: uncovered bases counted as 0 in min (UCSC min0 semantics).
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=0)[0] == 0.0
+    )
 
 
 def test_values_binned_exact(bw, bb):
+    nan = float("nan")
     assert np.isclose(
-        bw.values("chr17", 100000, 110000, 10, "mean", exact=True)[0],
+        bw.values("chr17", 100000, 110000, 10, "mean", exact=True, uncovered=nan)[0],
         0.4542629980980206,
     )
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "mean", exact=True)[0] == 1.0
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "mean", exact=True, uncovered=nan)[0]
+        == 1.0
+    )
+
     assert np.allclose(
-        bw.values("chr17", 59890, 59900, 10, "mean", exact=True),
+        bw.values("chr17", 59890, 59900, 10, "mean", exact=True, uncovered=0.0),
         [
             0.0,
             0.0,
@@ -310,9 +332,9 @@ def test_values_binned_exact(bw, bb):
     )
 
 
-def test_values_binned_missing_oob(bw, bb):
+def test_values_binned_uncovered_oob(bw, bb):
     assert np.allclose(
-        bw.values("chr17", 59890, 59900, 10, "mean", exact=True, missing=-1.0),
+        bw.values("chr17", 59890, 59900, 10, "mean", exact=True, uncovered=-1.0),
         [
             -1.0,
             -1.0,
@@ -327,37 +349,38 @@ def test_values_binned_missing_oob(bw, bb):
         ],
     )
 
-    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, missing=0.0)
+    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0)
     assert math.isnan(x[0])
     assert not math.isnan(x[19])
 
-    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, missing=0.0)
+    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0)
     assert math.isnan(x[0])
     assert not math.isnan(x[19])
 
-    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, missing=0.0, oob=0.0)
+    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0)
     assert x[0] == 0.0
-    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, missing=0.0, oob=0.0)
+    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0)
     assert x[0] == 0.0
 
     assert np.isclose(bw.values("chr17", 59890, 59900)[9], 0.06792)
-    assert np.isclose(bw.values("chr17", 59890, 59900, missing=np.nan)[9], 0.06792)
+    assert np.isclose(bw.values("chr17", 59890, 59900, uncovered=np.nan)[9], 0.06792)
 
 
 def test_values_binned_exact_vs_from_zoom(bw, bb):
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False)
+    nan = float("nan")
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False, uncovered=nan)
     assert np.allclose(vals, [0.10737355, 2.72889167])
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True)
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True, uncovered=nan)
     assert np.allclose(vals, [0.06770935, 2.48644244])
 
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False)
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False, uncovered=nan)
     assert np.allclose(vals, [0.53580606, 0.55134715])
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True)
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True, uncovered=nan)
     assert np.allclose(vals, [0.53620019, 0.55277108])
 
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False)
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False, uncovered=nan)
     assert np.allclose(vals, [1.23191877])
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True)
+    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True, uncovered=nan)
     assert np.allclose(vals, [1.34086629])
 
 
@@ -366,7 +389,7 @@ def test_values_assign_to_array(bw, bb):
     arr = np.zeros(20)
 
     ret_arr = bw.values(
-        "chr17", -10, 10, 20, "mean", exact=True, missing=0.0, oob=np.nan, arr=arr
+        "chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=np.nan, arr=arr
     )
     assert math.isnan(arr[0])
     assert arr[19] == 0.0
@@ -375,7 +398,7 @@ def test_values_assign_to_array(bw, bb):
     assert np.array_equal(arr, ret_arr, equal_nan=True)
 
     ret_arr = bb.values(
-        "chr21", -10, 10, 20, "mean", exact=True, missing=0.0, oob=np.nan, arr=arr
+        "chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=np.nan, arr=arr
     )
     assert math.isnan(arr[0])
     assert arr[19] == 0.0
