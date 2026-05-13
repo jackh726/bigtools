@@ -946,4 +946,190 @@ mod tests {
         .unwrap();
         assert_eq!(arr.to_vec(), vec![5.0, 5.0, 5.0, 0.0, 0.0]);
     }
+
+    /// Build an iterator of `Ok(BBIRecord::Value(...))` from a list of triples.
+    fn vals(items: Vec<(u32, u32, f32)>) -> impl Iterator<Item = Result<BBIRecord, BBIReadError>> {
+        items
+            .into_iter()
+            .map(|(s, e, v)| Value {
+                start: s,
+                end: e,
+                value: v,
+            })
+            .map(BBIRecord::Value)
+            .map(Ok)
+    }
+
+    #[test]
+    fn test_fill_binned_sum_sum_squares() {
+        // 2 bins over range 0..20. Values:
+        //   [0, 5) value=2  → bin 0 contributes 2*5 = 10
+        //   [5, 15) value=3 → bin 0 contributes 3*5 = 15; bin 1 contributes 3*5 = 15
+        // Bin 0: sum=25 over 10 covered bp; bin 1: sum=15 over 5 covered bp.
+        let start = 0;
+        let end = 20;
+        let n_bins = 2;
+        let intervals = vec![(0u32, 5u32, 2.0f32), (5, 15, 3.0)];
+
+        // Sum, uncovered=None: only covered contributes.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::Sum,
+            n_bins,
+            None,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![25.0, 15.0]);
+
+        // Sum, uncovered=Some(1.0): bin 1 also gets 1.0 * 5 uncovered bases.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::Sum,
+            n_bins,
+            Some(1.0),
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![25.0, 15.0 + 1.0 * 5.0]);
+
+        // SumSquares, uncovered=None.
+        // Bin 0: 2*2*5 + 3*3*5 = 20 + 45 = 65. Bin 1: 3*3*5 = 45.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::SumSquares,
+            n_bins,
+            None,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![65.0, 45.0]);
+
+        // SumSquares, uncovered=Some(2.0): adds 2*2 = 4 per uncovered base.
+        // Bin 1 has 5 uncovered bp → +20.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals),
+            Summary::SumSquares,
+            n_bins,
+            Some(2.0),
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![65.0, 45.0 + 4.0 * 5.0]);
+    }
+
+    #[test]
+    fn test_fill_binned_bases_and_bin_covered() {
+        // 4 bins of width 5 over [0, 20). One value covering [0, 12).
+        // Bin 0 [0, 5): fully covered (5).
+        // Bin 1 [5, 10): fully covered (5).
+        // Bin 2 [10, 15): partially covered (2 of 5).
+        // Bin 3 [15, 20): no coverage (0).
+        let start = 0;
+        let end = 20;
+        let n_bins = 4;
+        let intervals = vec![(0u32, 12u32, 1.0f32)];
+
+        // BasesCovered: actual integer count of covered bases per bin.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::BasesCovered,
+            n_bins,
+            None,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![5.0, 5.0, 2.0, 0.0]);
+
+        // `uncovered` must not affect BasesCovered.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::BasesCovered,
+            n_bins,
+            Some(99.0),
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![5.0, 5.0, 2.0, 0.0]);
+
+        // BinCovered: bases_covered / bin_size.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals),
+            Summary::BinCovered,
+            n_bins,
+            None,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert_eq!(arr.to_vec(), vec![1.0, 1.0, 0.4, 0.0]);
+    }
+
+    #[test]
+    fn test_fill_binned_std() {
+        // 2 bins over [0, 10). Bin 0 sees two distinct values; bin 1 is empty.
+        //   [0, 3) v=1  → contributes value 1 over 3 bases in bin 0
+        //   [3, 5) v=4  → contributes value 4 over 2 bases in bin 0
+        // Bin 0 sum = 1*3 + 4*2 = 11; sum_squares = 1*3 + 16*2 = 35; n_covered = 5.
+        // Sample variance = (35 - 11*11/5) / (5-1) = (35 - 24.2) / 4 = 2.7
+        // std = sqrt(2.7).
+        let start = 0;
+        let end = 10;
+        let n_bins = 2;
+        let intervals = vec![(0u32, 3u32, 1.0f32), (3, 5, 4.0)];
+
+        // uncovered=None: classical sample std over only the covered bases.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals.clone()),
+            Summary::Std,
+            n_bins,
+            None,
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert!((arr[0] - 2.7_f64.sqrt()).abs() < 1e-12);
+        assert!(arr[1].is_nan()); // empty bin → NaN
+
+        // uncovered=Some(0.0): the 0-padded computation.
+        // Bin 0: s = 11 + 0*0 = 11; ss = 35 + 0 = 35; n = 5 (bin_width).
+        //   variance = (35 - 121/5) / 4 = (35 - 24.2)/4 = 2.7
+        //   std = sqrt(2.7). Same as None because bin 0 is fully covered.
+        // Bin 1: s = 0; ss = 0; n = 5. variance = 0/4 = 0. std = 0.
+        let mut arr = Array::from(vec![0.0; n_bins]);
+        fill_binned(
+            start,
+            end,
+            vals(intervals),
+            Summary::Std,
+            n_bins,
+            Some(0.0),
+            arr.view_mut(),
+        )
+        .unwrap();
+        assert!((arr[0] - 2.7_f64.sqrt()).abs() < 1e-12);
+        assert!((arr[1] - 0.0).abs() < 1e-12);
+    }
 }
