@@ -276,42 +276,42 @@ def test_values_binned(bw, bb):
     assert len(bw.values("chr17", 100000, 110000, 10)) == 10
     assert len(bb.values("chr21", 10_148_000, 10_158_000, 10)) == 10
 
-    nan = float("nan")
+    # Statistics over only the covered bases (`uncovered=None`).
     assert (
-        bw.values("chr17", 100000, 110000, 10, uncovered=nan)[0]
-        == 0.44886381671868925
+        bw.values("chr17", 100000, 110000, 10, uncovered=None)[0] == 0.44886381671868925
     )
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, uncovered=nan)[0] == 1.0
+    assert bb.values("chr21", 10_148_000, 10_158_000, 10, uncovered=None)[0] == 1.0
 
     assert (
-        bw.values("chr17", 100000, 110000, 10, "max", uncovered=nan)[0]
+        bw.values("chr17", 100000, 110000, 10, "max", uncovered=None)[0]
         == 1.1978399753570557
     )
     assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "max", uncovered=nan)[0] == 1.0
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "max", uncovered=None)[0] == 1.0
     )
 
     assert (
-        bw.values("chr17", 100000, 110000, 10, "min", uncovered=nan)[0]
+        bw.values("chr17", 100000, 110000, 10, "min", uncovered=None)[0]
         == 0.05403999984264374
     )
     assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=nan)[0] == 1.0
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=None)[0] == 1.0
     )
-    # uncovered=0: uncovered bases counted as 0 in min (UCSC min0 semantics).
-    assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=0)[0] == 0.0
-    )
+
+    # Uncovered bases counted as 0 in min (min0 semantics).
+    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=0)[0] == 0.0
 
 
 def test_values_binned_exact(bw, bb):
-    nan = float("nan")
+    # Statistics over only the covered bases (`uncovered=None`).
     assert np.isclose(
-        bw.values("chr17", 100000, 110000, 10, "mean", exact=True, uncovered=nan)[0],
+        bw.values("chr17", 100000, 110000, 10, "mean", exact=True, uncovered=None)[0],
         0.4542629980980206,
     )
     assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "mean", exact=True, uncovered=nan)[0]
+        bb.values(
+            "chr21", 10_148_000, 10_158_000, 10, "mean", exact=True, uncovered=None
+        )[0]
         == 1.0
     )
 
@@ -363,24 +363,28 @@ def test_values_binned_uncovered_oob(bw, bb):
     assert x[0] == 0.0
 
     assert np.isclose(bw.values("chr17", 59890, 59900)[9], 0.06792)
-    assert np.isclose(bw.values("chr17", 59890, 59900, uncovered=np.nan)[9], 0.06792)
+    assert np.isclose(bw.values("chr17", 59890, 59900, uncovered=None)[9], 0.06792)
 
 
 def test_values_binned_exact_vs_from_zoom(bw, bb):
-    nan = float("nan")
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False, uncovered=nan)
+    # Statistics over only the covered bases (`uncovered=None`).
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False, uncovered=None)
     assert np.allclose(vals, [0.10737355, 2.72889167])
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True, uncovered=nan)
+    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True, uncovered=None)
     assert np.allclose(vals, [0.06770935, 2.48644244])
 
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False, uncovered=nan)
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False, uncovered=None)
     assert np.allclose(vals, [0.53580606, 0.55134715])
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True, uncovered=nan)
+    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True, uncovered=None)
     assert np.allclose(vals, [0.53620019, 0.55277108])
 
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=False, uncovered=nan)
+    vals = bb.values(
+        "chr21", 14_760_000, 14_800_000, bins=1, exact=False, uncovered=None
+    )
     assert np.allclose(vals, [1.23191877])
-    vals = bb.values("chr21", 14_760_000, 14_800_000, bins=1, exact=True, uncovered=nan)
+    vals = bb.values(
+        "chr21", 14_760_000, 14_800_000, bins=1, exact=True, uncovered=None
+    )
     assert np.allclose(vals, [1.34086629])
 
 
