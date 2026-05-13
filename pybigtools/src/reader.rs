@@ -589,7 +589,7 @@ impl BBIReader {
     /// zoom_records : Get the zoom records of a given range on a chromosome.
     #[pyo3(
         signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, uncovered=None, oob=f64::NAN, fillna=None, arr=None),
-        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, uncovered=None, oob=..., fillna=None, arr=None)"#,
+        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, uncovered=None, oob=float('nan'), fillna=None, arr=None)"#,
     )]
     #[allow(clippy::too_many_arguments)]
     fn values(

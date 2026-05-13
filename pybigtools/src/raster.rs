@@ -90,6 +90,7 @@ impl<R: BBIFileRead> BBIRead<'_, R> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn intervals_to_array<R: BBIFileRead>(
     py: Python<'_>,
     bw: &mut BigWigRead<R>,
@@ -110,6 +111,7 @@ pub fn intervals_to_array<R: BBIFileRead>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn entries_to_array<R: BBIFileRead>(
     py: Python<'_>,
     bb: &mut BigBedRead<R>,
@@ -130,6 +132,7 @@ pub fn entries_to_array<R: BBIFileRead>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn records_to_array<R: BBIFileRead>(
     py: Python<'_>,
     bbi: &mut BBIRead<R>,
@@ -422,7 +425,12 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
         let last_bin = last_bin.min(bins - 1);
 
         // Accumulate contribution of interval to each overlapping bin
-        for i in first_bin..=last_bin {
+        for (i, stat) in stats
+            .iter_mut()
+            .enumerate()
+            .take(last_bin + 1)
+            .skip(first_bin)
+        {
             let (bin_start, bin_end) = integer_bin_bounds(start, i, bin_size);
 
             // Calculate integer overlap between interval and bin
@@ -434,20 +442,20 @@ fn fill_binned<I: Iterator<Item = Result<BBIRecord, BBIReadError>>>(
                 match interval {
                     BBIRecord::Value(v) => {
                         let value = v.value as f64;
-                        stats[i].sum += value * overlap;
-                        stats[i].sum_squares += value * value * overlap;
-                        stats[i].min = stats[i].min.min(value);
-                        stats[i].max = stats[i].max.max(value);
-                        stats[i].bases_covered += overlap;
+                        stat.sum += value * overlap;
+                        stat.sum_squares += value * value * overlap;
+                        stat.min = stat.min.min(value);
+                        stat.max = stat.max.max(value);
+                        stat.bases_covered += overlap;
                     }
                     BBIRecord::ZoomRecord(z) => {
                         let summary = z.summary;
                         let overlap_factor = overlap / (z.end - z.start) as f64;
-                        stats[i].sum += summary.sum * overlap_factor;
-                        stats[i].sum_squares += summary.sum_squares * overlap_factor;
-                        stats[i].min = stats[i].min.min(summary.min_val);
-                        stats[i].max = stats[i].max.max(summary.max_val);
-                        stats[i].bases_covered += summary.bases_covered as f64 * overlap_factor;
+                        stat.sum += summary.sum * overlap_factor;
+                        stat.sum_squares += summary.sum_squares * overlap_factor;
+                        stat.min = stat.min.min(summary.min_val);
+                        stat.max = stat.max.max(summary.max_val);
+                        stat.bases_covered += summary.bases_covered as f64 * overlap_factor;
                     }
                     BBIRecord::BedEntry(_) => {
                         panic!("BED records must be converted to non-overlapping coverage intervals prior to binning.");
