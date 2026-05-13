@@ -258,65 +258,91 @@ def test_zoom_records_oob(bw, bb):
 
 def test_values_bp(bw, bb):
     # (chrom, None, None) => all values on chrom
-    assert len(bw.values("chr17")) == 83_257_441
-    assert len(bb.values("chr21")) == 48_129_895
+    assert len(bw.values("chr17", fillna=None)) == 83_257_441
+    assert len(bb.values("chr21", fillna=None)) == 48_129_895
 
     # (chrom, start, None) => all values from (start, <chrom_end>)
-    assert len(bw.values("chr17", 0)) == 83_257_441
-    assert len(bw.values("chr17", 10)) == 83_257_441 - 10
-    assert len(bb.values("chr21", 0)) == 48_129_895
-    assert len(bb.values("chr21", 10)) == 48_129_895 - 10
+    assert len(bw.values("chr17", 0, fillna=None)) == 83_257_441
+    assert len(bw.values("chr17", 10, fillna=None)) == 83_257_441 - 10
+    assert len(bb.values("chr21", 0, fillna=None)) == 48_129_895
+    assert len(bb.values("chr21", 10, fillna=None)) == 48_129_895 - 10
 
     # (chrom, start, end)
-    assert len(bw.values("chr17", 100_000, 110_000)) == 10_000
-    assert len(bb.values("chr21", 10_148_000, 10_158_000)) == 10_000
+    assert len(bw.values("chr17", 100_000, 110_000, fillna=None)) == 10_000
+    assert len(bb.values("chr21", 10_148_000, 10_158_000, fillna=None)) == 10_000
 
 
 def test_values_binned(bw, bb):
-    assert len(bw.values("chr17", 100000, 110000, 10)) == 10
-    assert len(bb.values("chr21", 10_148_000, 10_158_000, 10)) == 10
+    assert len(bw.values("chr17", 100000, 110000, 10, fillna=None)) == 10
+    assert len(bb.values("chr21", 10_148_000, 10_158_000, 10, fillna=None)) == 10
 
     # Statistics over only the covered bases (`uncovered=None`).
     assert (
-        bw.values("chr17", 100000, 110000, 10, uncovered=None)[0] == 0.44886381671868925
+        bw.values("chr17", 100000, 110000, 10, uncovered=None, fillna=None)[0]
+        == 0.44886381671868925
     )
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, uncovered=None)[0] == 1.0
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, uncovered=None, fillna=None)[0]
+        == 1.0
+    )
 
     assert (
-        bw.values("chr17", 100000, 110000, 10, "max", uncovered=None)[0]
+        bw.values("chr17", 100000, 110000, 10, "max", uncovered=None, fillna=None)[0]
         == 1.1978399753570557
     )
     assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "max", uncovered=None)[0] == 1.0
+        bb.values(
+            "chr21", 10_148_000, 10_158_000, 10, "max", uncovered=None, fillna=None
+        )[0]
+        == 1.0
     )
 
     assert (
-        bw.values("chr17", 100000, 110000, 10, "min", uncovered=None)[0]
+        bw.values("chr17", 100000, 110000, 10, "min", uncovered=None, fillna=None)[0]
         == 0.05403999984264374
     )
     assert (
-        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=None)[0] == 1.0
+        bb.values(
+            "chr21", 10_148_000, 10_158_000, 10, "min", uncovered=None, fillna=None
+        )[0]
+        == 1.0
     )
 
     # Uncovered bases counted as 0 in min (min0 semantics).
-    assert bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=0)[0] == 0.0
+    assert (
+        bb.values("chr21", 10_148_000, 10_158_000, 10, "min", uncovered=0, fillna=None)[
+            0
+        ]
+        == 0.0
+    )
 
 
 def test_values_binned_exact(bw, bb):
     # Statistics over only the covered bases (`uncovered=None`).
     assert np.isclose(
-        bw.values("chr17", 100000, 110000, 10, "mean", exact=True, uncovered=None)[0],
+        bw.values(
+            "chr17", 100000, 110000, 10, "mean", exact=True, uncovered=None, fillna=None
+        )[0],
         0.4542629980980206,
     )
     assert (
         bb.values(
-            "chr21", 10_148_000, 10_158_000, 10, "mean", exact=True, uncovered=None
+            "chr21",
+            10_148_000,
+            10_158_000,
+            10,
+            "mean",
+            exact=True,
+            uncovered=None,
+            fillna=None,
         )[0]
         == 1.0
     )
 
     assert np.allclose(
-        bw.values("chr17", 59890, 59900, 10, "mean", exact=True, uncovered=0.0),
+        bw.values(
+            "chr17", 59890, 59900, 10, "mean", exact=True, uncovered=0.0, fillna=None
+        ),
         [
             0.0,
             0.0,
@@ -334,7 +360,9 @@ def test_values_binned_exact(bw, bb):
 
 def test_values_binned_uncovered_oob(bw, bb):
     assert np.allclose(
-        bw.values("chr17", 59890, 59900, 10, "mean", exact=True, uncovered=-1.0),
+        bw.values(
+            "chr17", 59890, 59900, 10, "mean", exact=True, uncovered=-1.0, fillna=None
+        ),
         [
             -1.0,
             -1.0,
@@ -349,41 +377,67 @@ def test_values_binned_uncovered_oob(bw, bb):
         ],
     )
 
-    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0)
+    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, fillna=None)
     assert math.isnan(x[0])
     assert not math.isnan(x[19])
 
-    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0)
+    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, fillna=None)
     assert math.isnan(x[0])
     assert not math.isnan(x[19])
 
-    x = bw.values("chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0)
+    x = bw.values(
+        "chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0, fillna=None
+    )
     assert x[0] == 0.0
-    x = bb.values("chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0)
+    x = bb.values(
+        "chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=0.0, fillna=None
+    )
     assert x[0] == 0.0
 
-    assert np.isclose(bw.values("chr17", 59890, 59900)[9], 0.06792)
-    assert np.isclose(bw.values("chr17", 59890, 59900, uncovered=None)[9], 0.06792)
+    assert np.isclose(bw.values("chr17", 59890, 59900, fillna=None)[9], 0.06792)
+    assert np.isclose(
+        bw.values("chr17", 59890, 59900, uncovered=None, fillna=None)[9], 0.06792
+    )
 
 
 def test_values_binned_exact_vs_from_zoom(bw, bb):
     # Statistics over only the covered bases (`uncovered=None`).
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=False, uncovered=None)
+    vals = bw.values(
+        "chr17", 85525, 85730, bins=2, exact=False, uncovered=None, fillna=None
+    )
     assert np.allclose(vals, [0.10737355, 2.72889167])
-    vals = bw.values("chr17", 85525, 85730, bins=2, exact=True, uncovered=None)
+    vals = bw.values(
+        "chr17", 85525, 85730, bins=2, exact=True, uncovered=None, fillna=None
+    )
     assert np.allclose(vals, [0.06770935, 2.48644244])
 
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=False, uncovered=None)
+    vals = bw.values(
+        "chr17", 59900, 60105, bins=2, exact=False, uncovered=None, fillna=None
+    )
     assert np.allclose(vals, [0.53580606, 0.55134715])
-    vals = bw.values("chr17", 59900, 60105, bins=2, exact=True, uncovered=None)
+    vals = bw.values(
+        "chr17", 59900, 60105, bins=2, exact=True, uncovered=None, fillna=None
+    )
     assert np.allclose(vals, [0.53620019, 0.55277108])
 
     vals = bb.values(
-        "chr21", 14_760_000, 14_800_000, bins=1, exact=False, uncovered=None
+        "chr21",
+        14_760_000,
+        14_800_000,
+        bins=1,
+        exact=False,
+        uncovered=None,
+        fillna=None,
     )
     assert np.allclose(vals, [1.23191877])
     vals = bb.values(
-        "chr21", 14_760_000, 14_800_000, bins=1, exact=True, uncovered=None
+        "chr21",
+        14_760_000,
+        14_800_000,
+        bins=1,
+        exact=True,
+        uncovered=None,
+        fillna=None,
     )
     assert np.allclose(vals, [1.34086629])
 
@@ -393,7 +447,16 @@ def test_values_assign_to_array(bw, bb):
     arr = np.zeros(20)
 
     ret_arr = bw.values(
-        "chr17", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=np.nan, arr=arr
+        "chr17",
+        -10,
+        10,
+        20,
+        "mean",
+        exact=True,
+        uncovered=0.0,
+        oob=np.nan,
+        arr=arr,
+        fillna=None,
     )
     assert math.isnan(arr[0])
     assert arr[19] == 0.0
@@ -402,7 +465,16 @@ def test_values_assign_to_array(bw, bb):
     assert np.array_equal(arr, ret_arr, equal_nan=True)
 
     ret_arr = bb.values(
-        "chr21", -10, 10, 20, "mean", exact=True, uncovered=0.0, oob=np.nan, arr=arr
+        "chr21",
+        -10,
+        10,
+        20,
+        "mean",
+        exact=True,
+        uncovered=0.0,
+        oob=np.nan,
+        arr=arr,
+        fillna=None,
     )
     assert math.isnan(arr[0])
     assert arr[19] == 0.0
@@ -419,18 +491,18 @@ def test_values_oob(bw):
     end = chroms[chrom] + bin_size
     start = end - 2 * bin_size
     # Try to get values
-    v = bw.values(chrom, start, end, bins=3)
+    v = bw.values(chrom, start, end, bins=3, fillna=None)
     assert len(v) == 3
     assert np.isnan(v[2])
     # Note: also happens if explicitly setting oob:
-    v = bw.values(chrom, start, end, bins=3, oob=0)
+    v = bw.values(chrom, start, end, bins=3, oob=0, fillna=None)
     assert len(v) == 3
     assert v[2] == 0
 
 
 def test_big_gene_pred():
     bb = pybigtools.open(REPO_ROOT / "bigtools/resources/test/bigGenePred.bb")
-    bb.values("chr21", 14_000_000, 18_000_000, 100)
+    bb.values("chr21", 14_000_000, 18_000_000, 100, fillna=None)
 
 
 def test_average_over_bed(bw, bb):

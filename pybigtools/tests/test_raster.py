@@ -60,7 +60,7 @@ def big_bb_path():
 def test_values(bw_path, bb_path):
     # Default `uncovered=None` (NaN): uncovered bases are NaN.
     for path in [bw_path, bb_path]:
-        x1 = pbt.open(path).values("chr1", 0, 12)
+        x1 = pbt.open(path).values("chr1", 0, 12, fillna=None)
         assert np.allclose(
             x1,
             [np.nan, 1, 1, np.nan, 2, 2, 2, 2, 3, 3, np.nan, np.nan],
@@ -68,7 +68,7 @@ def test_values(bw_path, bb_path):
         )
 
     for path in [bw_path, bb_path]:
-        x1 = pbt.open(path).values("chr1", -2, 14)
+        x1 = pbt.open(path).values("chr1", -2, 14, fillna=None)
         assert np.allclose(
             x1,
             [
@@ -94,8 +94,29 @@ def test_values(bw_path, bb_path):
 
     # `uncovered=0` reproduces the previous fill-with-zero behavior.
     for path in [bw_path, bb_path]:
-        x1 = pbt.open(path).values("chr1", 0, 12, uncovered=0)
+        x1 = pbt.open(path).values("chr1", 0, 12, uncovered=0, fillna=None)
         assert np.allclose(x1, [0, 1, 1, 0, 2, 2, 2, 2, 3, 3, 0, 0], equal_nan=True)
+
+
+def test_values_missing_alias_deprecated(bw_path):
+    # `missing` is a deprecated alias for `fillna`. Using it raises a
+    # DeprecationWarning but otherwise behaves identically to `fillna`.
+    with pytest.warns(DeprecationWarning, match=r"`missing` is deprecated"):
+        x = pbt.open(bw_path).values("chr1", 0, 12, missing=0)
+    # Behavior matches `fillna=0`.
+    y = pbt.open(bw_path).values("chr1", 0, 12, fillna=0)
+    assert np.array_equal(x, y)
+
+
+def test_values_default_fillna_deprecated(bw_path):
+    # Not passing `fillna` triggers a DeprecationWarning about the default
+    # change. The new default is `fillna=None` (leave NaN), matching the
+    # current Rust-level default.
+    with pytest.warns(DeprecationWarning, match=r"default behavior of `values"):
+        x = pbt.open(bw_path).values("chr1", 0, 12)
+    # Equivalent to explicit fillna=None.
+    y = pbt.open(bw_path).values("chr1", 0, 12, fillna=None)
+    assert np.array_equal(x, y, equal_nan=True)
 
 
 def test_fillna(bw_path, bb_path):
@@ -163,7 +184,14 @@ def test_binned_mean(bw_path, bb_path):
     # uncovered=None: classical mean over only covered bases; empty bins → NaN.
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=None, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=None,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -173,25 +201,53 @@ def test_binned_mean(bw_path, bb_path):
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=None, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=None,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2, 3, np.nan], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=None, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=None,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2.5, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=None, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=None,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [1.5, 2.5], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=None, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=None,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [2], equal_nan=True)
 
@@ -202,7 +258,14 @@ def test_binned_mean_uncovered_zero(bw_path, bb_path):
     uncovered = 0
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=uncovered, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=uncovered,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -212,7 +275,14 @@ def test_binned_mean_uncovered_zero(bw_path, bb_path):
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=uncovered, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=uncovered,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [0.5, 0.5, 2, 2, 3, uncovered], equal_nan=True)
 
@@ -225,19 +295,40 @@ def test_binned_mean_uncovered_zero(bw_path, bb_path):
     # mean0:      0.5   0.5   2.0     2.5     1.0
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=uncovered, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=uncovered,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [0.5, 0.5, 2.0, 2.5, 1.0], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=uncovered, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=uncovered,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 10 / 6], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=uncovered, summary="mean"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=uncovered,
+            summary="mean",
+            fillna=None,
         )
         assert np.allclose(x1, [16 / 12], equal_nan=True)
 
@@ -246,7 +337,14 @@ def test_binned_minmax(bw_path, bb_path):
     # uncovered=None: classical min/max over only covered bases; empty bins → NaN.
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=None, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=None,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -254,7 +352,14 @@ def test_binned_minmax(bw_path, bb_path):
             equal_nan=True,
         )
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=None, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=None,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -264,41 +369,97 @@ def test_binned_minmax(bw_path, bb_path):
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=None, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=None,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2, 3, np.nan], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=None, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=None,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2, 3, np.nan], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=None, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=None,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2, 3], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=None, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=None,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 3, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=None, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=None,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 2], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=None, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=None,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [2, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=None, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=None,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [1], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=None, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=None,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [3], equal_nan=True)
 
@@ -308,7 +469,14 @@ def test_binned_minmax_uncovered_zero(bw_path, bb_path):
     uncovered = 0
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=uncovered, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=uncovered,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -316,7 +484,14 @@ def test_binned_minmax_uncovered_zero(bw_path, bb_path):
             equal_nan=True,
         )
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=12, exact=True, uncovered=uncovered, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=12,
+            exact=True,
+            uncovered=uncovered,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(
             x1,
@@ -326,41 +501,97 @@ def test_binned_minmax_uncovered_zero(bw_path, bb_path):
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=uncovered, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=uncovered,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [0, 0, 2, 2, 3, uncovered], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=6, exact=True, uncovered=uncovered, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            uncovered=uncovered,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 2, 3, uncovered], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=uncovered, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=uncovered,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [0, 0, 2, 2, 0], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=5, exact=True, uncovered=uncovered, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=5,
+            exact=True,
+            uncovered=uncovered,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [1, 1, 2, 3, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=uncovered, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=uncovered,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [0, 0], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=2, exact=True, uncovered=uncovered, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=2,
+            exact=True,
+            uncovered=uncovered,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [2, 3], equal_nan=True)
 
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=uncovered, summary="min"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=uncovered,
+            summary="min",
+            fillna=None,
         )
         assert np.allclose(x1, [0], equal_nan=True)
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=1, exact=True, uncovered=uncovered, summary="max"
+            "chr1",
+            0,
+            12,
+            bins=1,
+            exact=True,
+            uncovered=uncovered,
+            summary="max",
+            fillna=None,
         )
         assert np.allclose(x1, [3], equal_nan=True)
 
@@ -371,7 +602,13 @@ def test_binned_minmax_uncovered_zero(bw_path, bb_path):
 def test_binned_coverage_breadth(bw_path, bb_path, n_bins, exact):
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", 0, 12, bins=n_bins, exact=exact, summary="bases_covered"
+            "chr1",
+            0,
+            12,
+            bins=n_bins,
+            exact=exact,
+            summary="bases_covered",
+            fillna=None,
         )
         assert np.nansum(x1) == 8
 
@@ -381,7 +618,7 @@ def test_values_arr_param(bw_path, bb_path):
     # same object.
     for path in [bw_path, bb_path]:
         arr = np.full(12, -7.0)
-        ret = pbt.open(path).values("chr1", 0, 12, uncovered=0, arr=arr)
+        ret = pbt.open(path).values("chr1", 0, 12, uncovered=0, arr=arr, fillna=None)
         assert ret is arr  # same object
         assert np.allclose(arr, [0, 1, 1, 0, 2, 2, 2, 2, 3, 3, 0, 0])
 
@@ -397,6 +634,7 @@ def test_values_arr_param(bw_path, bb_path):
             summary="mean",
             uncovered=None,
             arr=arr,
+            fillna=None,
         )
         assert ret is arr
         assert np.allclose(arr, [1, 1, 2, 2, 3, np.nan], equal_nan=True)
@@ -405,22 +643,30 @@ def test_values_arr_param(bw_path, bb_path):
 def test_values_arr_wrong_size(bw_path):
     # Wrong-length `arr` raises ValueError.
     with pytest.raises(ValueError):
-        pbt.open(bw_path).values("chr1", 0, 12, arr=np.zeros(11))  # need 12
+        pbt.open(bw_path).values(
+            "chr1", 0, 12, arr=np.zeros(11), fillna=None
+        )  # need 12
 
     with pytest.raises(ValueError):
         pbt.open(bw_path).values(
-            "chr1", 0, 12, bins=6, exact=True, arr=np.zeros(5)
+            "chr1",
+            0,
+            12,
+            bins=6,
+            exact=True,
+            arr=np.zeros(5),
+            fillna=None,
         )  # need 6
 
 
 def test_values_bad_args(bw_path):
     # Unknown chromosome.
     with pytest.raises(KeyError):
-        pbt.open(bw_path).values("nope", 0, 12)
+        pbt.open(bw_path).values("nope", 0, 12, fillna=None)
 
     # Unknown summary string.
     with pytest.raises(ValueError):
-        pbt.open(bw_path).values("chr1", 0, 12, bins=4, summary="median")
+        pbt.open(bw_path).values("chr1", 0, 12, bins=4, summary="median", fillna=None)
 
 
 # -- These tests check Parity with UCSC via pybbi --
@@ -433,14 +679,14 @@ def test_bbi_consistent_values(bw_path, bb_path, start, end):
     # pybigtools defaults to `uncovered=None` (NaN), pybbi to `missing=0.0`.
     # Pass matching values explicitly for the comparison.
     for path in [bw_path, bb_path]:
-        x1 = pbt.open(path).values("chr1", start, end, uncovered=0.0)
+        x1 = pbt.open(path).values("chr1", start, end, uncovered=0.0, fillna=None)
         x2 = bbi.open(path).fetch("chr1", start, end, missing=0.0)
         assert np.allclose(x1, x2, equal_nan=True)
 
 
 def test_bbi_consistent_values_match_coverage(bb_path, bw_path):
-    bb1 = pbt.open(bb_path).values("chr1", uncovered=0.0)
-    bw1 = pbt.open(bw_path).values("chr1", uncovered=0.0)
+    bb1 = pbt.open(bb_path).values("chr1", uncovered=0.0, fillna=None)
+    bw1 = pbt.open(bw_path).values("chr1", uncovered=0.0, fillna=None)
     assert np.allclose(bb1, bw1, equal_nan=True)
 
     bb2 = bbi.open(bb_path).fetch("chr1", 0, -1)
@@ -463,7 +709,9 @@ def test_bbi_consistent_values_uncovered_oob(
     # uncovered bases as NaN."
     pbbi_missing = np.nan if uncovered is None else uncovered
     for path in [bw_path, bb_path]:
-        x1 = pbt.open(path).values("chr1", start, end, uncovered=uncovered, oob=oob)
+        x1 = pbt.open(path).values(
+            "chr1", start, end, uncovered=uncovered, oob=oob, fillna=None
+        )
         x2 = bbi.open(path).fetch("chr1", start, end, missing=pbbi_missing, oob=oob)
         assert np.allclose(x1, x2, equal_nan=True)
 
@@ -496,6 +744,7 @@ def test_bbi_consistent_binned(bw_path, bb_path, start, end, n_bins, exact, summ
             exact=exact,
             summary=summary,
             uncovered=None,
+            fillna=None,
         )
         x2 = bbi.open(path).fetch(
             "chr1",
@@ -529,7 +778,14 @@ def test_bbi_consistent_binned_uncovered_oob(
     # `missing=NaN`, both compute classical statistics over the covered bases.
     for path in [bw_path, bb_path]:
         x1 = pbt.open(path).values(
-            "chr1", start, end, bins=n_bins, exact=exact, uncovered=None, oob=oob
+            "chr1",
+            start,
+            end,
+            bins=n_bins,
+            exact=exact,
+            uncovered=None,
+            oob=oob,
+            fillna=None,
         )
         x2 = bbi.open(path).fetch(
             "chr1", start, end, bins=n_bins, exact=exact, missing=np.nan, oob=oob
@@ -546,7 +802,13 @@ def test_bbi_consistent_binned_upsample(bw_path, bb_path, start, end, n_bins, ex
     # so per-base vs empty-bin `uncovered` semantics agree.
     for path in [bb_path, bw_path]:
         x1 = pbt.open(path).values(
-            "chr1", start, end, bins=n_bins, exact=exact, uncovered=None
+            "chr1",
+            start,
+            end,
+            bins=n_bins,
+            exact=exact,
+            uncovered=None,
+            fillna=None,
         )
         x2 = bbi.open(path).fetch(
             "chr1", start, end, bins=n_bins, exact=exact, missing=np.nan
@@ -584,6 +846,7 @@ def test_bbi_consistent_binned_zoom_bw(big_bw_path, start, end, n_bins, summary)
         exact=False,
         summary=summary,
         uncovered=None,
+        fillna=None,
     )
     x2 = bbi.open(big_bw_path).fetch(
         "chr17",
@@ -616,6 +879,7 @@ def test_bbi_consistent_binned_zoom_bb(big_bb_path, start, end, n_bins, summary)
         exact=False,
         summary=summary,
         uncovered=None,
+        fillna=None,
     )
     x2 = bbi.open(big_bb_path).fetch(
         "chr21",
@@ -633,23 +897,25 @@ def test_values_fully_out_of_bounds(bw_path, bb_path):
     # Query entirely past the end of the chromosome.
     # chr1 length is 12. Query [20, 30) is fully OOB.
     for path in [bw_path, bb_path]:
-        x = pbt.open(path).values("chr1", 20, 30)
+        x = pbt.open(path).values("chr1", 20, 30, fillna=None)
         # Default oob=NaN.
         assert len(x) == 10
         assert all(np.isnan(v) for v in x)
 
     # With oob=-1, the whole array is -1.
     for path in [bw_path, bb_path]:
-        x = pbt.open(path).values("chr1", 20, 30, oob=-1)
+        x = pbt.open(path).values("chr1", 20, 30, oob=-1, fillna=None)
         assert np.array_equal(x, np.full(10, -1.0))
 
     # Query entirely before the start (negative range).
     for path in [bw_path, bb_path]:
-        x = pbt.open(path).values("chr1", -10, -2)
+        x = pbt.open(path).values("chr1", -10, -2, fillna=None)
         assert len(x) == 8
         assert all(np.isnan(v) for v in x)
 
     # Binned version of the same — all bins OOB, all bins get oob.
     for path in [bw_path, bb_path]:
-        x = pbt.open(path).values("chr1", 20, 30, bins=5, exact=True, oob=0)
+        x = pbt.open(path).values(
+            "chr1", 20, 30, bins=5, exact=True, oob=0, fillna=None
+        )
         assert np.array_equal(x, np.zeros(5))

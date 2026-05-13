@@ -49,6 +49,15 @@ repository = "https://github.com/jackh726/bigtools"
 [tool.maturin]
 python-source = "."
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Deprecation warnings from pybigtools' `values()` are expected during
+    # the deprecation cycle and would otherwise flood the test output.
+    # Tests that exercise the deprecation path itself use
+    # `pytest.warns(DeprecationWarning)` locally.
+    "ignore::DeprecationWarning:pybigtools",
+]
+
 [tool.uv]
 default-groups = ["dev"]
 cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}]
