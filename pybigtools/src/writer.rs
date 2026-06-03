@@ -11,12 +11,12 @@ use crate::errors::BBIFileClosed;
 
 /// Interface for writing to a BigWig file.
 #[pyclass(module = "pybigtools")]
-pub struct BigWigWrite {
+pub struct BigWigWriter {
     pub bigwig: Option<String>,
 }
 
 #[pymethods]
-impl BigWigWrite {
+impl BigWigWriter {
     /// Write values to the BigWig file.
     ///
     /// The underlying file will be closed automatically when the function
@@ -77,17 +77,17 @@ impl BigWigWrite {
                     let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
                         Ok(o) => o.clone(),
                         Err(_) => {
-                            return Some(Err(IterError(format!(
-                                "Passed value for `val` is not iterable."
-                            ))))
+                            return Some(Err(IterError(
+                                "Passed value for `val` is not iterable.".to_string(),
+                            )))
                         }
                     };
                     let next: Result<(String, Value), pyo3::PyErr> = match iter.next()? {
                         Err(e) => {
                             e.print(py);
-                            return Some(Err(IterError(format!(
-                                "An error occurred while iterating."
-                            ))));
+                            return Some(Err(IterError(
+                                "An error occurred while iterating.".to_string(),
+                            )));
                         }
                         Ok(n) => {
                             // TODO: try block or separate function
@@ -145,13 +145,12 @@ impl BigWigWrite {
                 }
             })?;
             let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.0.to_string())),
                 Ok(v) => Ok(v),
             });
             let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
-            match bigwig.write(data, runtime) {
-                Err(e) => println!("{}", e),
-                Ok(_) => {}
+            if let Err(e) = bigwig.write(data, runtime) {
+                println!("{}", e)
             }
             Ok(())
         })
@@ -169,12 +168,12 @@ impl BigWigWrite {
 
 /// Interface for writing to a BigBed file.
 #[pyclass(module = "pybigtools")]
-pub struct BigBedWrite {
+pub struct BigBedWriter {
     pub bigbed: Option<String>,
 }
 
 #[pymethods]
-impl BigBedWrite {
+impl BigBedWriter {
     /// Write values to the BigBed file.
     ///
     /// The underlying file will be closed automatically when the function
@@ -246,17 +245,17 @@ impl BigBedWrite {
                     let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
                         Ok(o) => o.clone(),
                         Err(_) => {
-                            return Some(Err(IterError(format!(
-                                "Passed value for `val` is not iterable."
-                            ))))
+                            return Some(Err(IterError(
+                                "Passed value for `val` is not iterable.".to_string(),
+                            )))
                         }
                     };
                     let next: Result<(String, BedEntry), pyo3::PyErr> = match iter.next()? {
                         Err(e) => {
                             e.print(py);
-                            return Some(Err(IterError(format!(
-                                "An error occurred while iterating."
-                            ))));
+                            return Some(Err(IterError(
+                                "An error occurred while iterating.".to_string(),
+                            )));
                         }
                         Ok(n) => {
                             // TODO: try block or separate function
@@ -314,15 +313,12 @@ impl BigBedWrite {
                 }
             })?;
             let vals_iter_raw = Iter { inner: iter }.map(|v| match v {
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e.0))),
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.0.to_string())),
                 Ok(v) => Ok(v),
             });
             let data = BedParserStreamingIterator::wrap_iter(vals_iter_raw, true);
-            match bigbed.write(data, runtime) {
-                Err(e) => {
-                    println!("{}", e)
-                }
-                Ok(_) => {}
+            if let Err(e) = bigbed.write(data, runtime) {
+                println!("{}", e)
             }
             Ok(())
         })

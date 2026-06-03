@@ -27,9 +27,9 @@ impl ToPyErr for bigtools::ZoomIntervalError {
     fn to_py_err(self) -> PyErr {
         match self {
             bigtools::ZoomIntervalError::ReductionLevelNotFound => {
-                PyErr::new::<exceptions::PyKeyError, _>(format!(
-                    "The passed reduction level was not found"
-                ))
+                PyErr::new::<exceptions::PyKeyError, _>(
+                    "The passed reduction level was not found".to_string(),
+                )
             }
             _ => PyErr::new::<BBIReadError, _>(format!("{}", self)),
         }

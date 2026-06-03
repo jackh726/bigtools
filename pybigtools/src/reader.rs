@@ -3,128 +3,47 @@ use std::io::BufReader;
 use std::ops::Deref;
 
 use bigtools::bed::autosql::parse::parse_autosql;
+#[cfg(feature = "remote")]
+use bigtools::utils::file::remote_file::RemoteFile;
+use bigtools::utils::file::reopen::ReopenableFile;
 use bigtools::utils::misc::{
     bigwig_average_over_bed, BigWigAverageOverBedEntry, BigWigAverageOverBedError, Name,
 };
 use bigtools::utils::reopen::Reopen;
-use bigtools::{BBIReadError as _BBIReadError, BedEntry, Value, ZoomRecord};
+use bigtools::{
+    BBIReadError as _BBIReadError, BedEntry, BigBedRead, BigWigRead, CachedBBIFileRead, Value,
+    ZoomRecord,
+};
 use pyo3::exceptions::{self, PyKeyError};
 use pyo3::types::{IntoPyDict, PyAny, PyDict, PyList, PyString, PyTuple};
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use crate::errors::{BBIFileClosed, BBIReadError, ConvertResult};
-use crate::utils::{entries_to_array, intervals_to_array, start_end, BBIReadRaw, Summary};
+use crate::file_like::PyFileLikeObject;
+use crate::raster::{entries_to_array, intervals_to_array, Summary};
 
 type ValueTuple = (u32, u32, f32);
 
-enum BigWigAverageOverBedStatistics {
-    Size,
-    Bases,
-    Sum,
-    Mean0,
-    Mean,
-    Min,
-    Max,
-}
-
-impl BigWigAverageOverBedStatistics {
-    fn from_str(val: &str) -> Option<BigWigAverageOverBedStatistics> {
-        Some(match val {
-            "size" => BigWigAverageOverBedStatistics::Size,
-            "bases" => BigWigAverageOverBedStatistics::Bases,
-            "sum" => BigWigAverageOverBedStatistics::Sum,
-            "mean0" => BigWigAverageOverBedStatistics::Mean0,
-            "mean" => BigWigAverageOverBedStatistics::Mean,
-            "min" => BigWigAverageOverBedStatistics::Min,
-            "max" => BigWigAverageOverBedStatistics::Max,
-            _ => {
-                return None;
-            }
-        })
-    }
-}
-
-/// This class is an interator for the entries of bigWigAverageOverBed
-#[pyclass(module = "pybigtools")]
-struct BigWigAverageOverBedEntriesIterator {
-    iter: Box<
-        dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
-            + Send,
-    >,
-    usename: bool,
-    stats: Option<Vec<BigWigAverageOverBedStatistics>>,
-    summary_statistics: PyObject,
-}
-
-#[pymethods]
-impl BigWigAverageOverBedEntriesIterator {
-    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigWigAverageOverBedEntriesIterator>> {
-        Ok(slf.into())
-    }
-
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
-        let v = slf
-            .iter
-            .next()
-            .transpose()
-            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
-
-        let Some((name, v)) = v else {
-            return Ok(None);
-        };
-        let stats = match &slf.stats {
-            Some(stats) => {
-                let mut ret = Vec::with_capacity(stats.len());
-                for stat in stats.iter() {
-                    match stat {
-                        BigWigAverageOverBedStatistics::Size => {
-                            ret.push(v.size.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Bases => {
-                            ret.push(v.bases.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Mean0 => {
-                            ret.push(v.mean0.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Mean => {
-                            ret.push(v.mean.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
-                    }
-                }
-                if ret.len() == 1 {
-                    ret[0].to_object(slf.py())
-                } else {
-                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
-                }
-            }
-            None => {
-                let val = slf.summary_statistics.call_bound(
-                    slf.py(),
-                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
-                    None,
-                )?;
-                val.to_object(slf.py())
-            }
-        };
-
-        match slf.usename {
-            true => Ok(Some((name, stats).to_object(slf.py()))),
-            false => Ok(Some(stats)),
-        }
-    }
+pub enum BBIReadRaw {
+    Closed,
+    BigWigFile(BigWigRead<CachedBBIFileRead<ReopenableFile>>),
+    #[cfg(feature = "remote")]
+    BigWigRemote(BigWigRead<CachedBBIFileRead<RemoteFile>>),
+    BigWigFileLike(BigWigRead<CachedBBIFileRead<PyFileLikeObject>>),
+    BigBedFile(BigBedRead<CachedBBIFileRead<ReopenableFile>>),
+    #[cfg(feature = "remote")]
+    BigBedRemote(BigBedRead<CachedBBIFileRead<RemoteFile>>),
+    BigBedFileLike(BigBedRead<CachedBBIFileRead<PyFileLikeObject>>),
 }
 
 /// Interface for reading a BigWig or BigBed file.
 #[pyclass(module = "pybigtools")]
-pub struct BBIRead {
+pub struct BBIReader {
     pub bbi: BBIReadRaw,
 }
 
 #[pymethods]
-impl BBIRead {
+impl BBIReader {
     #[getter]
     fn is_bigwig(&self) -> bool {
         #[cfg(feature = "remote")]
@@ -204,7 +123,7 @@ impl BBIRead {
             ("sum", summary.sum.to_object(py)),
             (
                 "mean",
-                (summary.sum as f64 / summary.bases_covered as f64).to_object(py),
+                (summary.sum / summary.bases_covered as f64).to_object(py),
             ),
             ("min", summary.min_val.to_object(py)),
             ("max", summary.max_val.to_object(py)),
@@ -228,8 +147,68 @@ impl BBIRead {
         Ok(info)
     }
 
+    /// Return the names of chromosomes in a BBI file and their lengths.  
+    ///
+    /// Parameters
+    /// ----------
+    /// chrom : str or None
+    ///     The name of the chromosome to get the length of. If None, then a
+    ///     dictionary of all chromosome sizes will be returned. If the
+    ///     chromosome doesn't exist, returns None.
+    ///
+    /// Returns
+    /// -------
+    /// int or Dict[str, int] or None:
+    ///     Chromosome length or a dictionary of chromosome lengths.
+    #[pyo3(signature = (chrom=None))]
+    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<PyObject> {
+        fn get_chrom_obj<B: bigtools::BBIRead>(
+            b: &B,
+            py: Python,
+            chrom: Option<String>,
+        ) -> PyResult<PyObject> {
+            match chrom {
+                Some(chrom) => {
+                    let chrom_length = b
+                        .chroms()
+                        .iter()
+                        .find(|c| c.name == chrom)
+                        .ok_or_else(|| {
+                            PyErr::new::<PyKeyError, _>(
+                                "No chromosome found with the specified name",
+                            )
+                        })
+                        .map(|c| c.length.to_object(py))?;
+                    Ok(chrom_length)
+                }
+                None => {
+                    let chrom_dict: PyObject = b
+                        .chroms()
+                        .iter()
+                        .map(|c| (c.name.clone(), c.length))
+                        .into_py_dict_bound(py)
+                        .into();
+                    Ok(chrom_dict)
+                }
+            }
+        }
+
+        match &self.bbi {
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::BigWigFile(b) => get_chrom_obj(b, py, chrom),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigWigRemote(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigWigFileLike(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigBedFile(b) => get_chrom_obj(b, py, chrom),
+            #[cfg(feature = "remote")]
+            BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
+            BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
+        }
+    }
+
     /// Return a list of sizes in bases of the summary intervals used in each
     /// of the zoom levels (i.e. reduction levels) of the BBI file.
+    #[allow(clippy::too_many_arguments)]
     fn zooms(&self) -> PyResult<Vec<u32>> {
         let zooms = match &self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
@@ -368,9 +347,9 @@ impl BBIRead {
         start: Option<i32>,
         end: Option<i32>,
     ) -> PyResult<PyObject> {
-        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        let (start, end) = start_end_clamped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
@@ -472,9 +451,9 @@ impl BBIRead {
         start: Option<i32>,
         end: Option<i32>,
     ) -> PyResult<ZoomIntervalIterator> {
-        let (start, end) = start_end(&self.bbi, &chrom, start, end)?;
+        let (start, end) = start_end_clamped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
                 let b = b.reopen()?;
                 let iter = b
@@ -554,17 +533,31 @@ impl BBIRead {
     ///     If provided, the query interval will be divided into equally spaced
     ///     bins and the values in each bin will be interpolated or summarized.
     ///     If not provided, the values will be returned for each base.
-    /// summary : Literal["mean", "min", "max"], optional [default: "mean"]
-    ///     The summary statistic to use. Currently supported statistics are
-    ///     ``mean``, ``min``, and ``max``.
+    /// summary : str, optional [default: "mean"]
+    ///     The summary statistic to use. One of ``mean``, ``std``, ``min``,
+    ///     ``max``, ``sum``, ``sum_squares``, ``bases_covered``,
+    ///     ``bin_covered``.
     /// exact : bool, optional [default: False]
     ///     If True and ``bins`` is specified, return exact summary statistic
     ///     values instead of interpolating from the optimal zoom level.
     ///     Default is False.
-    /// missing : float, optional [default: 0.0]
-    ///     Fill-in value for unreported data in valid regions. Default is 0.
+    /// uncovered : float or None, optional [default: None]
+    ///     The value assigned to all uncovered bases. If ``None``, uncovered
+    ///     bases are excluded from summary statistic calculations, and empty
+    ///     positions or bins will be returned as NaN (subject to ``fillna``).
+    ///     To treat uncovered bases as having a value of zero in summary
+    ///     statistics (like UCSC's ``mean0``) set this parameter to ``0.0``.
+    ///     Empty positions or bins will also be returned as ``0.0``. Other
+    ///     finite values are also valid and will be used in the same way.
+    ///     This parameter is ignored in the cases of ``bases_covered`` and
+    ///     ``bin_covered`` summaries since they exclude uncovered bases by
+    ///     definition.
     /// oob : float, optional [default: NaN]
     ///     Fill-in value for out-of-bounds regions. Default is NaN.
+    /// fillna : float or None, optional [default: None]
+    ///     Post-rasterization fill applied to in-bounds positions or bins that
+    ///     are returned as NaN due to being empty. Default ``None`` leaves
+    ///     NaN values untouched.
     /// arr : numpy.ndarray, optional
     ///     If provided, the values will be written to this array or array
     ///     view. The array must be of the correct size and type.
@@ -595,9 +588,10 @@ impl BBIRead {
     /// records : Get the records of a given range on a chromosome.
     /// zoom_records : Get the zoom records of a given range on a chromosome.
     #[pyo3(
-        signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, missing=0.0, oob=f64::NAN, arr=None),
-        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, missing=0.0, oob=..., arr=None)"#,
+        signature = (chrom, start=None, end=None, bins=None, summary="mean".to_string(), exact=false, uncovered=None, oob=f64::NAN, fillna=None, arr=None),
+        text_signature = r#"(chrom, start, end, bins=None, summary="mean", exact=False, uncovered=None, oob=float('nan'), fillna=None, arr=None)"#,
     )]
+    #[allow(clippy::too_many_arguments)]
     fn values(
         &mut self,
         py: Python<'_>,
@@ -607,101 +601,51 @@ impl BBIRead {
         bins: Option<usize>,
         summary: String,
         exact: bool,
-        missing: f64,
+        uncovered: Option<f64>,
         oob: f64,
+        fillna: Option<f64>,
         arr: Option<PyObject>,
     ) -> PyResult<PyObject> {
         let summary = match summary.as_ref() {
             "mean" => Summary::Mean,
+            "std" => Summary::Std,
             "min" => Summary::Min,
             "max" => Summary::Max,
+            "sum" => Summary::Sum,
+            "sum_squares" => Summary::SumSquares,
+            "bases_covered" => Summary::BasesCovered,
+            "bin_covered" => Summary::BinCovered,
             _ => {
                 return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "Unrecognized summary. Only `mean`, `min`, and `max` are allowed."
+                    "Unrecognized summary statistic: {}",
+                    summary
                 )));
             }
         };
+        // Passing `uncovered=NaN` is equivalent to `uncovered=None` (exclude uncovered bases).
+        let uncovered = uncovered.and_then(|v| if v.is_nan() { None } else { Some(v) });
         match &mut self.bbi {
-            BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigWigFileLike(b) => intervals_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigBedFile(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
             BBIReadRaw::BigBedFileLike(b) => entries_to_array(
-                py, b, &chrom, start, end, bins, summary, exact, missing, oob, arr,
+                py, b, &chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
             ),
-        }
-    }
-
-    /// Return the names of chromosomes in a BBI file and their lengths.  
-    ///
-    /// Parameters
-    /// ----------
-    /// chrom : str or None
-    ///     The name of the chromosome to get the length of. If None, then a
-    ///     dictionary of all chromosome sizes will be returned. If the
-    ///     chromosome doesn't exist, returns None.
-    ///
-    /// Returns
-    /// -------
-    /// int or Dict[str, int] or None:
-    ///     Chromosome length or a dictionary of chromosome lengths.
-    #[pyo3(signature = (chrom=None))]
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<PyObject> {
-        fn get_chrom_obj<B: bigtools::BBIRead>(
-            b: &B,
-            py: Python,
-            chrom: Option<String>,
-        ) -> PyResult<PyObject> {
-            match chrom {
-                Some(chrom) => {
-                    let chrom_length = b
-                        .chroms()
-                        .into_iter()
-                        .find(|c| c.name == chrom)
-                        .ok_or_else(|| {
-                            PyErr::new::<PyKeyError, _>(
-                                "No chromosome found with the specified name",
-                            )
-                        })
-                        .map(|c| c.length.to_object(py))?;
-                    Ok(chrom_length)
-                }
-                None => {
-                    let chrom_dict: PyObject = b
-                        .chroms()
-                        .into_iter()
-                        .map(|c| (c.name.clone(), c.length))
-                        .into_py_dict_bound(py)
-                        .into();
-                    Ok(chrom_dict)
-                }
-            }
-        }
-
-        match &self.bbi {
-            BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
-            BBIReadRaw::BigWigFile(b) => get_chrom_obj(b, py, chrom),
-            #[cfg(feature = "remote")]
-            BBIReadRaw::BigWigRemote(b) => get_chrom_obj(b, py, chrom),
-            BBIReadRaw::BigWigFileLike(b) => get_chrom_obj(b, py, chrom),
-            BBIReadRaw::BigBedFile(b) => get_chrom_obj(b, py, chrom),
-            #[cfg(feature = "remote")]
-            BBIReadRaw::BigBedRemote(b) => get_chrom_obj(b, py, chrom),
-            BBIReadRaw::BigBedFileLike(b) => get_chrom_obj(b, py, chrom),
         }
     }
 
@@ -847,9 +791,9 @@ impl BBIRead {
             if bed.is_instance(&path_class)? {
                 bed.str()?
             } else {
-                return Err(PyErr::new::<exceptions::PyValueError, _>(format!(
-                    "Unknown argument for `path`. Not a string or Path object.",
-                )));
+                return Err(PyErr::new::<exceptions::PyValueError, _>(
+                    "Unknown argument for `path`. Not a string or Path object.".to_string(),
+                ));
             }
         };
         let bedin = BufReader::new(File::open(bed.to_str()?)?);
@@ -942,40 +886,6 @@ impl BBIRead {
     }
 }
 
-#[pyclass(module = "pybigtools")]
-struct ZoomIntervalIterator {
-    iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send>,
-}
-
-#[pymethods]
-impl ZoomIntervalIterator {
-    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<ZoomIntervalIterator>> {
-        Ok(slf.into())
-    }
-
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<(u32, u32, PyObject)>> {
-        slf.iter
-            .next()
-            .transpose()
-            .map(|o| {
-                o.map(|v| {
-                    let summary = [
-                        ("total_items", v.summary.total_items.to_object(slf.py())),
-                        ("bases_covered", v.summary.bases_covered.to_object(slf.py())),
-                        ("min_val", v.summary.min_val.to_object(slf.py())),
-                        ("max_val", v.summary.max_val.to_object(slf.py())),
-                        ("sum", v.summary.sum.to_object(slf.py())),
-                        ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
-                    ]
-                    .into_py_dict_bound(slf.py())
-                    .to_object(slf.py());
-                    (v.start, v.end, summary)
-                })
-            })
-            .convert_err()
-    }
-}
-
 /// An iterator for intervals in a bigWig.  
 ///
 /// It returns only values that exist in the bigWig, skipping any missing
@@ -1023,7 +933,174 @@ impl BigBedEntriesIterator {
             .chain(next.rest.split_whitespace().map(|o| o.to_object(py)))
             .collect();
         Ok(Some(
-            PyTuple::new_bound::<PyObject, _>(py, elements.into_iter()).to_object(py),
+            PyTuple::new_bound::<PyObject, _>(py, elements).to_object(py),
         ))
     }
+}
+
+#[pyclass(module = "pybigtools")]
+struct ZoomIntervalIterator {
+    iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send>,
+}
+
+#[pymethods]
+impl ZoomIntervalIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<ZoomIntervalIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<(u32, u32, PyObject)>> {
+        slf.iter
+            .next()
+            .transpose()
+            .map(|o| {
+                o.map(|v| {
+                    let summary = [
+                        ("total_items", v.summary.total_items.to_object(slf.py())),
+                        ("bases_covered", v.summary.bases_covered.to_object(slf.py())),
+                        ("min_val", v.summary.min_val.to_object(slf.py())),
+                        ("max_val", v.summary.max_val.to_object(slf.py())),
+                        ("sum", v.summary.sum.to_object(slf.py())),
+                        ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
+                    ]
+                    .into_py_dict_bound(slf.py())
+                    .to_object(slf.py());
+                    (v.start, v.end, summary)
+                })
+            })
+            .convert_err()
+    }
+}
+
+enum BigWigAverageOverBedStatistics {
+    Size,
+    Bases,
+    Sum,
+    Mean0,
+    Mean,
+    Min,
+    Max,
+}
+
+impl BigWigAverageOverBedStatistics {
+    fn from_str(val: &str) -> Option<BigWigAverageOverBedStatistics> {
+        Some(match val {
+            "size" => BigWigAverageOverBedStatistics::Size,
+            "bases" => BigWigAverageOverBedStatistics::Bases,
+            "sum" => BigWigAverageOverBedStatistics::Sum,
+            "mean0" => BigWigAverageOverBedStatistics::Mean0,
+            "mean" => BigWigAverageOverBedStatistics::Mean,
+            "min" => BigWigAverageOverBedStatistics::Min,
+            "max" => BigWigAverageOverBedStatistics::Max,
+            _ => {
+                return None;
+            }
+        })
+    }
+}
+
+/// This class is an interator for the entries of bigWigAverageOverBed
+#[pyclass(module = "pybigtools")]
+struct BigWigAverageOverBedEntriesIterator {
+    iter: Box<
+        dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
+            + Send,
+    >,
+    usename: bool,
+    stats: Option<Vec<BigWigAverageOverBedStatistics>>,
+    summary_statistics: PyObject,
+}
+
+#[pymethods]
+impl BigWigAverageOverBedEntriesIterator {
+    fn __iter__(slf: PyRefMut<Self>) -> PyResult<Py<BigWigAverageOverBedEntriesIterator>> {
+        Ok(slf.into())
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+        let v = slf
+            .iter
+            .next()
+            .transpose()
+            .map_err(|e| PyErr::new::<exceptions::PyException, _>(format!("{}", e)))?;
+
+        let Some((name, v)) = v else {
+            return Ok(None);
+        };
+        let stats = match &slf.stats {
+            Some(stats) => {
+                let mut ret = Vec::with_capacity(stats.len());
+                for stat in stats.iter() {
+                    match stat {
+                        BigWigAverageOverBedStatistics::Size => {
+                            ret.push(v.size.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Bases => {
+                            ret.push(v.bases.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Mean0 => {
+                            ret.push(v.mean0.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Mean => {
+                            ret.push(v.mean.to_object(slf.py()))
+                        }
+                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+                    }
+                }
+                if ret.len() == 1 {
+                    ret[0].to_object(slf.py())
+                } else {
+                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
+                }
+            }
+            None => {
+                let val = slf.summary_statistics.call_bound(
+                    slf.py(),
+                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
+                    None,
+                )?;
+                val.to_object(slf.py())
+            }
+        };
+
+        match slf.usename {
+            true => Ok(Some((name, stats).to_object(slf.py()))),
+            false => Ok(Some(stats)),
+        }
+    }
+}
+
+fn start_end_clamped(
+    bbi: &BBIReadRaw,
+    chrom_name: &str,
+    start: Option<i32>,
+    end: Option<i32>,
+) -> PyResult<(u32, u32)> {
+    let chroms = match &bbi {
+        BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
+        BBIReadRaw::BigWigFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigWigRemote(b) => b.chroms(),
+        BBIReadRaw::BigWigFileLike(b) => b.chroms(),
+        BBIReadRaw::BigBedFile(b) => b.chroms(),
+        #[cfg(feature = "remote")]
+        BBIReadRaw::BigBedRemote(b) => b.chroms(),
+        BBIReadRaw::BigBedFileLike(b) => b.chroms(),
+    };
+    let chrom = chroms.iter().find(|x| x.name == chrom_name);
+    let length = match chrom {
+        None => {
+            return Err(PyErr::new::<exceptions::PyKeyError, _>(format!(
+                "No chromomsome with name `{}` found.",
+                chrom_name
+            )))
+        }
+        Some(c) => c.length,
+    };
+    Ok((
+        start.map(|v| v.max(0) as u32).unwrap_or(0),
+        end.map(|v| (v.max(0) as u32).min(length)).unwrap_or(length),
+    ))
 }
