@@ -42,7 +42,7 @@ jobs:
       - name: Build project
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build -p bigtools --release --locked -Z unstable-options --out-dir release --no-default-features --features cli ${{ matrix.remote && '--features remote' || '' }} --target ${{ matrix.target }} 
+          cargo build -p bigtools --release --locked -Z unstable-options --artifact-dir release --no-default-features --features cli ${{ matrix.remote && '--features remote' || '' }} --target ${{ matrix.target }} 
       - name: Archive Release
         uses: thedoctor0/zip-release@0.7.5
         with:
