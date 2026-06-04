@@ -1,25 +1,25 @@
 version: 2
 
 build:
-  os: "ubuntu-20.04"
+  os: "ubuntu-24.04"
   tools:
-    python: "3.10"
-    rust: "1.75"
+    python: "3"
+    rust: "latest"
   commands:
     # Cancel building pull requests when they do not change pybigtools.
     #
-    # If there are no changes (git diff exits with 0) we force the command to return with 183.
-    # This is a special exit code on Read the Docs that will cancel the build immediately.
+    # If there are no changes (git diff exits with 0) we force the command to
+    # return with 183, a special exit code on Read the Docs that cancels the
+    # build immediately.
     - |
-      if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/master -- pybigtools/ .readthedocs.yaml;
+      if [ "$READTHEDOCS_VERSION_TYPE" = "external" ] && git diff --quiet origin/master -- pybigtools/;
       then
         exit 183;
       fi
-    # Install dependencies
-    - pip install pdoc
-    - pip install pybigtools/
-    # Build the site
-    - pdoc -o pybigtools/html pybigtools
-    # Copy generated files into Read the Docs directory
-    - mkdir --parents _readthedocs/html/
-    - cp --recursive pybigtools/html/* _readthedocs/html/
+    # Install the docs toolchain and build/install the extension. The API
+    # reference is built with Sphinx autodoc, which imports the compiled
+    # module, so the Rust extension must be built (hence tools.rust above).
+    - pip install uv
+    - uv sync --project pybigtools --group docs
+    # Build the HTML into Read the Docs' output directory (warnings are errors).
+    - uv run --project pybigtools --no-sync sphinx-build -W -b html pybigtools/docs "$READTHEDOCS_OUTPUT/html"

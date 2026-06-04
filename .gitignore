@@ -3,7 +3,7 @@ dist/
 **/target
 **/*.rs.bk
 **/__pycache__
-html/
+pybigtools/docs/_build/
 
 **/workdir
 .vscode
