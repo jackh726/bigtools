@@ -239,16 +239,14 @@ impl BBIReader {
     /// Returns
     /// -------
     /// schema : str or dict
-    ///     The autoSql schema of the BBI file. If `parse` is True, the schema
-    ///     is returned as a dictionary of the format:
+    ///     The autoSql schema of the BBI file. If ``parse`` is True, the schema
+    ///     is returned as a dictionary of the format::
     ///
-    ///     ```
-    ///     {
-    ///         "name": <declared name>,
-    ///         "comment": <declaration coment>,
-    ///         "fields": [(<field name>, <field type>, <field comment>), ...],
-    ///     }
-    ///     ```
+    ///         {
+    ///             "name": <declared name>,
+    ///             "comment": <declaration coment>,
+    ///             "fields": [(<field name>, <field type>, <field comment>), ...],
+    ///         }
     ///
     /// See Also
     /// --------
@@ -329,7 +327,7 @@ impl BBIReader {
     /// -------
     /// Iterator[tuple[int, int, float] or tuple[int, int, ...]]
     ///     An iterator of tuples in the format (start: int, end: int, value:
-    ///     float) for BigWigs, or (start: int, end: int, *rest) for BigBeds.
+    ///     float) for BigWigs, or (start: int, end: int, \*rest) for BigBeds.
     ///
     /// Notes
     /// -----
