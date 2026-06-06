@@ -9,6 +9,7 @@ use pyo3::exceptions;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyString};
 use pyo3::wrap_pyfunction;
+use pyo3::IntoPyObjectExt;
 use url::Url;
 
 mod coverage;
@@ -58,7 +59,7 @@ fn open(
     py: Python,
     path_url_or_file_like: &Bound<'_, PyAny>,
     mode: Option<String>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let iswrite = match &mode {
         Some(mode) if mode == "w" => true,
         Some(mode) if mode == "r" => false,
@@ -72,12 +73,12 @@ fn open(
     };
 
     // If string, might be path or url like
-    if let Ok(string_ref) = path_url_or_file_like.downcast::<PyString>() {
+    if let Ok(string_ref) = path_url_or_file_like.cast::<PyString>() {
         return open_path_or_url(py, string_ref.to_str().unwrap().to_owned(), iswrite);
     }
 
     // If pathlib.Path, convert to string and try to open
-    let path_class = py.import_bound("pathlib")?.getattr("Path")?;
+    let path_class = py.import("pathlib")?.getattr("Path")?;
     if path_url_or_file_like.is_instance(&path_class)? {
         let path_string = path_url_or_file_like.str()?.to_string();
         return open_path_or_url(py, path_string, iswrite);
@@ -96,11 +97,11 @@ fn open(
         Ok(GenericBBIRead::BigWig(bigwig)) => BBIReader {
             bbi: BBIReadRaw::BigWigFileLike(bigwig.cached()),
         }
-        .into_py(py),
+        .into_py_any(py)?,
         Ok(GenericBBIRead::BigBed(bigbed)) => BBIReader {
             bbi: BBIReadRaw::BigBedFileLike(bigbed.cached()),
         }
-        .into_py(py),
+        .into_py_any(py)?,
         Err(e) => {
             return Err(PyErr::new::<BBIReadError, _>(format!(
             "File-like object is not a bigWig or bigBed. Or there was just a problem reading: {e}",
@@ -114,7 +115,7 @@ fn open_path_or_url(
     py: Python,
     path_url_or_file_like: String,
     iswrite: bool,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let extension = match &Path::new(&path_url_or_file_like)
         .extension()
         .map(|e| e.to_string_lossy())
@@ -134,11 +135,11 @@ fn open_path_or_url(
             "bw" | "bigWig" | "bigwig" => BigWigWriter {
                 bigwig: Some(path_url_or_file_like),
             }
-            .into_py(py),
+            .into_py_any(py)?,
             "bb" | "bigBed" | "bigbed" => BigBedWriter {
                 bigbed: Some(path_url_or_file_like),
             }
-            .into_py(py),
+            .into_py_any(py)?,
             _ => {
                 return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid file type. Must be either a bigWig (.bigWig, .bw) or bigBed (.bigBed, .bb).".to_string()));
             }
@@ -163,7 +164,7 @@ fn open_path_or_url(
                         Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigWigFile(bwr.cached()),
                         }
-                        .into_py(py),
+                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigWig.".to_string(),
@@ -176,7 +177,7 @@ fn open_path_or_url(
                         Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigWigRemote(bwr.cached()),
                         }
-                        .into_py(py),
+                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigWig.".to_string(),
@@ -198,7 +199,7 @@ fn open_path_or_url(
                         Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigBedFile(bwr.cached()),
                         }
-                        .into_py(py),
+                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigBed.".to_string(),
@@ -211,7 +212,7 @@ fn open_path_or_url(
                         Ok(bwr) => BBIReader {
                             bbi: BBIReadRaw::BigBedRemote(bwr.cached()),
                         }
-                        .into_py(py),
+                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigBed.".to_string(),
@@ -236,7 +237,10 @@ fn open_path_or_url(
 }
 
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
-#[pymodule]
+// The readers are not thread-safe (see `open`'s note on concurrent reading) and
+// the iterator pyclasses are `unsendable`, so the module requires the GIL rather
+// than opting in to pyo3 0.28's default free-threaded support.
+#[pymodule(gil_used = true)]
 fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
@@ -248,15 +252,15 @@ fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BigWigIntervalIterator>()?;
     m.add_class::<BigBedEntriesIterator>()?;
 
-    m.add("BBIFileClosed", m.py().get_type_bound::<BBIFileClosed>())?;
-    m.add("BBIReadError", m.py().get_type_bound::<BBIReadError>())?;
+    m.add("BBIFileClosed", m.py().get_type::<BBIFileClosed>())?;
+    m.add("BBIReadError", m.py().get_type::<BBIReadError>())?;
 
-    let collections = PyModule::import_bound(py, "collections")?;
+    let collections = PyModule::import(py, "collections")?;
     let namedtuple = collections.getattr("namedtuple")?;
     let summary_statistics = namedtuple.call(
         (
-            "SummaryStatistics".to_object(py),
-            ("size", "bases", "sum", "mean0", "mean", "min", "max").to_object(py),
+            "SummaryStatistics",
+            ("size", "bases", "sum", "mean0", "mean", "min", "max"),
         ),
         None,
     )?;

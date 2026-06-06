@@ -13,8 +13,8 @@ bigtools = { version = "0.5.8-dev", path = "../bigtools", default-features = fal
 url = "2.5.0"
 tokio = { version = "1.41.0", features = ["rt", "rt-multi-thread"] }
 futures = { version = "0.3.1", features = ["thread-pool"] }
-numpy = "0.22"
-pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.28"
+pyo3 = { version = "0.28", features = ["extension-module"] }
 
 [features]
 default = ["remote"]

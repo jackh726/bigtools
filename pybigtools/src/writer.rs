@@ -48,8 +48,8 @@ impl BigWigWriter {
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
-                let chrom: String = key.downcast::<PyString>()?.to_str().unwrap().to_owned();
-                let length: u32 = val.downcast::<PyInt>()?.to_object(py).extract(py).unwrap();
+                let chrom: String = key.cast::<PyString>()?.to_str().unwrap().to_owned();
+                let length: u32 = val.cast::<PyInt>()?.extract().unwrap();
                 Ok((chrom, length))
             })
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyErr>>()?;
@@ -67,14 +67,14 @@ impl BigWigWriter {
 
         struct IterError(String);
         struct Iter {
-            inner: PyObject,
+            inner: Py<PyAny>,
         }
         impl Iterator for Iter {
             type Item = Result<(String, Value), IterError>;
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
-                Python::with_gil(|py| {
-                    let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
+                Python::attach(|py| {
+                    let mut iter: Bound<'_, PyIterator> = match self.inner.cast_bound(py) {
                         Ok(o) => o.clone(),
                         Err(_) => {
                             return Some(Err(IterError(
@@ -92,35 +92,32 @@ impl BigWigWriter {
                         Ok(n) => {
                             // TODO: try block or separate function
                             (|| {
-                                let tuple = n.downcast::<PyTuple>()?;
+                                let tuple = n.cast::<PyTuple>()?;
                                 assert!(tuple.len() == 4);
                                 let chrom: String = tuple
                                     .get_item(0)
                                     .unwrap()
-                                    .downcast::<PyString>()?
+                                    .cast::<PyString>()?
                                     .to_str()
                                     .unwrap()
                                     .to_owned();
                                 let start: u32 = tuple
                                     .get_item(1)
                                     .unwrap()
-                                    .downcast::<PyInt>()?
-                                    .to_object(py)
-                                    .extract(py)
+                                    .cast::<PyInt>()?
+                                    .extract()
                                     .unwrap();
                                 let end: u32 = tuple
                                     .get_item(2)
                                     .unwrap()
-                                    .downcast::<PyInt>()?
-                                    .to_object(py)
-                                    .extract(py)
+                                    .cast::<PyInt>()?
+                                    .extract()
                                     .unwrap();
                                 let value: f32 = tuple
                                     .get_item(3)
                                     .unwrap()
-                                    .downcast::<PyFloat>()?
-                                    .to_object(py)
-                                    .extract(py)
+                                    .cast::<PyFloat>()?
+                                    .extract()
                                     .unwrap();
                                 Ok((chrom, Value { start, end, value }))
                             })()
@@ -134,11 +131,11 @@ impl BigWigWriter {
                 })
             }
         }
-        py.allow_threads(|| {
-            let iter = Python::with_gil(|py| {
+        py.detach(|| {
+            let iter = Python::attach(|py| {
                 let inner_obj = vals.bind(py);
-                match PyIterator::from_bound_object(inner_obj) {
-                    Ok(iter) => Ok(iter.to_object(py)),
+                match PyIterator::from_object(inner_obj) {
+                    Ok(iter) => Ok(iter.into_any().unbind()),
                     Err(_) => Err(PyTypeError::new_err(
                         "Passed value for `val` is not iterable.",
                     )),
@@ -213,8 +210,8 @@ impl BigBedWriter {
         let chrom_map = chroms
             .into_iter()
             .map(|(key, val)| {
-                let chrom: String = key.downcast::<PyString>()?.to_str().unwrap().to_owned();
-                let length: u32 = val.downcast::<PyInt>()?.to_object(py).extract(py).unwrap();
+                let chrom: String = key.cast::<PyString>()?.to_str().unwrap().to_owned();
+                let length: u32 = val.cast::<PyInt>()?.extract().unwrap();
                 Ok((chrom, length))
             })
             .collect::<Result<std::collections::HashMap<String, u32>, pyo3::PyErr>>()?;
@@ -235,14 +232,14 @@ impl BigBedWriter {
 
         struct IterError(String);
         struct Iter {
-            inner: PyObject,
+            inner: Py<PyAny>,
         }
         impl Iterator for Iter {
             type Item = Result<(String, BedEntry), IterError>;
             fn next(&mut self) -> Option<Self::Item> {
                 // We have to reacquire the gil for each iteration
-                Python::with_gil(|py| {
-                    let mut iter: Bound<'_, PyIterator> = match self.inner.downcast_bound(py) {
+                Python::attach(|py| {
+                    let mut iter: Bound<'_, PyIterator> = match self.inner.cast_bound(py) {
                         Ok(o) => o.clone(),
                         Err(_) => {
                             return Some(Err(IterError(
@@ -260,33 +257,31 @@ impl BigBedWriter {
                         Ok(n) => {
                             // TODO: try block or separate function
                             (|| {
-                                let tuple = n.downcast::<PyTuple>()?;
+                                let tuple = n.cast::<PyTuple>()?;
                                 assert!(tuple.len() == 4);
                                 let chrom: String = tuple
                                     .get_item(0)
                                     .unwrap()
-                                    .downcast::<PyString>()?
+                                    .cast::<PyString>()?
                                     .to_str()
                                     .unwrap()
                                     .to_owned();
                                 let start: u32 = tuple
                                     .get_item(1)
                                     .unwrap()
-                                    .downcast::<PyInt>()?
-                                    .to_object(py)
-                                    .extract(py)
+                                    .cast::<PyInt>()?
+                                    .extract()
                                     .unwrap();
                                 let end: u32 = tuple
                                     .get_item(2)
                                     .unwrap()
-                                    .downcast::<PyInt>()?
-                                    .to_object(py)
-                                    .extract(py)
+                                    .cast::<PyInt>()?
+                                    .extract()
                                     .unwrap();
                                 let rest: String = tuple
                                     .get_item(3)
                                     .unwrap()
-                                    .downcast::<PyString>()?
+                                    .cast::<PyString>()?
                                     .to_str()
                                     .unwrap()
                                     .to_owned();
@@ -302,11 +297,11 @@ impl BigBedWriter {
                 })
             }
         }
-        py.allow_threads(|| {
-            let iter = Python::with_gil(|py| {
+        py.detach(|| {
+            let iter = Python::attach(|py| {
                 let inner_obj = vals.bind(py);
-                match PyIterator::from_bound_object(inner_obj) {
-                    Ok(iter) => Ok(iter.to_object(py)),
+                match PyIterator::from_object(inner_obj) {
+                    Ok(iter) => Ok(iter.into_any().unbind()),
                     Err(_) => Err(PyTypeError::new_err(
                         "Passed value for `val` is not iterable.",
                     )),

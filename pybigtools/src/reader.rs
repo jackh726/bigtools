@@ -16,6 +16,7 @@ use bigtools::{
 };
 use pyo3::exceptions::{self, PyKeyError};
 use pyo3::types::{IntoPyDict, PyAny, PyDict, PyList, PyString, PyTuple};
+use pyo3::IntoPyObjectExt;
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use crate::errors::{BBIFileClosed, BBIReadError, ConvertResult};
@@ -85,7 +86,7 @@ impl BBIReader {
     }
 
     /// Return a dict of information about the BBI file.
-    fn info(&mut self, py: Python<'_>) -> PyResult<PyObject> {
+    fn info(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let (info, summary) = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
@@ -119,31 +120,33 @@ impl BBIReader {
             - (summary.sum * summary.sum) / summary.bases_covered as f64)
             / (summary.bases_covered as f64 - 1.0);
         let summary = [
-            ("basesCovered", summary.bases_covered.to_object(py)),
-            ("sum", summary.sum.to_object(py)),
+            ("basesCovered", summary.bases_covered.into_py_any(py)?),
+            ("sum", summary.sum.into_py_any(py)?),
             (
                 "mean",
-                (summary.sum / summary.bases_covered as f64).to_object(py),
+                (summary.sum / summary.bases_covered as f64).into_py_any(py)?,
             ),
-            ("min", summary.min_val.to_object(py)),
-            ("max", summary.max_val.to_object(py)),
-            ("std", f64::sqrt(var).to_object(py)),
+            ("min", summary.min_val.into_py_any(py)?),
+            ("max", summary.max_val.into_py_any(py)?),
+            ("std", f64::sqrt(var).into_py_any(py)?),
         ]
-        .into_py_dict_bound(py)
-        .to_object(py);
+        .into_py_dict(py)?
+        .into_any()
+        .unbind();
         let info = [
-            ("version", info.header.version.to_object(py)),
-            ("isCompressed", info.header.is_compressed().to_object(py)),
+            ("version", info.header.version.into_py_any(py)?),
+            ("isCompressed", info.header.is_compressed().into_py_any(py)?),
             (
                 "primaryDataSize",
-                info.header.primary_data_size().to_object(py),
+                info.header.primary_data_size().into_py_any(py)?,
             ),
-            ("zoomLevels", info.zoom_headers.len().to_object(py)),
-            ("chromCount", info.chrom_info.len().to_object(py)),
+            ("zoomLevels", info.zoom_headers.len().into_py_any(py)?),
+            ("chromCount", info.chrom_info.len().into_py_any(py)?),
             ("summary", summary),
         ]
-        .into_py_dict_bound(py)
-        .to_object(py);
+        .into_py_dict(py)?
+        .into_any()
+        .unbind();
         Ok(info)
     }
 
@@ -161,12 +164,12 @@ impl BBIReader {
     /// int or Dict[str, int] or None:
     ///     Chromosome length or a dictionary of chromosome lengths.
     #[pyo3(signature = (chrom=None))]
-    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<PyObject> {
+    fn chroms(&mut self, py: Python, chrom: Option<String>) -> PyResult<Py<PyAny>> {
         fn get_chrom_obj<B: bigtools::BBIRead>(
             b: &B,
             py: Python,
             chrom: Option<String>,
-        ) -> PyResult<PyObject> {
+        ) -> PyResult<Py<PyAny>> {
             match chrom {
                 Some(chrom) => {
                     let chrom_length = b
@@ -177,17 +180,18 @@ impl BBIReader {
                             PyErr::new::<PyKeyError, _>(
                                 "No chromosome found with the specified name",
                             )
-                        })
-                        .map(|c| c.length.to_object(py))?;
-                    Ok(chrom_length)
+                        })?
+                        .length;
+                    chrom_length.into_py_any(py)
                 }
                 None => {
-                    let chrom_dict: PyObject = b
+                    let chrom_dict: Py<PyAny> = b
                         .chroms()
                         .iter()
                         .map(|c| (c.name.clone(), c.length))
-                        .into_py_dict_bound(py)
-                        .into();
+                        .into_py_dict(py)?
+                        .into_any()
+                        .unbind();
                     Ok(chrom_dict)
                 }
             }
@@ -255,7 +259,7 @@ impl BBIReader {
     /// info : Get information about the BBI file.
     /// zooms : Get the zoom levels of the BBI file.
     #[pyo3(signature = (parse = false))]
-    fn sql(&mut self, py: Python, parse: bool) -> PyResult<PyObject> {
+    fn sql(&mut self, py: Python, parse: bool) -> PyResult<Py<PyAny>> {
         pub const BEDGRAPH: &str = r#"table bedGraph
 "bedGraph file"
 (
@@ -284,25 +288,26 @@ impl BBIReader {
             }
             let declaration = declarations.pop();
             match declaration {
-                None => PyDict::new_bound(py).to_object(py),
+                None => PyDict::new(py).into_any().unbind(),
                 Some(d) => {
                     let fields = d
                         .fields
                         .iter()
                         .map(|f| (&f.name, f.field_type.to_string(), &f.comment))
                         .collect::<Vec<_>>()
-                        .to_object(py);
+                        .into_py_any(py)?;
                     [
-                        ("name", d.name.name.to_object(py)),
-                        ("comment", d.comment.to_object(py)),
+                        ("name", d.name.name.into_py_any(py)?),
+                        ("comment", d.comment.into_py_any(py)?),
                         ("fields", fields),
                     ]
-                    .into_py_dict_bound(py)
-                    .to_object(py)
+                    .into_py_dict(py)?
+                    .into_any()
+                    .unbind()
                 }
             }
         } else {
-            schema.to_object(py)
+            schema.into_py_any(py)?
         };
         Ok(obj)
     }
@@ -344,7 +349,7 @@ impl BBIReader {
         chrom: String,
         start: Option<i32>,
         end: Option<i32>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let (start, end) = start_end_clamped(&self.bbi, &chrom, start, end)?;
         match &self.bbi {
             BBIReadRaw::Closed => Err(BBIFileClosed::new_err("File is closed.")),
@@ -353,7 +358,7 @@ impl BBIReader {
                 Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => {
@@ -361,21 +366,21 @@ impl BBIReader {
                 Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
             BBIReadRaw::BigWigFileLike(b) => {
                 let b = b.reopen()?;
                 Ok(BigWigIntervalIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
             BBIReadRaw::BigBedFile(b) => {
                 let b = b.reopen()?;
                 Ok(BigBedEntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
             #[cfg(feature = "remote")]
             BBIReadRaw::BigBedRemote(b) => {
@@ -383,14 +388,14 @@ impl BBIReader {
                 Ok(BigBedEntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
             BBIReadRaw::BigBedFileLike(b) => {
                 let b = b.reopen()?;
                 Ok(BigBedEntriesIterator {
                     iter: Box::new(b.get_interval_move(&chrom, start, end).convert_err()?),
                 }
-                .into_py(py))
+                .into_py_any(py)?)
             }
         }
     }
@@ -602,8 +607,8 @@ impl BBIReader {
         uncovered: Option<f64>,
         oob: f64,
         fillna: Option<f64>,
-        arr: Option<PyObject>,
-    ) -> PyResult<PyObject> {
+        arr: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
         let summary = match summary.as_ref() {
             "mean" => Summary::Mean,
             "std" => Summary::Std,
@@ -706,9 +711,9 @@ impl BBIReader {
         &mut self,
         py: Python,
         bed: Bound<'_, PyAny>,
-        names: Option<PyObject>,
-        stats: Option<PyObject>,
-    ) -> PyResult<PyObject> {
+        names: Option<Py<PyAny>>,
+        stats: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
         if self.is_bigbed() {
             // Minor thing: if current file is not a bigWig, don't even attempt to open the passed file
             return Err(PyErr::new::<exceptions::PyValueError, _>("Not a bigWig."));
@@ -738,7 +743,7 @@ impl BBIReader {
         };
         let stats = {
             match stats {
-                Some(stats) => match stats.downcast_bound::<PyString>(py) {
+                Some(stats) => match stats.cast_bound::<PyString>(py) {
                     Ok(stat) => {
                         let stat = stat.to_str()?;
                         if stat.eq_ignore_ascii_case("all") {
@@ -753,11 +758,11 @@ impl BBIReader {
                             Some(vec![stat])
                         }
                     }
-                    Err(_) => match stats.downcast_bound::<PyList>(py) {
+                    Err(_) => match stats.cast_bound::<PyList>(py) {
                         Ok(stats) => {
                             let mut ret_stats = Vec::with_capacity(stats.len());
                             for stat in stats.into_iter() {
-                                let stat = stat.downcast::<PyString>();
+                                let stat = stat.cast::<PyString>();
                                 let Ok(stat) = stat else {
                                     return Err(PyErr::new::<exceptions::PyValueError, _>("Invalid type argument. Should be either `None` or \"all\" or a stat or list of stats."));
                                 };
@@ -781,10 +786,10 @@ impl BBIReader {
                 None => Some(vec![BigWigAverageOverBedStatistics::Mean]),
             }
         };
-        let bed = if let Ok(bed) = bed.downcast::<PyString>() {
+        let bed = if let Ok(bed) = bed.cast::<PyString>() {
             bed.clone()
         } else {
-            let path_class = py.import_bound("pathlib")?.getattr("Path")?;
+            let path_class = py.import("pathlib")?.getattr("Path")?;
             // If pathlib.Path, convert to string and try to open
             if bed.is_instance(&path_class)? {
                 bed.str()?
@@ -796,8 +801,8 @@ impl BBIReader {
         };
         let bedin = BufReader::new(File::open(bed.to_str()?)?);
 
-        let module = PyModule::import_bound(py, "pybigtools")?;
-        let summary_statistics = module.getattr("SummaryStatistics")?.to_object(py);
+        let module = PyModule::import(py, "pybigtools")?;
+        let summary_statistics = module.getattr("SummaryStatistics")?.into_py_any(py)?;
         let res = match &mut self.bbi {
             BBIReadRaw::Closed => return Err(BBIFileClosed::new_err("File is closed.")),
             BBIReadRaw::BigWigFile(b) => {
@@ -809,7 +814,7 @@ impl BBIReader {
                     stats,
                     summary_statistics,
                 }
-                .into_py(py)
+                .into_py_any(py)?
             }
             #[cfg(feature = "remote")]
             BBIReadRaw::BigWigRemote(b) => {
@@ -821,7 +826,7 @@ impl BBIReader {
                     stats,
                     summary_statistics,
                 }
-                .into_py(py)
+                .into_py_any(py)?
             }
             BBIReadRaw::BigWigFileLike(b) => {
                 let b = b.reopen()?;
@@ -832,7 +837,7 @@ impl BBIReader {
                     stats,
                     summary_statistics,
                 }
-                .into_py(py)
+                .into_py_any(py)?
             }
             BBIReadRaw::BigBedFile(_) | BBIReadRaw::BigBedFileLike(_) => {
                 return Err(PyErr::new::<exceptions::PyValueError, _>("Not a bigWig."));
@@ -857,9 +862,9 @@ impl BBIReader {
     fn __exit__(
         slf: Py<Self>,
         py: Python<'_>,
-        _exc_type: PyObject,
-        _exc_value: PyObject,
-        _exc_traceback: PyObject,
+        _exc_type: Py<PyAny>,
+        _exc_value: Py<PyAny>,
+        _exc_traceback: Py<PyAny>,
     ) {
         slf.borrow_mut(py).bbi = BBIReadRaw::Closed;
     }
@@ -888,7 +893,7 @@ impl BBIReader {
 ///
 /// It returns only values that exist in the bigWig, skipping any missing
 /// intervals.
-#[pyclass(module = "pybigtools")]
+#[pyclass(module = "pybigtools", unsendable)]
 pub struct BigWigIntervalIterator {
     iter: Box<dyn Iterator<Item = Result<Value, _BBIReadError>> + Send>,
 }
@@ -909,7 +914,7 @@ impl BigWigIntervalIterator {
 }
 
 /// An iterator for the entries in a bigBed.
-#[pyclass(module = "pybigtools")]
+#[pyclass(module = "pybigtools", unsendable)]
 pub struct BigBedEntriesIterator {
     iter: Box<dyn Iterator<Item = Result<BedEntry, _BBIReadError>> + Send>,
 }
@@ -920,23 +925,21 @@ impl BigBedEntriesIterator {
         Ok(slf.into())
     }
 
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<Py<PyAny>>> {
         let py = slf.py();
         let next = match slf.iter.next() {
             Some(n) => n.convert_err()?,
             None => return Ok(None),
         };
-        let elements: Vec<_> = [next.start.to_object(py), next.end.to_object(py)]
-            .into_iter()
-            .chain(next.rest.split_whitespace().map(|o| o.to_object(py)))
-            .collect();
-        Ok(Some(
-            PyTuple::new_bound::<PyObject, _>(py, elements).to_object(py),
-        ))
+        let mut elements: Vec<Py<PyAny>> = vec![next.start.into_py_any(py)?, next.end.into_py_any(py)?];
+        for o in next.rest.split_whitespace() {
+            elements.push(o.into_py_any(py)?);
+        }
+        Ok(Some(PyTuple::new(py, elements)?.into_any().unbind()))
     }
 }
 
-#[pyclass(module = "pybigtools")]
+#[pyclass(module = "pybigtools", unsendable)]
 struct ZoomIntervalIterator {
     iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send>,
 }
@@ -947,26 +950,24 @@ impl ZoomIntervalIterator {
         Ok(slf.into())
     }
 
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<(u32, u32, PyObject)>> {
-        slf.iter
-            .next()
-            .transpose()
-            .map(|o| {
-                o.map(|v| {
-                    let summary = [
-                        ("total_items", v.summary.total_items.to_object(slf.py())),
-                        ("bases_covered", v.summary.bases_covered.to_object(slf.py())),
-                        ("min_val", v.summary.min_val.to_object(slf.py())),
-                        ("max_val", v.summary.max_val.to_object(slf.py())),
-                        ("sum", v.summary.sum.to_object(slf.py())),
-                        ("sum_squares", v.summary.sum_squares.to_object(slf.py())),
-                    ]
-                    .into_py_dict_bound(slf.py())
-                    .to_object(slf.py());
-                    (v.start, v.end, summary)
-                })
-            })
-            .convert_err()
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<(u32, u32, Py<PyAny>)>> {
+        let v = match slf.iter.next() {
+            Some(n) => n.convert_err()?,
+            None => return Ok(None),
+        };
+        let py = slf.py();
+        let summary = [
+            ("total_items", v.summary.total_items.into_py_any(py)?),
+            ("bases_covered", v.summary.bases_covered.into_py_any(py)?),
+            ("min_val", v.summary.min_val.into_py_any(py)?),
+            ("max_val", v.summary.max_val.into_py_any(py)?),
+            ("sum", v.summary.sum.into_py_any(py)?),
+            ("sum_squares", v.summary.sum_squares.into_py_any(py)?),
+        ]
+        .into_py_dict(py)?
+        .into_any()
+        .unbind();
+        Ok(Some((v.start, v.end, summary)))
     }
 }
 
@@ -998,7 +999,7 @@ impl BigWigAverageOverBedStatistics {
 }
 
 /// This class is an interator for the entries of bigWigAverageOverBed
-#[pyclass(module = "pybigtools")]
+#[pyclass(module = "pybigtools", unsendable)]
 struct BigWigAverageOverBedEntriesIterator {
     iter: Box<
         dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
@@ -1006,7 +1007,7 @@ struct BigWigAverageOverBedEntriesIterator {
     >,
     usename: bool,
     stats: Option<Vec<BigWigAverageOverBedStatistics>>,
-    summary_statistics: PyObject,
+    summary_statistics: Py<PyAny>,
 }
 
 #[pymethods]
@@ -1015,7 +1016,7 @@ impl BigWigAverageOverBedEntriesIterator {
         Ok(slf.into())
     }
 
-    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<Py<PyAny>>> {
         let v = slf
             .iter
             .next()
@@ -1025,46 +1026,36 @@ impl BigWigAverageOverBedEntriesIterator {
         let Some((name, v)) = v else {
             return Ok(None);
         };
+        let py = slf.py();
         let stats = match &slf.stats {
             Some(stats) => {
-                let mut ret = Vec::with_capacity(stats.len());
+                let mut ret: Vec<Py<PyAny>> = Vec::with_capacity(stats.len());
                 for stat in stats.iter() {
                     match stat {
-                        BigWigAverageOverBedStatistics::Size => {
-                            ret.push(v.size.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Bases => {
-                            ret.push(v.bases.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Mean0 => {
-                            ret.push(v.mean0.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Mean => {
-                            ret.push(v.mean.to_object(slf.py()))
-                        }
-                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.to_object(slf.py())),
-                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.to_object(slf.py())),
+                        BigWigAverageOverBedStatistics::Size => ret.push(v.size.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Bases => ret.push(v.bases.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Sum => ret.push(v.sum.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Mean0 => ret.push(v.mean0.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Mean => ret.push(v.mean.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Min => ret.push(v.min.into_py_any(py)?),
+                        BigWigAverageOverBedStatistics::Max => ret.push(v.max.into_py_any(py)?),
                     }
                 }
                 if ret.len() == 1 {
-                    ret[0].to_object(slf.py())
+                    ret.into_iter().next().unwrap()
                 } else {
-                    PyTuple::new_bound(slf.py(), ret).to_object(slf.py())
+                    PyTuple::new(py, ret)?.into_any().unbind()
                 }
             }
-            None => {
-                let val = slf.summary_statistics.call_bound(
-                    slf.py(),
-                    (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
-                    None,
-                )?;
-                val.to_object(slf.py())
-            }
+            None => slf.summary_statistics.call(
+                py,
+                (v.size, v.bases, v.sum, v.mean0, v.mean, v.min, v.max),
+                None,
+            )?,
         };
 
         match slf.usename {
-            true => Ok(Some((name, stats).to_object(slf.py()))),
+            true => Ok(Some((name, stats).into_py_any(py)?)),
             false => Ok(Some(stats)),
         }
     }

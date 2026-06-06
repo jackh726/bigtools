@@ -103,8 +103,8 @@ pub fn intervals_to_array<R: BBIFileRead>(
     uncovered: Option<f64>,
     oob: f64,
     fillna: Option<f64>,
-    arr: Option<PyObject>,
-) -> PyResult<PyObject> {
+    arr: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     let mut bbi = BBIRead::BigWig(bw);
     records_to_array(
         py, &mut bbi, chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
@@ -124,8 +124,8 @@ pub fn entries_to_array<R: BBIFileRead>(
     uncovered: Option<f64>,
     oob: f64,
     fillna: Option<f64>,
-    arr: Option<PyObject>,
-) -> PyResult<PyObject> {
+    arr: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     let mut bbi = BBIRead::BigBed(bb);
     records_to_array(
         py, &mut bbi, chrom, start, end, bins, summary, exact, uncovered, oob, fillna, arr,
@@ -145,17 +145,17 @@ fn records_to_array<R: BBIFileRead>(
     uncovered: Option<f64>,
     oob: f64,
     fillna: Option<f64>,
-    arr: Option<PyObject>,
-) -> PyResult<PyObject> {
+    arr: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     let (start, end, chrom_length) = bbi.resolve_range(chrom, start, end)?;
     let (valid_start, valid_end) = (start.max(0) as u32, end.min(chrom_length) as u32);
     let arr = arr.unwrap_or_else(|| {
         let size = bins.unwrap_or((end - start) as usize);
         let init = uncovered.unwrap_or(f64::NAN);
-        PyArray1::from_vec_bound(py, vec![init; size]).to_object(py)
+        PyArray1::from_vec(py, vec![init; size]).into_any().unbind()
     });
     let array: &Bound<'_, PyArray1<f64>> =
-        arr.downcast_bound::<PyArray1<f64>>(py).map_err(|_| {
+        arr.cast_bound::<PyArray1<f64>>(py).map_err(|_| {
             PyErr::new::<exceptions::PyValueError, _>(
                 "`arr` option must be a one-dimensional numpy array, if passed.",
             )
