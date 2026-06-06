@@ -9,7 +9,7 @@ name = "pybigtools"
 crate-type = ["cdylib"]
 
 [dependencies]
-bigtools = { version = "0.5.8-dev", path = "../bigtools", default-features = false, features = ["read", "write"] }
+bigtools = { version = "0.5.9-dev", path = "../bigtools", default-features = false, features = ["read", "write"] }
 url = "2.5.0"
 tokio = { version = "1.41.0", features = ["rt", "rt-multi-thread"] }
 futures = { version = "0.3.1", features = ["thread-pool"] }
