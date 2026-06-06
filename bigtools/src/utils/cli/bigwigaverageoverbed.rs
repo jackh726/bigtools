@@ -18,7 +18,24 @@ use crate::{BBIFileRead, BBIReadError, BigWigRead};
 #[command(
     name = "bigwigaverageoverbed",
     about = "Gets statistics of a bigWig over a bed.",
-    long_about = None,
+    long_about = "Gets statistics of a bigWig over the entries of a bed file.
+
+For each entry in the input bed, one tab-separated line is written to the output \
+with the following columns:
+  name   The name of the bed entry. See --namecol; by default the 4th bed column is used.
+  size   The size of the bed entry in bases, i.e. (end - start).
+  bases  The number of bases in the entry that are covered by data in the bigWig.
+  sum    The sum of the bigWig values over all covered bases.
+  mean0  The average value over the entry, treating uncovered bases as zero (sum / size).
+  mean   The average value over just the covered bases (sum / bases).
+
+If --min-max is passed, two additional columns are appended:
+  min    The minimum bigWig value observed within the entry.
+  max    The maximum bigWig value observed within the entry.
+
+For entries with no covered bases, mean0 is reported as 0 and mean, min, and max as NaN. \
+If --namecol is `none`, the original bed columns are emitted in place of the single name \
+column, before the statistics columns."
 )]
 pub struct BigWigAverageOverBedArgs {
     /// The input bigwig file
@@ -292,7 +309,7 @@ fn bigwigaverageoverbed_impl<O: Write>(
 
             let stats = match add_min_max {
                 true => format!(
-                    "{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     entry.size,
                     entry.bases,
                     entry.sum,
@@ -302,7 +319,7 @@ fn bigwigaverageoverbed_impl<O: Write>(
                     entry.max
                 ),
                 false => format!(
-                    "{}\t{}\t{:.3}\t{:.3}\t{:.3}",
+                    "{}\t{}\t{}\t{}\t{}",
                     entry.size, entry.bases, entry.sum, entry.mean0, entry.mean
                 ),
             };

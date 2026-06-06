@@ -143,8 +143,9 @@ fn write<R: BBIFileRead, O: Write>(
                 })
                 .collect::<io::Result<Vec<_>>>()?;
             lines.sort();
+            let total = lines.len();
             lines.dedup();
-            lines.len() == 10
+            lines.len() == total
         }
     };
 

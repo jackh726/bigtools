@@ -931,7 +931,8 @@ impl BigBedEntriesIterator {
             Some(n) => n.convert_err()?,
             None => return Ok(None),
         };
-        let mut elements: Vec<Py<PyAny>> = vec![next.start.into_py_any(py)?, next.end.into_py_any(py)?];
+        let mut elements: Vec<Py<PyAny>> =
+            vec![next.start.into_py_any(py)?, next.end.into_py_any(py)?];
         for o in next.rest.split_whitespace() {
             elements.push(o.into_py_any(py)?);
         }

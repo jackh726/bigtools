@@ -62,11 +62,10 @@ impl Read for PyFileLikeObject {
         Python::attach(|py| {
             let res = self
                 .inner
-                .call_method(py,"read", (buf.len(),), None)
+                .call_method(py, "read", (buf.len(),), None)
                 .map_err(|e| to_io_error(py, e))?;
-            let pybytes: &Bound<'_, PyBytes> = res
-                .cast_bound(py)
-                .map_err(|e| to_io_error(py, e.into()))?;
+            let pybytes: &Bound<'_, PyBytes> =
+                res.cast_bound(py).map_err(|e| to_io_error(py, e.into()))?;
             let bytes = pybytes.as_bytes();
             buf.write_all(bytes)?;
             Ok(bytes.len())
@@ -81,7 +80,7 @@ impl Write for PyFileLikeObject {
 
             let number_bytes_written = self
                 .inner
-                .call_method(py,"write", (arg,), None)
+                .call_method(py, "write", (arg,), None)
                 .map_err(|e| to_io_error(py, e))?;
 
             if number_bytes_written.is_none(py) {
@@ -97,7 +96,7 @@ impl Write for PyFileLikeObject {
     fn flush(&mut self) -> Result<(), io::Error> {
         Python::attach(|py| {
             self.inner
-                .call_method(py,"flush", (), None)
+                .call_method(py, "flush", (), None)
                 .map_err(|e| to_io_error(py, e))?;
 
             Ok(())
@@ -116,7 +115,7 @@ impl Seek for PyFileLikeObject {
 
             let new_position = self
                 .inner
-                .call_method(py,"seek", (offset, whence), None)
+                .call_method(py, "seek", (offset, whence), None)
                 .map_err(|e| to_io_error(py, e))?;
 
             new_position.extract(py).map_err(|e| to_io_error(py, e))

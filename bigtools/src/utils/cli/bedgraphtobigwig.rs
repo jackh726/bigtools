@@ -29,6 +29,7 @@ pub struct BedGraphToBigWigArgs {
 
     /// Set whether to read and convert the bedGraph in parallel. Requires that the bedGraph is sorted.
     /// Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.
+    /// Automatic behavior depends on file size, with small files preferring single-threaded processing.
     #[arg(short = 'p', long)]
     #[arg(default_value = "auto")]
     pub parallel: String,
@@ -107,7 +108,7 @@ pub fn bedgraphtobigwig(args: BedGraphToBigWigArgs) -> Result<(), Box<dyn Error>
         let infile = File::open(&bedgraphpath)?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
             (1, _) | (_, "no") => (false, false),
-            (_, "auto") => (infile.metadata()?.len() >= 200_000_000, false),
+            (2.., "auto") => (infile.metadata()?.len() >= 200_000_000, false),
             (_, "yes") => (true, true),
             (_, v) => {
                 eprintln!(

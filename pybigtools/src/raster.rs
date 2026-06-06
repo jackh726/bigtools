@@ -154,12 +154,11 @@ fn records_to_array<R: BBIFileRead>(
         let init = uncovered.unwrap_or(f64::NAN);
         PyArray1::from_vec(py, vec![init; size]).into_any().unbind()
     });
-    let array: &Bound<'_, PyArray1<f64>> =
-        arr.cast_bound::<PyArray1<f64>>(py).map_err(|_| {
-            PyErr::new::<exceptions::PyValueError, _>(
-                "`arr` option must be a one-dimensional numpy array, if passed.",
-            )
-        })?;
+    let array: &Bound<'_, PyArray1<f64>> = arr.cast_bound::<PyArray1<f64>>(py).map_err(|_| {
+        PyErr::new::<exceptions::PyValueError, _>(
+            "`arr` option must be a one-dimensional numpy array, if passed.",
+        )
+    })?;
 
     // Fill the array
     match bins {

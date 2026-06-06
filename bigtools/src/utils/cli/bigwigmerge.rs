@@ -106,11 +106,11 @@ pub fn bigwigmerge(args: BigWigMergeArgs) -> Result<(), Box<dyn Error>> {
     let output_type = match (args.output_type, &output) {
         (None, output)
             if output.to_lowercase().ends_with(".bw")
-                || output.to_lowercase().ends_with(".bigWig") =>
+                || output.to_lowercase().ends_with(".bigwig") =>
         {
             OutputType::BigWig
         }
-        (None, output) if output.to_lowercase().ends_with(".bedGraph") => OutputType::BedGraph,
+        (None, output) if output.to_lowercase().ends_with(".bedgraph") => OutputType::BedGraph,
         (Some(output_type), _) if output_type.to_lowercase() == "bigwig" => OutputType::BigWig,
         (Some(output_type), _) if output_type.to_lowercase() == "bedgraph" => OutputType::BedGraph,
         _ => {

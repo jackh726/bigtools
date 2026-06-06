@@ -27,7 +27,7 @@ pub struct BedToBigBedArgs {
     /// A chromosome sizes file. Each line should be have a chromosome and its size in bases, separated by whitespace.
     pub chromsizes: String,
 
-    /// The output bigwig path
+    /// The output bigbed path
     pub output: String,
 
     /// Path to a file containing the custom autosql to add to the bigBed file. If not specified, the standard BED
@@ -35,8 +35,9 @@ pub struct BedToBigBedArgs {
     #[arg(short = 'a', long)]
     pub autosql: Option<String>,
 
-    /// Set whether to read and convert the bedGraph in parallel. Requires that the bedGraph is sorted.
+    /// Set whether to read and convert the bed in parallel. Requires that the bed is sorted.
     /// Can take `auto` (default), `yes`, `no`. Ignored when input is stdin or when nthreads is `1`.
+    /// Automatic behavior depends on file size, with small files preferring single-threaded processing.
     #[arg(short = 'p', long)]
     #[arg(default_value = "auto")]
     pub parallel: String,
@@ -134,7 +135,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
             .with_context(|| format!("Failed to open bed file `{}`.", &bedpath))?;
         let (parallel, parallel_required) = match (nthreads, args.parallel.as_ref()) {
             (1, _) | (_, "no") => (false, false),
-            (_, "auto") => (infile.metadata()?.len() >= 200_000_000, false),
+            (2.., "auto") => (infile.metadata()?.len() >= 200_000_000, false),
             (_, "yes") => (true, true),
             (_, v) => {
                 eprintln!(
@@ -152,9 +153,7 @@ pub fn bedtobigbed(args: BedToBigBedArgs) -> anyhow::Result<()> {
                 match (index, parallel_required) {
                     (Some(index), _) => Some(index),
                     (None, true) => {
-                        eprintln!(
-                            "Parallel conversion requires a sorted bedGraph file. Cancelling.",
-                        );
+                        eprintln!("Parallel conversion requires a sorted bed file. Cancelling.",);
                         return Ok(());
                     }
                     (None, false) => None,
