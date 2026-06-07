@@ -6,17 +6,23 @@ NumPy-style and rendered via napoleon; signatures come from the extension's
 ``__text_signature__`` metadata.
 """
 
+import datetime
 import importlib.metadata
+
+import pybigtools
 
 project = "pybigtools"
 author = "Bigtools contributors"
-copyright = "2024-2026, " + author
+copyright = f"2024-{datetime.date.today().year}, {author}"
 
 try:
     release = importlib.metadata.version("pybigtools")
 except importlib.metadata.PackageNotFoundError:
-    release = ""
+    release = pybigtools.__version__
 version = release
+
+pybigtools_version = pybigtools.__version__
+bigtools_version = pybigtools.__core_version__
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -45,7 +51,19 @@ intersphinx_mapping = {
 
 # -- HTML output -------------------------------------------------------------
 html_theme = "furo"
-html_title = f"pybigtools {release}".strip()
+html_title = "Bigtools"
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
+templates_path = ["_templates"]
+html_theme_options = {
+    "light_logo": "bigtools-logo.svg",
+    "dark_logo": "bigtools-logo-dark.svg",
+}
+# Exposed to the sidebar brand template.
+html_context = {
+    "pybigtools_version": pybigtools_version,
+    "bigtools_version": bigtools_version,
+}
 
 # -- MyST --------------------------------------------------------------------
 myst_enable_extensions = ["colon_fence", "deflist"]

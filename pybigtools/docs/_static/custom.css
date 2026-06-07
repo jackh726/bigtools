@@ -1,0 +1,15 @@
+/* Shrink the sidebar logo and give it some breathing room. */
+.sidebar-logo {
+    max-width: 45%;
+}
+
+/* Version info shown under the sidebar brand. */
+.sidebar-versions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin: 0.25rem 0 0.75rem;
+    text-align: center;
+    font-size: var(--font-size--small--2);
+    color: var(--color-foreground-muted);
+}
