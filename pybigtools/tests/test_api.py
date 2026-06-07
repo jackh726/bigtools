@@ -34,8 +34,9 @@ def test_open_pathlib_path():
         assert b.chroms() == {"chr17": 83_257_441}
 
 
-def test_open_raw_url():
+def test_open_raw_url(require_remote):
     url = "http://genome.ucsc.edu/goldenPath/help/examples/bigLollyExample2.bb"
+    require_remote(url)
     with pybigtools.open(url, "r") as b:
         assert b.chroms() == {"chr21": 46_709_983}
 
@@ -58,8 +59,11 @@ def test_open_filelike():
         with pybigtools.open(f, "r") as b:
             assert b.chroms() == {"chr17": 83_257_441}
 
-    # Other file-like objects
+
+def test_open_filelike_url(require_remote):
+    # Remote file accessed through a Python file-like object (smart_open).
     url = "http://genome.ucsc.edu/goldenPath/help/examples/bigWigExample.bw"
+    require_remote(url)
     with smart_open.open(url, "rb") as f:
         with pybigtools.open(f, "r") as b:
             assert b.chroms() == {"chr21": 48_129_895}

@@ -8,16 +8,18 @@ import pybigtools
 TEST_DIR = pathlib.Path(__file__).parent
 
 
-def retrieve_encode_file(accession, filetype):
+def retrieve_encode_file(accession, filetype, require=None):
     file_url = f"https://www.encodeproject.org/files/{accession}/@@download/{accession}.{filetype}"
     path = TEST_DIR / f"data/{accession}.{filetype}"
     if not path.exists():
+        if require is not None:
+            require(file_url)
         urllib.request.urlretrieve(file_url, path)
     return path
 
 
-def test_bigwig_read():
-    path = retrieve_encode_file("ENCFF667CZO", "bigWig")
+def test_bigwig_read(require_remote):
+    path = retrieve_encode_file("ENCFF667CZO", "bigWig", require=require_remote)
     b = pybigtools.open(str(path))
 
     i = b.records("chr1")
