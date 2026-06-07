@@ -239,10 +239,7 @@ fn open_path_or_url(
 }
 
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
-// The file-like reader is guarded against concurrent misuse (see `open`), but the
-// iterator pyclasses are still `unsendable`, so the module requires the GIL rather
-// than opting in to pyo3 0.28's default free-threaded support.
-#[pymodule(gil_used = true)]
+#[pymodule]
 fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 

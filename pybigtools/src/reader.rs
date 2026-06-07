@@ -908,9 +908,9 @@ impl BBIReader {
 ///
 /// It returns only values that exist in the bigWig, skipping any missing
 /// intervals.
-#[pyclass(module = "pybigtools", unsendable)]
+#[pyclass(module = "pybigtools")]
 pub struct BigWigIntervalIterator {
-    iter: Box<dyn Iterator<Item = Result<Value, _BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<Value, _BBIReadError>> + Send + Sync>,
 }
 
 #[pymethods]
@@ -929,9 +929,9 @@ impl BigWigIntervalIterator {
 }
 
 /// An iterator for the entries in a bigBed.
-#[pyclass(module = "pybigtools", unsendable)]
+#[pyclass(module = "pybigtools")]
 pub struct BigBedEntriesIterator {
-    iter: Box<dyn Iterator<Item = Result<BedEntry, _BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<BedEntry, _BBIReadError>> + Send + Sync>,
 }
 
 #[pymethods]
@@ -955,9 +955,9 @@ impl BigBedEntriesIterator {
     }
 }
 
-#[pyclass(module = "pybigtools", unsendable)]
+#[pyclass(module = "pybigtools")]
 struct ZoomIntervalIterator {
-    iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send>,
+    iter: Box<dyn Iterator<Item = Result<ZoomRecord, _BBIReadError>> + Send + Sync>,
 }
 
 #[pymethods]
@@ -1015,11 +1015,12 @@ impl BigWigAverageOverBedStatistics {
 }
 
 /// This class is an interator for the entries of bigWigAverageOverBed
-#[pyclass(module = "pybigtools", unsendable)]
+#[pyclass(module = "pybigtools")]
 struct BigWigAverageOverBedEntriesIterator {
     iter: Box<
         dyn Iterator<Item = Result<(String, BigWigAverageOverBedEntry), BigWigAverageOverBedError>>
-            + Send,
+            + Send
+            + Sync,
     >,
     usename: bool,
     stats: Option<Vec<BigWigAverageOverBedStatistics>>,
