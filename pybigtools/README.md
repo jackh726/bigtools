@@ -2,6 +2,37 @@ The `pybigtools` python package wraps the `bigtools` Rust library and allows eff
 
 See the [documentation](https://bigtools.readthedocs.io) for more information.
 
+## Examples
+
+(Replace `<path>` with the path to a bigWig file or url)
+
+### Iterator of intervals
+
+```python
+import pybigtools
+b = pybigtools.open(<path>)
+i = b.intervals("chr1")
+print(next(i))
+```
+
+### Numpy array of values
+
+```python
+import pybigtools
+b = pybigtools.open(<path>)
+a = b.values("chr1")
+print(a.shape)
+```
+
+### Open a file-like object
+
+```python
+import pybigtools
+b = pybigtools.open(open(<path>, 'rb'))
+a = b.values("chr1")
+print(a.shape)
+```
+
 ## Development
 
 Pybigtools is a mixed Python-Rust project using the pyo3 `maturin` build system to create a Python package. We recommend using `uv` to manage your Python development environment.
