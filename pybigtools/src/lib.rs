@@ -243,6 +243,7 @@ fn open_path_or_url(
 #[pymodule(gil_used = true)]
 fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("__core_version__", bigtools::VERSION)?;
 
     m.add_wrapped(wrap_pyfunction!(open))?;
 

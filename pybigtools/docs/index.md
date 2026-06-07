@@ -1,26 +1,41 @@
-# pybigtools
-
-Python bindings to the [Bigtools](https://github.com/jackh726/bigtools) Rust
-library for high-performance reading and writing of **BigWig** and **BigBed**
-files.
+# Bigtools
 
 ```{toctree}
 :maxdepth: 2
 :hidden:
 
 api
+Rust API Reference <https://docs.rs/bigtools>
 ```
 
-## Installation
+Bigtools is a modern, high-performance library and associated tools for reading and writing **BigWig** and **BigBed** files. Bigtools is written in Rust and bindings for Python are available.
+
+## CLI binaries
+
+Drop-in replacements for the UCSC binaries. Install with `cargo` or via bioconda (conda, mamba, pixi, etc.).
+
+```sh
+cargo install bigtools
+```
+
+```sh
+conda install -c bioconda bigtools
+```
+
+## Python package
+
+Python bindings to the bigtools Rust library is provided by the [pybigtools](https://pypi.org/project/pybigtools/) package. Install with `pip`, `uv` or via bioconda (conda, mamba, pixi, etc.).
+
 
 ```sh
 pip install pybigtools
 ```
 
-## Quickstart
+```sh
+conda install -c bioconda pybigtools
+```
 
-Open a file for reading. {func}`~pybigtools.open` auto-detects whether the file
-is a BigWig or BigBed and returns a {class}`~pybigtools.BBIReader`:
+To open a file for reading, {func}`~pybigtools.open` auto-detects whether the file is a BigWig or BigBed and returns a {class}`~pybigtools.BBIReader`:
 
 ```python
 import pybigtools
@@ -30,14 +45,14 @@ print(b.chroms())          # {'chr1': 248956422, ...}
 print(b.info())            # version, summary stats, zoom levels, ...
 ```
 
-Rasterize values over a region as a NumPy array:
+To rasterize values over a region as a NumPy array:
 
 ```python
 values = b.values("chr1", 0, 1000)        # one value per base
 binned = b.values("chr1", 0, 1_000_000, bins=1000, summary="mean")
 ```
 
-Iterate over raw records (intervals for BigWig, BED entries for BigBed):
+To iterate over raw records (intervals for BigWig, BED entries for BigBed):
 
 ```python
 for start, end, value in b.records("chr1"):
@@ -52,7 +67,7 @@ with pybigtools.open(open("path/to/file.bigBed", "rb")) as b:
     schema = b.sql(parse=True)
 ```
 
-### Writing
+For writing:
 
 ```python
 import pybigtools
@@ -66,3 +81,14 @@ w.write(
 ```
 
 See the [API reference](api.rst) for the full set of methods and options.
+
+
+## Rust crate
+
+To use [bigtools](https://crates.io/crates/bigtools) in your Rust project, add bigtools to your Cargo.toml or run:
+
+```sh
+cargo add bigtools
+```
+
+See the Rust documentation [here](https://docs.rs/bigtools).

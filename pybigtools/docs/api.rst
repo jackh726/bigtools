@@ -1,5 +1,5 @@
-API reference
-=============
+Python API Reference
+====================
 
 .. currentmodule:: pybigtools
 

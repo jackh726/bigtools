@@ -6,6 +6,7 @@ build-backend = "maturin"
 name = "pybigtools"
 description = "Python bindings to the Bigtools Rust library for high-performance BigWig and BigBed I/O"
 license = { text = "MIT" }
+readme = "README.md"
 keywords = [
     "bigwig",
     "bigbed",

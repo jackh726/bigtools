@@ -47,3 +47,6 @@ pub mod bed;
 pub mod utils;
 
 pub use bbi::*;
+
+/// The version of the `bigtools` crate.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

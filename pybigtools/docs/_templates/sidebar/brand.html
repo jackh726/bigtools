@@ -1,0 +1,10 @@
+{% extends "!sidebar/brand.html" %}
+
+{# Show the package and core-crate versions beneath the logo/title. #}
+{% block brand_content %}
+  {{ super() }}
+  <span class="sidebar-versions">
+    <span>bigtools {{ bigtools_version }}</span>
+    <span>pybigtools {{ pybigtools_version }}</span>
+  </span>
+{% endblock brand_content %}
