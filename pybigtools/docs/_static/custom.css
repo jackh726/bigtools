@@ -3,6 +3,11 @@
     max-width: 45%;
 }
 
+/* Center the site title (html_title) under the logo. */
+.sidebar-brand-text {
+    text-align: center;
+}
+
 /* Version info shown under the sidebar brand. */
 .sidebar-versions {
     display: flex;
