@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use bigtools::bed::autosql::parse::parse_autosql;
 #[cfg(feature = "remote")]
@@ -21,6 +22,7 @@ use pyo3::{prelude::*, PyTraverseError, PyVisit};
 
 use crate::errors::{BBIFileClosed, BBIReadError, ConvertResult};
 use crate::file_like::PyFileLikeObject;
+use crate::guarded::GuardedReader;
 use crate::raster::{entries_to_array, intervals_to_array, Summary};
 
 type ValueTuple = (u32, u32, f32);
@@ -30,17 +32,37 @@ pub enum BBIReadRaw {
     BigWigFile(BigWigRead<CachedBBIFileRead<ReopenableFile>>),
     #[cfg(feature = "remote")]
     BigWigRemote(BigWigRead<CachedBBIFileRead<RemoteFile>>),
-    BigWigFileLike(BigWigRead<CachedBBIFileRead<PyFileLikeObject>>),
+    BigWigFileLike(BigWigRead<CachedBBIFileRead<GuardedReader<PyFileLikeObject>>>),
     BigBedFile(BigBedRead<CachedBBIFileRead<ReopenableFile>>),
     #[cfg(feature = "remote")]
     BigBedRemote(BigBedRead<CachedBBIFileRead<RemoteFile>>),
-    BigBedFileLike(BigBedRead<CachedBBIFileRead<PyFileLikeObject>>),
+    BigBedFileLike(BigBedRead<CachedBBIFileRead<GuardedReader<PyFileLikeObject>>>),
 }
 
 /// Interface for reading a BigWig or BigBed file.
 #[pyclass(module = "pybigtools")]
 pub struct BBIReader {
     pub bbi: BBIReadRaw,
+    /// For file-like inputs: a reference to the Python file object, kept so the
+    /// cyclic GC can traverse it without reaching through the guarded reader
+    /// (which would alias a borrow's `&mut`).
+    pub file_obj: Option<Arc<Py<PyAny>>>,
+}
+
+impl BBIReader {
+    pub fn new(bbi: BBIReadRaw) -> Self {
+        BBIReader {
+            bbi,
+            file_obj: None,
+        }
+    }
+
+    pub fn with_file(bbi: BBIReadRaw, file_obj: Arc<Py<PyAny>>) -> Self {
+        BBIReader {
+            bbi,
+            file_obj: Some(file_obj),
+        }
+    }
 }
 
 #[pymethods]
@@ -853,6 +875,7 @@ impl BBIReader {
 
     fn close(&mut self) {
         self.bbi = BBIReadRaw::Closed;
+        self.file_obj = None;
     }
 
     fn __enter__(slf: Py<Self>) -> Py<Self> {
@@ -866,20 +889,12 @@ impl BBIReader {
         _exc_value: Py<PyAny>,
         _exc_traceback: Py<PyAny>,
     ) {
-        slf.borrow_mut(py).bbi = BBIReadRaw::Closed;
+        slf.borrow_mut(py).close();
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        match &self.bbi {
-            BBIReadRaw::Closed | BBIReadRaw::BigWigFile(_) | BBIReadRaw::BigBedFile(_) => {}
-            #[cfg(feature = "remote")]
-            BBIReadRaw::BigWigRemote(_) | BBIReadRaw::BigBedRemote(_) => {}
-            BBIReadRaw::BigWigFileLike(b) => {
-                visit.call(b.inner_read().inner_read().inner.deref())?
-            }
-            BBIReadRaw::BigBedFileLike(b) => {
-                visit.call(b.inner_read().inner_read().inner.deref())?
-            }
+        if let Some(obj) = &self.file_obj {
+            visit.call(obj.deref())?;
         }
         Ok(())
     }

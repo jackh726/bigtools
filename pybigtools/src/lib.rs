@@ -15,12 +15,14 @@ use url::Url;
 mod coverage;
 mod errors;
 mod file_like;
+mod guarded;
 mod raster;
 mod reader;
 mod writer;
 
 use errors::{BBIFileClosed, BBIReadError};
 use file_like::PyFileLikeObject;
+use guarded::GuardedReader;
 use reader::{BBIReadRaw, BBIReader, BigBedEntriesIterator, BigWigIntervalIterator};
 use writer::{BigBedWriter, BigWigWriter};
 
@@ -51,8 +53,12 @@ impl Reopen for PyFileLikeObject {
 /// -----
 /// For writing, only a file path is currently accepted.
 ///
-/// If passing a file-like object, concurrent reading of different intervals
-/// is not supported and may result in incorrect behavior.
+/// A file-like object cannot be duplicated, so its readers share one underlying
+/// object guarded so that only one cursor is live at a time: creating a new
+/// iterator (or using the reader directly) supersedes any outstanding iterator,
+/// which then errors on its next read rather than returning incorrect data. To
+/// read several intervals truly concurrently, open the path or url directly (or
+/// open a separate file-like object), which yields independent handles.
 #[pyfunction]
 #[pyo3(signature = (path_url_or_file_like, mode=None))]
 fn open(
@@ -93,15 +99,17 @@ fn open(
         Ok(file_like) => file_like,
         Err(_) => return Err(PyErr::new::<exceptions::PyValueError, _>("Unknown argument for `path_url_or_file_like`. Not a file path string or url, and not a file-like object.".to_string())),
     };
-    let read = match GenericBBIRead::open(file_like) {
-        Ok(GenericBBIRead::BigWig(bigwig)) => BBIReader {
-            bbi: BBIReadRaw::BigWigFileLike(bigwig.cached()),
+    // Keep a reference to the Python file object so the GC can traverse it.
+    let file_obj = file_like.inner.clone();
+    let read = match GenericBBIRead::open(GuardedReader::new(file_like)) {
+        Ok(GenericBBIRead::BigWig(bigwig)) => {
+            BBIReader::with_file(BBIReadRaw::BigWigFileLike(bigwig.cached()), file_obj)
+                .into_py_any(py)?
         }
-        .into_py_any(py)?,
-        Ok(GenericBBIRead::BigBed(bigbed)) => BBIReader {
-            bbi: BBIReadRaw::BigBedFileLike(bigbed.cached()),
+        Ok(GenericBBIRead::BigBed(bigbed)) => {
+            BBIReader::with_file(BBIReadRaw::BigBedFileLike(bigbed.cached()), file_obj)
+                .into_py_any(py)?
         }
-        .into_py_any(py)?,
         Err(e) => {
             return Err(PyErr::new::<BBIReadError, _>(format!(
             "File-like object is not a bigWig or bigBed. Or there was just a problem reading: {e}",
@@ -161,10 +169,9 @@ fn open_path_or_url(
             "bw" | "bigWig" | "bigwig" => {
                 if isfile {
                     match BigWigReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BBIReader {
-                            bbi: BBIReadRaw::BigWigFile(bwr.cached()),
+                        Ok(bwr) => {
+                            BBIReader::new(BBIReadRaw::BigWigFile(bwr.cached())).into_py_any(py)?
                         }
-                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigWig.".to_string(),
@@ -174,10 +181,8 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigWigReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BBIReader {
-                            bbi: BBIReadRaw::BigWigRemote(bwr.cached()),
-                        }
-                        .into_py_any(py)?,
+                        Ok(bwr) => BBIReader::new(BBIReadRaw::BigWigRemote(bwr.cached()))
+                            .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigWig.".to_string(),
@@ -196,10 +201,9 @@ fn open_path_or_url(
             "bb" | "bigBed" | "bigbed" => {
                 if isfile {
                     match BigBedReadRaw::open_file(&path_url_or_file_like) {
-                        Ok(bwr) => BBIReader {
-                            bbi: BBIReadRaw::BigBedFile(bwr.cached()),
+                        Ok(bwr) => {
+                            BBIReader::new(BBIReadRaw::BigBedFile(bwr.cached())).into_py_any(py)?
                         }
-                        .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigBed.".to_string(),
@@ -209,10 +213,8 @@ fn open_path_or_url(
                 } else {
                     #[cfg(feature = "remote")]
                     match BigBedReadRaw::open(RemoteFile::new(&path_url_or_file_like)) {
-                        Ok(bwr) => BBIReader {
-                            bbi: BBIReadRaw::BigBedRemote(bwr.cached()),
-                        }
-                        .into_py_any(py)?,
+                        Ok(bwr) => BBIReader::new(BBIReadRaw::BigBedRemote(bwr.cached()))
+                            .into_py_any(py)?,
                         Err(_) => {
                             return Err(PyErr::new::<BBIReadError, _>(
                                 "Error opening bigBed.".to_string(),
@@ -237,8 +239,8 @@ fn open_path_or_url(
 }
 
 /// Read and write Big Binary Indexed (BBI) file types: BigWig and BigBed.
-// The readers are not thread-safe (see `open`'s note on concurrent reading) and
-// the iterator pyclasses are `unsendable`, so the module requires the GIL rather
+// The file-like reader is guarded against concurrent misuse (see `open`), but the
+// iterator pyclasses are still `unsendable`, so the module requires the GIL rather
 // than opting in to pyo3 0.28's default free-threaded support.
 #[pymodule(gil_used = true)]
 fn pybigtools(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
