@@ -29,7 +29,7 @@
                 <img src="https://img.shields.io/conda/vn/bioconda/pybigtools?color=green" alt="pybigtools on Bioconda">
             </a>
             <a href="https://bigtools.readthedocs.io/">
-                <img src="https://img.shields.io/readthedocs/bigtools/latest?label=docs" alt="Python Docs">
+                <img src="https://img.shields.io/readthedocs/bigtools/latest" alt="Python Docs">
             </a>
         </td>
     </tr>
