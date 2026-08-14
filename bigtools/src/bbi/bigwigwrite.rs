@@ -393,7 +393,7 @@ async fn process_val_zoom(
                 zoom_item.records.push(zoom_item.live_info.take().unwrap());
             }
             // Set where we would start for next time
-            add_start = add_end;
+            add_start = std::cmp::max(add_end, current_val.start);
         }
         debug_assert_ne!(zoom_item.records.len(), options.items_per_slot as usize);
     }
