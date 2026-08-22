@@ -542,6 +542,7 @@ pub(crate) fn write_zooms<W: Write + Seek + Send + 'static>(
             data_offset: zoom_data_offset,
             index_offset: zoom_index_offset,
             index_tree_offset: None,
+            index_item_count: None,
         });
 
         zoom_count += 1;
@@ -1238,6 +1239,7 @@ pub(crate) fn write_zoom_vals<
         data_offset: first_zoom_data_offset,
         index_offset: first_zoom_index_offset,
         index_tree_offset: None,
+        index_item_count: None,
     });
 
     let mut last_zoom_data_size = first_zoom_index_offset - first_zoom_data_offset;
@@ -1275,6 +1277,7 @@ pub(crate) fn write_zoom_vals<
             data_offset: zoom_data_offset,
             index_offset: zoom_index_offset,
             index_tree_offset: None,
+            index_item_count: None,
         });
     }
 

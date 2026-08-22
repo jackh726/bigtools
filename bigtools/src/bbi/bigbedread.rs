@@ -12,8 +12,8 @@ use thiserror::Error;
 
 use crate::bbi::{BBIFile, BedEntry};
 use crate::bbiread::{
-    read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
-    ZoomIntervalIter,
+    cir_tree_data_blocks, read_info, BBIDataBlock, BBIDataBlockLimits, BBIFileInfo,
+    BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo, ZoomIntervalIter,
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
@@ -261,6 +261,39 @@ impl<R: BBIFileRead> BigBedRead<R> {
     /// Gets a reference to the inner `R` type, in order to access any info
     pub fn inner_read(&self) -> &R {
         &self.read
+    }
+
+    /// Return the primary-data cir-tree leaf layout without reading or
+    /// decompressing the represented data blocks.
+    ///
+    /// This traverses the complete primary index. Remote readers can require
+    /// multiple range requests and should cache nearby ranges, as BigTools'
+    /// `RemoteFile` does. Cached readers reuse parsed nodes already in their
+    /// query cache without filling that cache with the full traversal.
+    /// Blocks are returned in cir-tree index order, which is coordinate order
+    /// for well-formed files. The returned vector uses memory proportional to
+    /// the number of primary data blocks.
+    pub fn data_blocks(&mut self) -> Result<Vec<BBIDataBlock>, BBIReadError> {
+        self.data_blocks_with_limits(BBIDataBlockLimits::default())
+    }
+
+    /// Return the primary-data cir-tree leaf layout with caller-supplied safety
+    /// limits. This can raise the defaults for unusually large valid files.
+    pub fn data_blocks_with_limits(
+        &mut self,
+        limits: BBIDataBlockLimits,
+    ) -> Result<Vec<BBIDataBlock>, BBIReadError> {
+        let (primary_data_start, primary_data_end) =
+            self.info.header.primary_data_bounds(BBIFile::BigBed)?;
+        let cir_tree = self.full_data_cir_tree()?;
+        cir_tree_data_blocks(
+            self.info.header.endianness,
+            &mut self.read,
+            cir_tree,
+            limits,
+            primary_data_start,
+            primary_data_end,
+        )
     }
 
     /// Returns the summary data from bigBed

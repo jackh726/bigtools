@@ -29,6 +29,7 @@ pub struct ZoomHeader {
     pub(crate) data_offset: u64,
     pub(crate) index_offset: u64,
     pub(crate) index_tree_offset: Option<u64>,
+    pub(crate) index_item_count: Option<u64>,
 }
 
 /// A single zoom item

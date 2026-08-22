@@ -50,8 +50,8 @@ use thiserror::Error;
 
 use crate::bbi::{BBIFile, Summary, Value};
 use crate::bbiread::{
-    read_info, BBIFileInfo, BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo,
-    ZoomIntervalIter,
+    cir_tree_data_blocks, read_info, BBIDataBlock, BBIDataBlockLimits, BBIFileInfo,
+    BBIFileReadInfoError, BBIRead, BBIReadError, Block, ChromInfo, ZoomIntervalIter,
 };
 use crate::internal::BBIReadInternal;
 use crate::utils::reopen::{Reopen, ReopenableFile, SeekableRead};
@@ -67,6 +67,7 @@ pub struct BigWigIntervalIter<R, B> {
     vals: Option<std::vec::IntoIter<Value>>,
     // (chrom, start, end)
     interval: Option<(u32, u32, u32)>,
+    clip_values: bool,
 }
 
 impl<R> Into<BigWigRead<R>> for BigWigIntervalIter<R, BigWigRead<R>> {
@@ -106,6 +107,7 @@ where
                         chrom,
                         start,
                         end,
+                        self.clip_values,
                     ) {
                         Ok(Some(vals)) => {
                             self.vals = Some(vals);
@@ -126,15 +128,19 @@ pub struct BigWigIntervalCursor<R>(BigWigIntervalIter<R, BigWigRead<R>>);
 impl<R: BBIFileRead> BigWigIntervalCursor<R> {
     pub fn interval(&mut self, chrom_name: &str, start: u32, end: u32) -> Result<(), BBIReadError> {
         let chrom = self.0.bigwig.info.chrom_id(chrom_name)?;
-        let cir_tree = self.0.bigwig.full_data_cir_tree()?;
-        let blocks = search_cir_tree(
-            &self.0.bigwig.info,
-            &mut self.0.bigwig.read,
-            cir_tree,
-            chrom_name,
-            start,
-            end,
-        )?;
+        let blocks = if start >= end {
+            Vec::new()
+        } else {
+            let cir_tree = self.0.bigwig.full_data_cir_tree()?;
+            search_cir_tree(
+                &self.0.bigwig.info,
+                &mut self.0.bigwig.read,
+                cir_tree,
+                chrom_name,
+                start,
+                end,
+            )?
+        };
         self.0.known_offset = 0;
         self.0.blocks = blocks.into_iter();
         self.0.vals = None;
@@ -144,6 +150,24 @@ impl<R: BBIFileRead> BigWigIntervalCursor<R> {
 
     pub fn into_inner(self) -> BigWigRead<R> {
         self.0.bigwig
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn interval_cursor_treats_empty_and_inverted_ranges_as_empty() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test/valid.bigWig");
+        let mut cursor = BigWigRead::open_file(path).unwrap().interval_cursor();
+
+        for (start, end) in [(59_899, 59_899), (60_000, 59_899)] {
+            cursor.interval("chr17", start, end).unwrap();
+            assert!(cursor.0.next().is_none(), "range [{start}, {end})");
+        }
     }
 }
 
@@ -283,6 +307,39 @@ where
         &self.read
     }
 
+    /// Return the primary-data cir-tree leaf layout without reading or
+    /// decompressing the represented data blocks.
+    ///
+    /// This traverses the complete primary index. Remote readers can require
+    /// multiple range requests and should cache nearby ranges, as BigTools'
+    /// `RemoteFile` does. Cached readers reuse parsed nodes already in their
+    /// query cache without filling that cache with the full traversal.
+    /// Blocks are returned in cir-tree index order, which is coordinate order
+    /// for well-formed files. The returned vector uses memory proportional to
+    /// the number of primary data blocks.
+    pub fn data_blocks(&mut self) -> Result<Vec<BBIDataBlock>, BBIReadError> {
+        self.data_blocks_with_limits(BBIDataBlockLimits::default())
+    }
+
+    /// Return the primary-data cir-tree leaf layout with caller-supplied safety
+    /// limits. This can raise the defaults for unusually large valid files.
+    pub fn data_blocks_with_limits(
+        &mut self,
+        limits: BBIDataBlockLimits,
+    ) -> Result<Vec<BBIDataBlock>, BBIReadError> {
+        let (primary_data_start, primary_data_end) =
+            self.info.header.primary_data_bounds(BBIFile::BigWig)?;
+        let cir_tree = self.full_data_cir_tree()?;
+        cir_tree_data_blocks(
+            self.info.header.endianness,
+            &mut self.read,
+            cir_tree,
+            limits,
+            primary_data_start,
+            primary_data_end,
+        )
+    }
+
     /// Returns the summary data from bigWig
     ///
     /// Note: For version 1 of bigWigs, there is no total summary. In that
@@ -329,8 +386,12 @@ where
         end: u32,
     ) -> Result<BigWigIntervalIter<R, &'a mut BigWigRead<R>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
+        let blocks = if start >= end {
+            Vec::new()
+        } else {
+            let cir_tree = self.full_data_cir_tree()?;
+            search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?
+        };
         Ok(BigWigIntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -338,6 +399,38 @@ where
             blocks: blocks.into_iter(),
             vals: None,
             interval: Some((chrom, start, end)),
+            clip_values: true,
+        })
+    }
+
+    /// For a given chromosome, start, and end, returns intersecting values
+    /// while preserving their original encoded coordinates.
+    ///
+    /// Unlike [`Self::get_interval`], values overlapping either query boundary
+    /// are not clipped to that boundary. The index query is still restricted to
+    /// `[start, end)`, so callers can bound block enumeration without changing
+    /// the returned coordinates.
+    pub fn get_interval_unclipped<'a>(
+        &'a mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<BigWigIntervalIter<R, &'a mut BigWigRead<R>>, BBIReadError> {
+        let chrom = self.info.chrom_id(chrom_name)?;
+        let blocks = if start >= end {
+            Vec::new()
+        } else {
+            let cir_tree = self.full_data_cir_tree()?;
+            search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?
+        };
+        Ok(BigWigIntervalIter {
+            r: std::marker::PhantomData,
+            bigwig: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+            interval: Some((chrom, start, end)),
+            clip_values: false,
         })
     }
 
@@ -351,8 +444,12 @@ where
         end: u32,
     ) -> Result<BigWigIntervalIter<R, BigWigRead<R>>, BBIReadError> {
         let chrom = self.info.chrom_id(chrom_name)?;
-        let cir_tree = self.full_data_cir_tree()?;
-        let blocks = search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?;
+        let blocks = if start >= end {
+            Vec::new()
+        } else {
+            let cir_tree = self.full_data_cir_tree()?;
+            search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?
+        };
         Ok(BigWigIntervalIter {
             r: std::marker::PhantomData,
             bigwig: self,
@@ -360,6 +457,32 @@ where
             blocks: blocks.into_iter(),
             vals: None,
             interval: Some((chrom, start, end)),
+            clip_values: true,
+        })
+    }
+
+    /// The by-value counterpart to [`Self::get_interval_unclipped`].
+    pub fn get_interval_move_unclipped(
+        mut self,
+        chrom_name: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<BigWigIntervalIter<R, BigWigRead<R>>, BBIReadError> {
+        let chrom = self.info.chrom_id(chrom_name)?;
+        let blocks = if start >= end {
+            Vec::new()
+        } else {
+            let cir_tree = self.full_data_cir_tree()?;
+            search_cir_tree(&self.info, &mut self.read, cir_tree, chrom_name, start, end)?
+        };
+        Ok(BigWigIntervalIter {
+            r: std::marker::PhantomData,
+            bigwig: self,
+            known_offset: 0,
+            blocks: blocks.into_iter(),
+            vals: None,
+            interval: Some((chrom, start, end)),
+            clip_values: false,
         })
     }
 
@@ -371,6 +494,7 @@ where
             blocks: vec![].into_iter(),
             vals: None,
             interval: None,
+            clip_values: true,
         })
     }
 
@@ -441,7 +565,8 @@ where
         use crate::utils::tell::Tell;
         let mut known_offset = self.reader().raw_reader().tell()?;
         for block in blocks {
-            let block_values = get_block_values(self, block, &mut known_offset, chrom, start, end)?;
+            let block_values =
+                get_block_values(self, block, &mut known_offset, chrom, start, end, true)?;
             let block_values = match block_values {
                 Some(v) => v,
                 None => continue,
@@ -465,6 +590,7 @@ fn get_block_values<R: BBIFileRead>(
     chrom: u32,
     start: u32,
     end: u32,
+    clip_values: bool,
 ) -> Result<Option<std::vec::IntoIter<Value>>, BBIReadError> {
     let data = bigwig.read.get_block_data(&bigwig.info, &block)?;
     let mut bytes = BytesMut::with_capacity(data.len());
@@ -569,16 +695,12 @@ fn get_block_values<R: BBIFileRead>(
                         (chrom_start, chrom_end, value)
                     }
                 };
-                let mut value = Value {
+                let value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
                 };
-                if value.end > start && value.start < end {
-                    value.start = value.start.max(start);
-                    value.end = value.end.min(end);
-                    values.push(value)
-                }
+                push_overlapping_value(&mut values, value, start, end, clip_values);
             }
         }
         2 => {
@@ -597,16 +719,12 @@ fn get_block_values<R: BBIFileRead>(
                     }
                 };
                 let chrom_end = chrom_start + item_span;
-                let mut value = Value {
+                let value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
                 };
-                if value.end > start && value.start < end {
-                    value.start = value.start.max(start);
-                    value.end = value.end.min(end);
-                    values.push(value)
-                }
+                push_overlapping_value(&mut values, value, start, end, clip_values);
             }
         }
         3 => {
@@ -626,16 +744,12 @@ fn get_block_values<R: BBIFileRead>(
                 let chrom_start = curr_start;
                 curr_start += item_step;
                 let chrom_end = chrom_start + item_span;
-                let mut value = Value {
+                let value = Value {
                     start: chrom_start,
                     end: chrom_end,
                     value,
                 };
-                if value.end > start && value.start < end {
-                    value.start = value.start.max(start);
-                    value.end = value.end.min(end);
-                    values.push(value)
-                }
+                push_overlapping_value(&mut values, value, start, end, clip_values);
             }
         }
         _ => {
@@ -648,4 +762,20 @@ fn get_block_values<R: BBIFileRead>(
 
     *known_offset = block.offset + block.size;
     Ok(Some(values.into_iter()))
+}
+
+fn push_overlapping_value(
+    values: &mut Vec<Value>,
+    mut value: Value,
+    start: u32,
+    end: u32,
+    clip_values: bool,
+) {
+    if value.end > start && value.start < end {
+        if clip_values {
+            value.start = value.start.max(start);
+            value.end = value.end.min(end);
+        }
+        values.push(value);
+    }
 }
